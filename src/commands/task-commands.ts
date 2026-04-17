@@ -1,4 +1,5 @@
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
+import { filterDurableTasks } from '../core/task-routing.js';
 
 function formatTaskLine(task: {
   id: string;
@@ -31,17 +32,17 @@ export const tasksCommand: CommandHandler = {
     let tasks;
 
     if (filter === 'active') {
-      tasks = repo.findActive();
+      tasks = filterDurableTasks(repo.findActive());
     } else if (filter === 'ready') {
-      tasks = repo.findByStatus('ready');
+      tasks = filterDurableTasks(repo.findByStatus('ready'));
     } else if (filter === 'parked') {
-      tasks = repo.findByStatus('parked');
+      tasks = filterDurableTasks(repo.findByStatus('parked'));
     } else if (filter === 'blocked') {
-      tasks = repo.findByStatus('blocked');
+      tasks = filterDurableTasks(repo.findByStatus('blocked'));
     } else if (filter === 'done') {
-      tasks = repo.findByStatus('done');
+      tasks = filterDurableTasks(repo.findByStatus('done'));
     } else {
-      tasks = repo.findAll();
+      tasks = filterDurableTasks(repo.findAll());
     }
 
     if (tasks.length === 0) {
@@ -54,11 +55,11 @@ export const tasksCommand: CommandHandler = {
     }
 
     const groups = [
-      { title: '当前执行', tasks: repo.findByStatus('running') },
-      { title: '待执行', tasks: repo.findByStatus('ready') },
-      { title: '已挂起', tasks: repo.findByStatus('parked') },
-      { title: '已阻塞', tasks: repo.findByStatus('blocked') },
-      { title: '已完成', tasks: repo.findByStatus('done') },
+      { title: '当前执行', tasks: filterDurableTasks(repo.findByStatus('running')) },
+      { title: '待执行', tasks: filterDurableTasks(repo.findByStatus('ready')) },
+      { title: '已挂起', tasks: filterDurableTasks(repo.findByStatus('parked')) },
+      { title: '已阻塞', tasks: filterDurableTasks(repo.findByStatus('blocked')) },
+      { title: '已完成', tasks: filterDurableTasks(repo.findByStatus('done')) },
     ].filter(group => group.tasks.length > 0);
 
     const lines = ['任务清单：', ''];

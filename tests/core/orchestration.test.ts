@@ -81,4 +81,37 @@ describe('OrchestrationEngine', () => {
     expect(suggestion).not.toBeNull();
     expect(suggestion!.taskId).toBe(t1.id);
   });
+
+  it('prioritizes a preempted-and-resumed ready task ahead of a later normal ready task', () => {
+    const resumedTask = taskEngine.create({ title: '被抢占后恢复的任务', goal: '继续主线任务' });
+    taskEngine['taskRepo'].update(resumedTask.id, {
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0.1,
+        blocksOthers: false,
+        idleHours: 0,
+      },
+      lastInterruptionReason: '被更高优先级任务抢占：插入紧急任务',
+      lastSchedulingReason: '高优任务完成，恢复进入待调度队列',
+    });
+    taskEngine.transition(resumedTask.id, 'ready');
+
+    const normalTask = taskEngine.create({ title: '后续普通任务', goal: '处理后续事项' });
+    taskEngine['taskRepo'].update(normalTask.id, {
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0.6,
+        blocksOthers: false,
+        idleHours: 0,
+      },
+    });
+    taskEngine.transition(normalTask.id, 'ready');
+
+    const prioritized = orchestration.getPrioritizedTasks();
+
+    expect(prioritized[0]?.task.id).toBe(resumedTask.id);
+    expect(prioritized[0]?.reasons).toContain('刚被高优任务打断，恢复连续性收益最高');
+  });
 });

@@ -71,26 +71,38 @@ afterEach(() => {
   inputCapture.handler = undefined;
 });
 
-describe('App input availability', () => {
-  it('keeps the prompt usable and queues a new task while another task is running', async () => {
+describe('App resume-running task noop', () => {
+  it('does not queue a duplicate request when the referenced parked task is already running again', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
-    const firstDeferred = createDeferredResult();
+
+    const runningDeferred = createDeferredResult();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise),
+      execute: vi.fn().mockImplementationOnce(() => runningDeferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
+
     const llmBridge = {
-      resolveIntent: vi.fn().mockResolvedValue({
-        type: 'new',
-        taskId: null,
-        reason: '新任务',
+      resolveIntent: vi.fn().mockImplementation(async (userInput: string) => {
+        if (userInput.includes('把之前挂起的任务继续完成')) {
+          return {
+            type: 'reference',
+            taskId: taskRepo.findByStatus('running')[0]?.id ?? null,
+            reason: '用户是在继续之前挂起、现已恢复中的任务',
+          };
+        }
+
+        return {
+          type: 'new',
+          taskId: null,
+          reason: '创建任务',
+        };
       }),
     } as unknown as LlmBridge;
 
@@ -102,87 +114,10 @@ describe('App input availability', () => {
         executor,
         db,
         config: createConfig(),
-        sessionId: 'sess_test',
+        sessionId: 'sess_resume_running_noop',
         contextRecaller,
         llmBridge,
-      })
-    );
-
-    const type = async (char: string) => {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    };
-
-    await type('主');
-    await type('线');
-    await type('任');
-    await type('务');
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-
-    await type('排');
-    await type('队');
-    await type('任');
-    await type('务');
-
-    expect(app.lastFrame()).toContain('> 排队任务');
-
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-
-    expect(app.lastFrame()).toContain('已进入待执行队列');
-
-    firstDeferred.resolve({
-      success: true,
-      output: 'first done',
-      exitCode: 0,
-      durationMs: 1000,
-    });
-    await flushUpdates();
-
-    app.unmount();
-    app.cleanup();
-  });
-
-  it('shows which running task was preempted and why when an urgent task arrives', async () => {
-    const db = createTestDb();
-    const taskRepo = new TaskRepo(db);
-    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
-    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
-    const orchestration = new OrchestrationEngine(taskEngine);
-    const contextRecaller = new ContextRecaller(db);
-    const firstDeferred = createDeferredResult();
-    const executor: ExecutorAdapter = {
-      name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise).mockResolvedValue({
-        success: true,
-        output: 'urgent done',
-        exitCode: 0,
-        durationMs: 600,
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      abort: vi.fn(),
-    };
-    const llmBridge = {
-      resolveIntent: vi.fn().mockResolvedValue({
-        type: 'new',
-        taskId: null,
-        reason: '新任务',
-      }),
-    } as unknown as LlmBridge;
-
-    const app = render(
-      React.createElement(App, {
-        taskEngine,
-        memoryEngine,
-        orchestration,
-        executor,
-        db,
-        config: createConfig(),
-        sessionId: 'sess_test',
-        contextRecaller,
-        llmBridge,
-      })
     );
 
     const typeAndSubmit = async (text: string) => {
@@ -194,19 +129,23 @@ describe('App input availability', () => {
       await flushUpdates();
     };
 
-    await typeAndSubmit('普通任务');
-    const runningTaskId = taskEngine['taskRepo'].findByStatus('running')[0]?.id;
+    await typeAndSubmit('给agent增加memory是一个非常重要，切目前有不少开源项目都在foucs的方向。你充分调研这个');
+    const createdTask = taskRepo.findByStatus('running')[0];
+    expect(createdTask).toBeTruthy();
+    const taskId = createdTask!.id;
 
-    await typeAndSubmit('紧急优先处理这个任务');
+    await typeAndSubmit('把之前挂起的任务继续完成');
 
-    expect(app.lastFrame()).toContain(`抢占当前任务 #${runningTaskId}`);
-    expect(app.lastFrame()).toContain('原因：用户显式要求优先处理');
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.findByStatus('ready')).toHaveLength(0);
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(app.lastFrame()).toContain(`任务 #${taskId} 已在执行中，无需再次排队`);
 
-    firstDeferred.resolve({
+    runningDeferred.resolve({
       success: true,
-      output: 'first done',
+      output: 'memory research done',
       exitCode: 0,
-      durationMs: 800,
+      durationMs: 500,
     });
     await flushUpdates();
 

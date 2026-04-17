@@ -71,20 +71,42 @@ afterEach(() => {
   inputCapture.handler = undefined;
 });
 
-describe('App input availability', () => {
-  it('keeps the prompt usable and queues a new task while another task is running', async () => {
+describe('App auto-resume after preemption', () => {
+  it('resumes the preempted parked task before a later normal queued task', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
+
     const firstDeferred = createDeferredResult();
+    const urgentDeferred = createDeferredResult();
+    const resumedDeferred = createDeferredResult();
+    const laterNormalDeferred = createDeferredResult();
+
+    let firstExecuteResolved = false;
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise),
+      execute: vi.fn()
+        .mockImplementationOnce(() => firstDeferred.promise)
+        .mockImplementationOnce(() => urgentDeferred.promise)
+        .mockImplementationOnce(() => resumedDeferred.promise)
+        .mockImplementationOnce(() => laterNormalDeferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
-      abort: vi.fn(),
+      abort: vi.fn().mockImplementation(() => {
+        if (!firstExecuteResolved) {
+          firstExecuteResolved = true;
+          firstDeferred.resolve({
+            success: false,
+            output: '',
+            error: 'execution interrupted',
+            exitCode: 1,
+            durationMs: 200,
+            interrupted: true,
+          });
+        }
+      }),
     };
     const llmBridge = {
       resolveIntent: vi.fn().mockResolvedValue({
@@ -102,84 +124,7 @@ describe('App input availability', () => {
         executor,
         db,
         config: createConfig(),
-        sessionId: 'sess_test',
-        contextRecaller,
-        llmBridge,
-      })
-    );
-
-    const type = async (char: string) => {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    };
-
-    await type('主');
-    await type('线');
-    await type('任');
-    await type('务');
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-
-    await type('排');
-    await type('队');
-    await type('任');
-    await type('务');
-
-    expect(app.lastFrame()).toContain('> 排队任务');
-
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-
-    expect(app.lastFrame()).toContain('已进入待执行队列');
-
-    firstDeferred.resolve({
-      success: true,
-      output: 'first done',
-      exitCode: 0,
-      durationMs: 1000,
-    });
-    await flushUpdates();
-
-    app.unmount();
-    app.cleanup();
-  });
-
-  it('shows which running task was preempted and why when an urgent task arrives', async () => {
-    const db = createTestDb();
-    const taskRepo = new TaskRepo(db);
-    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
-    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
-    const orchestration = new OrchestrationEngine(taskEngine);
-    const contextRecaller = new ContextRecaller(db);
-    const firstDeferred = createDeferredResult();
-    const executor: ExecutorAdapter = {
-      name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise).mockResolvedValue({
-        success: true,
-        output: 'urgent done',
-        exitCode: 0,
-        durationMs: 600,
-      }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      abort: vi.fn(),
-    };
-    const llmBridge = {
-      resolveIntent: vi.fn().mockResolvedValue({
-        type: 'new',
-        taskId: null,
-        reason: '新任务',
-      }),
-    } as unknown as LlmBridge;
-
-    const app = render(
-      React.createElement(App, {
-        taskEngine,
-        memoryEngine,
-        orchestration,
-        executor,
-        db,
-        config: createConfig(),
-        sessionId: 'sess_test',
+        sessionId: 'sess_auto_resume',
         contextRecaller,
         llmBridge,
       })
@@ -194,19 +139,39 @@ describe('App input availability', () => {
       await flushUpdates();
     };
 
-    await typeAndSubmit('普通任务');
-    const runningTaskId = taskEngine['taskRepo'].findByStatus('running')[0]?.id;
-
+    await typeAndSubmit('主线研究任务');
     await typeAndSubmit('紧急优先处理这个任务');
+    await typeAndSubmit('普通排队任务');
 
-    expect(app.lastFrame()).toContain(`抢占当前任务 #${runningTaskId}`);
-    expect(app.lastFrame()).toContain('原因：用户显式要求优先处理');
-
-    firstDeferred.resolve({
+    urgentDeferred.resolve({
       success: true,
-      output: 'first done',
+      output: 'urgent done',
       exitCode: 0,
-      durationMs: 800,
+      durationMs: 400,
+    });
+    await flushUpdates();
+    await flushUpdates();
+
+    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0].task.title).toContain('主线研究任务');
+    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0].executionContextBundle.mode).toBe('resume-parked');
+    expect(taskEngine['taskRepo'].findByStatus('running')[0]?.title).toContain('主线研究任务');
+
+    resumedDeferred.resolve({
+      success: true,
+      output: 'resumed done',
+      exitCode: 0,
+      durationMs: 500,
+    });
+    await flushUpdates();
+    await flushUpdates();
+
+    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[3][0].task.title).toContain('普通排队任务');
+
+    laterNormalDeferred.resolve({
+      success: true,
+      output: 'later done',
+      exitCode: 0,
+      durationMs: 300,
     });
     await flushUpdates();
 

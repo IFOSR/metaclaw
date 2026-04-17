@@ -14,6 +14,12 @@ export interface ExecutorInput {
   userPrompt: string;
   conversationHistory: ConversationTurn[];
   executionContextBundle?: ExecutionContextBundle;
+  onProgress?: (event: ExecutorProgressEvent) => void;
+}
+
+export interface ExecutorProgressEvent {
+  kind: 'status' | 'log';
+  text: string;
 }
 
 export interface ExecutorAdapter {

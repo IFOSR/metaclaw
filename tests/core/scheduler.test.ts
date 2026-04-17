@@ -134,4 +134,52 @@ describe('SchedulerEngine', () => {
     expect(taskRepo.findById(blockedTaskId)?.status).toBe('blocked');
     expect(taskRepo.findById(readyTaskId)?.status).toBe('running');
   });
+
+  it('promotes a preempted parked task back to ready and schedules it before later normal ready tasks', async () => {
+    const interruptedTaskId = createReadyTask({ title: '被抢占主线任务', progressRatio: 0.6 });
+    const scheduler = new SchedulerEngine(taskEngine, orchestration, executor);
+    await scheduler.scheduleNext();
+
+    const urgentTaskId = createReadyTask({
+      title: '高优插入任务',
+      dueAt: '2026-04-16T01:00:00Z',
+      progressRatio: 0.9,
+      blocksOthers: true,
+    });
+    await scheduler.submit(urgentTaskId, {
+      reason: '用户显式要求优先处理',
+      priorityHint: 'urgent',
+    });
+
+    const laterNormalTaskId = createReadyTask({ title: '后续普通任务', progressRatio: 0.2 });
+    taskEngine.transition(urgentTaskId, 'done');
+
+    const nextTaskId = await scheduler.scheduleNext();
+
+    expect(nextTaskId).toBe(interruptedTaskId);
+    expect(taskRepo.findById(interruptedTaskId)?.status).toBe('running');
+    expect(taskRepo.findById(interruptedTaskId)?.lastSchedulingReason).toBe('高优任务完成，恢复进入待调度队列');
+    expect(taskRepo.findById(laterNormalTaskId)?.status).toBe('ready');
+  });
+
+  it('does not auto-promote manually parked tasks when scheduling the next task', async () => {
+    const parkedTaskId = createReadyTask({ title: '手动挂起任务', progressRatio: 0.7 });
+    const scheduler = new SchedulerEngine(taskEngine, orchestration, executor);
+    await scheduler.scheduleNext();
+
+    taskEngine.park(parkedTaskId, '用户手动暂停', {
+      done: ['完成一部分'],
+      pending: ['继续推进'],
+      nextStep: '等待用户恢复',
+      pauseReason: '用户手动暂停',
+    });
+
+    const readyTaskId = createReadyTask({ title: '正常待执行任务', progressRatio: 0.1 });
+
+    const nextTaskId = await scheduler.scheduleNext();
+
+    expect(nextTaskId).toBe(readyTaskId);
+    expect(taskRepo.findById(parkedTaskId)?.status).toBe('parked');
+    expect(taskRepo.findById(readyTaskId)?.status).toBe('running');
+  });
 });

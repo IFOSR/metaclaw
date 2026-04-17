@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { render, Box, Text, useInput } from 'ink';
+import { render, Box, Static, Text, useInput } from 'ink';
 import type { MetaclawSessionDeps, SessionSnapshot } from '../session/metaclaw-session.js';
 import { MetaclawSession } from '../session/metaclaw-session.js';
 import { prepareEditorSubmission } from '../session/session-helpers.js';
@@ -22,6 +22,7 @@ export function App(props: AppProps) {
   const [editor, setEditor] = useState({ text: '', cursor: 0 });
   const editorRef = useRef({ text: '', cursor: 0 });
   const [snapshot, setSnapshot] = useState<SessionSnapshot>(EMPTY_SNAPSHOT);
+  const [committedOutput, setCommittedOutput] = useState<string[]>([]);
   const sessionRef = useRef<MetaclawSession | null>(null);
 
   if (!sessionRef.current) {
@@ -34,6 +35,12 @@ export function App(props: AppProps) {
     session.initialize();
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (snapshot.output.length !== committedOutput.length) {
+      setCommittedOutput(snapshot.output);
+    }
+  }, [snapshot.output, committedOutput.length]);
 
   useInput(async (char, key) => {
     const editorState = editorRef.current;
@@ -91,18 +98,16 @@ export function App(props: AppProps) {
   return (
     <Box flexDirection="column">
       <Box flexDirection="column" marginBottom={1}>
-        {snapshot.output.map((line, i) => (
-          <Text key={i}>{line}</Text>
-        ))}
+        <Static items={committedOutput}>
+          {(line, index) => <Text key={`${index}-${line}`}>{line}</Text>}
+        </Static>
       </Box>
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">
-          {snapshot.runtimeState.runningTaskId
-            ? `⏳ 执行中... #${snapshot.runtimeState.runningTaskId}`
-            : '当前执行: 无'}
-        </Text>
+        <Text color="yellow">当前执行: {snapshot.runtimeState.runningTaskId ? 1 : 0}</Text>
         <Text>待执行: {snapshot.runtimeState.readyTaskIds.length}</Text>
+        <Text>已挂起: {snapshot.runtimeState.parkedTaskIds.length}</Text>
         <Text>阻塞: {snapshot.runtimeState.blockedTaskIds.length}</Text>
+        <Text color="gray">最近事件: {snapshot.runtimeState.lastEvent ?? '无'}</Text>
       </Box>
       <Box>
         <>

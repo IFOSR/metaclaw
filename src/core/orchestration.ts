@@ -1,6 +1,9 @@
 import type { Task, Dashboard, Suggestion, PriorityScore } from './types.js';
 import type { TaskEngine } from './task-engine.js';
 import dayjs from 'dayjs';
+import { filterDurableTasks } from './task-routing.js';
+
+const AUTO_RESUME_READY_REASON = '高优任务完成，恢复进入待调度队列';
 
 const WEIGHTS = {
   urgency: 3,
@@ -17,13 +20,13 @@ export class OrchestrationEngine {
    * 生成任务盘面
    */
   getDashboard(): Dashboard {
-    const tasks = this.taskEngine['taskRepo'].findActive();
+    const tasks = filterDurableTasks(this.taskEngine['taskRepo'].findActive());
 
     const summary = {
       active: tasks.filter(t => ['created', 'ready', 'running', 'parked'].includes(t.status)).length,
       blocked: tasks.filter(t => t.status === 'blocked').length,
       parked: tasks.filter(t => t.status === 'parked').length,
-      done: this.taskEngine['taskRepo'].findByStatus('done').length,
+      done: filterDurableTasks(this.taskEngine['taskRepo'].findByStatus('done')).length,
     };
 
     const readyTasks = tasks.filter(t => t.status === 'ready');
@@ -52,7 +55,7 @@ export class OrchestrationEngine {
    * 获取优先级排序后的 READY 任务
    */
   getPrioritizedTasks(): Array<{ task: Task; score: PriorityScore; reasons: string[] }> {
-    const tasks = this.taskEngine['taskRepo'].findByStatus('ready');
+    const tasks = filterDurableTasks(this.taskEngine['taskRepo'].findByStatus('ready'));
 
     const scored = tasks.map(task => {
       const { score, reasons } = this.evaluateTask(task);
@@ -73,7 +76,7 @@ export class OrchestrationEngine {
    * 获取所有 BLOCKED 任务及卡点原因
    */
   getBlockedTasks(): Array<Task & { blockReason: string }> {
-    const tasks = this.taskEngine['taskRepo'].findByStatus('blocked');
+    const tasks = filterDurableTasks(this.taskEngine['taskRepo'].findByStatus('blocked'));
     return tasks.map(t => ({
       ...t,
       blockReason: t.dependencies.find(d => d.status === 'waiting')?.description || '未知原因',
@@ -165,6 +168,10 @@ export class OrchestrationEngine {
   }
 
   private scoreContinuityBenefit(task: Task): number {
+    if (this.isRecoveredPreemptedTask(task)) {
+      return 10;
+    }
+
     return Math.round(task.prioritySignals.progressRatio * 10);
   }
 
@@ -185,6 +192,9 @@ export class OrchestrationEngine {
    */
   private generateReasons(task: Task, score: PriorityScore): string[] {
     const reasons: string[] = [];
+    if (this.isRecoveredPreemptedTask(task)) {
+      reasons.push('刚被高优任务打断，恢复连续性收益最高');
+    }
     if (score.continuityBenefit >= 7)
       reasons.push(`已完成 ${Math.round(task.prioritySignals.progressRatio * 100)}%，继续成本最低`);
     if (score.readiness >= 8)
@@ -198,5 +208,11 @@ export class OrchestrationEngine {
       reasons.push(`已搁置 ${hours} 小时`);
     }
     return reasons;
+  }
+
+  private isRecoveredPreemptedTask(task: Task): boolean {
+    return task.status === 'ready'
+      && /抢占/.test(task.lastInterruptionReason)
+      && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
   }
 }

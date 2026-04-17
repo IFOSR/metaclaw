@@ -6,13 +6,46 @@ describe('LlmBridge', () => {
     it('应构造包含任务列表的 prompt', () => {
       const bridge = new LlmBridge('claude');
       const prompt = (bridge as any).buildIntentPrompt('之前帮我比较的那两个开源项目', [
-        { id: 'task_1', title: 'hermes vs openclaw 调研', goal: '对比分析', summary: '已完成对比' },
-        { id: 'task_2', title: '周报整理', goal: '整理本周工作', summary: '' },
+        { id: 'task_1', title: 'hermes vs openclaw 调研', goal: '对比分析', summary: '已完成对比', status: 'done' },
+        { id: 'task_2', title: '周报整理', goal: '整理本周工作', summary: '', status: 'parked' },
       ]);
       expect(prompt).toContain('之前帮我比较的那两个开源项目');
       expect(prompt).toContain('task_1');
       expect(prompt).toContain('hermes vs openclaw');
       expect(prompt).toContain('task_2');
+      expect(prompt).toContain('[done]');
+      expect(prompt).toContain('[parked]');
+    });
+
+    it('显式恢复挂起任务时会对 parked 任务做二次判定', async () => {
+      const bridge = new LlmBridge('claude');
+      const querySpy = vi.spyOn(bridge, 'query')
+        .mockResolvedValueOnce('{"type":"new","taskId":null,"reason":"首轮未识别"}')
+        .mockResolvedValueOnce('{"type":"reference","taskId":"task_parked","reason":"命中挂起任务"}');
+
+      const result = await bridge.resolveIntent('继续之前挂起的任务', [
+        {
+          id: 'task_done',
+          title: '比亚迪 vs 宁德时代',
+          goal: '新能源电池份额调研',
+          summary: '宁德时代份额更高',
+          status: 'done',
+        },
+        {
+          id: 'task_parked',
+          title: 'agent memory 开源调研',
+          goal: '调研 memory 方案',
+          summary: '已整理主流方向',
+          status: 'parked',
+        },
+      ]);
+
+      expect(querySpy).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({
+        type: 'reference',
+        taskId: 'task_parked',
+        reason: '命中挂起任务',
+      });
     });
 
     it('解析 reference 类型的 JSON 返回', () => {
@@ -46,6 +79,37 @@ describe('LlmBridge', () => {
       const result = await bridge.resolveIntent('你好', []);
       expect(result.type).toBe('new');
       expect(querySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveRoute', () => {
+    it('builds a routing prompt with task overview', () => {
+      const bridge = new LlmBridge('claude');
+      const prompt = (bridge as any).buildRoutePrompt('hi', [
+        { id: 'task_1', title: '行业调研', goal: '输出结论', summary: '进行中', status: 'running' },
+      ]);
+
+      expect(prompt).toContain('conversation');
+      expect(prompt).toContain('task_control');
+      expect(prompt).toContain('durable_task');
+      expect(prompt).toContain('[running] 行业调研');
+    });
+
+    it('parses route result json', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parseRouteResult('{"route":"conversation","reason":"普通问候"}');
+
+      expect(result).toEqual({
+        route: 'conversation',
+        reason: '普通问候',
+      });
+    });
+
+    it('falls back to unknown when route json is invalid', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parseRouteResult('not json');
+
+      expect(result.route).toBe('unknown');
     });
   });
 

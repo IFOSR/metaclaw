@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 describe('App execution indicator', () => {
-  it('does not render the completion frame with a lingering executing indicator', async () => {
+  it('does not render the completion frame with a lingering running count', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -113,13 +113,15 @@ describe('App execution indicator', () => {
       await flushUpdates();
     };
 
-    await type('h');
-    await type('i');
+    await type('调');
+    await type('研');
+    await type('任');
+    await type('务');
 
     const submitPromise = inputCapture.handler?.('', { return: true }) ?? Promise.resolve();
     await flushUpdates();
 
-    expect(app.frames.some(frame => frame.includes('⏳ 执行中...'))).toBe(true);
+    expect(app.frames.some(frame => frame.includes('当前执行: 1'))).toBe(true);
 
     deferred.resolve({
       success: true,
@@ -132,10 +134,115 @@ describe('App execution indicator', () => {
     await flushUpdates();
 
     expect(
-      app.frames.some(frame => frame.includes('✓ 任务完成') && frame.includes('⏳ 执行中...'))
+      app.frames.some(frame => frame.includes('✓ 任务完成') && frame.includes('当前执行: 1'))
     ).toBe(false);
     expect(app.lastFrame()).toContain('✓ 任务完成');
-    expect(app.lastFrame()).not.toContain('⏳ 执行中...');
+    expect(app.lastFrame()).toContain('当前执行: 0');
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows parked task count in the runtime summary', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const parkedTask = taskEngine.create({ title: '待恢复任务', goal: '继续调研' });
+    taskEngine.transition(parkedTask.id, 'ready');
+    taskEngine.transition(parkedTask.id, 'running');
+    taskEngine.park(parkedTask.id, '被高优任务抢占', {
+      done: ['已完成一半'],
+      pending: ['继续剩余部分'],
+      nextStep: '继续调研剩余部分',
+      pauseReason: '被高优任务抢占',
+    });
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn(),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveIntent: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_parked_summary',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('当前执行: 0');
+    expect(app.lastFrame()).toContain('已挂起: 1');
+    expect(app.lastFrame()).toContain('最近事件: 无');
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows the last scheduler event in the runtime summary', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const deferred = createDeferredResult();
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockReturnValue(deferred.promise),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_last_event',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    await inputCapture.handler?.('调', {});
+    await flushUpdates();
+    await inputCapture.handler?.('研', {});
+    await flushUpdates();
+    await inputCapture.handler?.('任', {});
+    await flushUpdates();
+    await inputCapture.handler?.('务', {});
+    await flushUpdates();
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('最近事件: 开始执行任务 #');
 
     app.unmount();
     app.cleanup();

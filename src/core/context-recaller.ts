@@ -165,7 +165,7 @@ export class ContextRecaller {
 
   private recallForSession(sessionId: string, excludeTaskId: string): InteractionRow[] {
     return this.db.prepare(
-      'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? AND task_id != ? ORDER BY created_at DESC LIMIT ?'
+      'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? AND (task_id IS NULL OR task_id != ?) ORDER BY created_at DESC LIMIT ?'
     ).all(sessionId, excludeTaskId, SESSION_HISTORY_LIMIT) as InteractionRow[];
   }
 

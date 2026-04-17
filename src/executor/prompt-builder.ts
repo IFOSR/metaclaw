@@ -3,9 +3,12 @@ import type { ExecutorInput } from './adapter.js';
 export function buildExecutorContextPrompt(input: ExecutorInput): string {
   if (input.executionContextBundle) {
     const bundle = input.executionContextBundle;
+    const systemBoundary = bundle.workspaceContext?.allowFilesystem
+      ? `[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答。可以访问当前项目工作目录，但仅限完成本次明确要求的文件写入任务。使用与用户相同的语言回复。`
+      : `[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。`;
     const lines = [
       '[Metaclaw 执行上下文]',
-      '[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。',
+      systemBoundary,
       '',
       `模式：${bundle.mode}`,
       `任务：${bundle.taskBrief.title}`,
@@ -43,6 +46,14 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
       lines.push('', `关联材料：${bundle.materialContext.resources.join(', ')}`);
     }
 
+    if (bundle.workspaceContext?.allowFilesystem) {
+      lines.push(
+        '',
+        `工作目录：${bundle.workspaceContext.workingDirectory}`,
+        `文件输出目标：${bundle.workspaceContext.targetPaths.join(', ')}`,
+      );
+    }
+
     if (bundle.historyContext.taskTurns.length > 0) {
       lines.push('', '当前任务对话：');
       bundle.historyContext.taskTurns.forEach((turn, idx) => {
@@ -54,7 +65,8 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     if (bundle.historyContext.sessionTurns.length > 0) {
       lines.push('', '会话近期上下文：');
       bundle.historyContext.sessionTurns.forEach((turn) => {
-        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
         lines.push(`           助手: ${turn.systemOutput}`);
       });
     }
@@ -62,7 +74,8 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     if (bundle.historyContext.relatedTurns.length > 0) {
       lines.push('', '关联历史：');
       bundle.historyContext.relatedTurns.forEach((turn) => {
-        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
         lines.push(`           助手: ${turn.systemOutput}`);
       });
     }
@@ -119,7 +132,8 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     if (sessionTurns.length > 0) {
       lines.push('', '会话近期上下文：');
       sessionTurns.forEach((turn) => {
-        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
         lines.push(`           助手: ${turn.systemOutput}`);
       });
     }
@@ -127,7 +141,8 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     if (keywordTurns.length > 0) {
       lines.push('', '关联历史：');
       keywordTurns.forEach((turn) => {
-        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
         lines.push(`           助手: ${turn.systemOutput}`);
       });
     }

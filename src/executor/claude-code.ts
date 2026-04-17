@@ -1,16 +1,15 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import { tmpdir } from 'os';
 import type { ExecutorAdapter, ExecutorInput } from './adapter.js';
 import type { ExecutorResult } from '../core/types.js';
 import { buildExecutorContextPrompt } from './prompt-builder.js';
-import { formatExecutorError } from './error-utils.js';
+import { formatExecutorError, formatExecutorProgress } from './error-utils.js';
 
 export class ClaudeCodeAdapter implements ExecutorAdapter {
   readonly name = 'claude-code';
   private process: ChildProcess | null = null;
   private abortRequested = false;
 
-  constructor(private config: { command: string; timeout: number }) {}
+  constructor(private config: { command: string; timeout: number; workspaceRoot?: string }) {}
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
     const contextPrompt = this.buildContextPrompt(input);
@@ -18,19 +17,32 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
 
     return new Promise((resolve) => {
       this.abortRequested = false;
+      input.onProgress?.({ kind: 'status', text: '已启动 claude-code 执行器' });
       this.process = spawn(this.config.command, this.buildSpawnArgs(contextPrompt), {
-        cwd: tmpdir(),
+        cwd: this.config.workspaceRoot ?? process.cwd(),
         timeout: this.config.timeout * 1000,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
       let stderr = '';
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
 
-      this.process.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-      this.process.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      this.process.stdout?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stdout += text;
+        stdoutBuffer = this.emitProgressLines(stdoutBuffer + text, input);
+      });
+      this.process.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        stderrBuffer = this.emitProgressLines(stderrBuffer + text, input);
+      });
 
       this.process.on('close', (code) => {
+        this.flushProgressBuffer(stdoutBuffer, input);
+        this.flushProgressBuffer(stderrBuffer, input);
         const interrupted = this.abortRequested;
         resolve({
           success: !interrupted && code === 0,
@@ -82,5 +94,26 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
   abort(): void {
     this.abortRequested = true;
     this.process?.kill('SIGTERM');
+  }
+
+  private emitProgressLines(buffer: string, input: ExecutorInput): string {
+    const lines = buffer.split(/\r?\n/);
+    const pending = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const progress = formatExecutorProgress(line);
+      if (progress) {
+        input.onProgress?.({ kind: 'log', text: progress });
+      }
+    }
+
+    return pending;
+  }
+
+  private flushProgressBuffer(buffer: string, input: ExecutorInput): void {
+    const progress = formatExecutorProgress(buffer);
+    if (progress) {
+      input.onProgress?.({ kind: 'log', text: progress });
+    }
   }
 }

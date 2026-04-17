@@ -75,6 +75,26 @@ export function buildSchedulingReason(input: string): string {
   return '用户提交';
 }
 
+export function isResumeReferenceInstruction(input: string): boolean {
+  return /挂起|恢复|继续之前|继续刚才|接着刚才|继续完成/.test(input);
+}
+
+export function isConversationalContinuationInstruction(input: string): boolean {
+  const normalized = input.trim();
+  if (!normalized) return false;
+
+  return /^(可以[，,\s]*)?(继续|展开|接着说|细讲|详细说说|具体讲讲|再说说|再展开一点|然后呢|还有呢)$/.test(normalized);
+}
+
+export function isExplicitTaskControlReference(input: string): boolean {
+  return /挂起|恢复|阻塞|解除阻塞|任务|继续刚才那个任务|继续之前挂起的任务|把之前挂起的任务继续完成|重试刚才/.test(input)
+    || input.includes('/task');
+}
+
+export function isRecoverableBlockedResumeInstruction(input: string): boolean {
+  return /恢复|继续|重试|网络恢复|网络好了|联网了|已授权|已经授权|授权好了|权限开了|权限好了|允许访问/.test(input);
+}
+
 export function planTaskExecution(task: Task, userPrompt: string): ExecutionPlan {
   switch (task.status) {
     case 'created':

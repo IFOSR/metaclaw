@@ -96,7 +96,11 @@ stop() {
 # 重启
 restart() {
     log_info "重启 Metaclaw..."
-    stop
+    if is_running; then
+        stop
+    else
+        log_warn "Metaclaw 未运行，直接启动..."
+    fi
     sleep 1
     start
 }

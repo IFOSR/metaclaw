@@ -133,4 +133,22 @@ describe('tasksCommand', () => {
     expect(parkedResult.content).toContain(parkedTask.id);
     expect(parkedResult.content).not.toContain(readyTask.id);
   });
+
+  it('hides historical non-task chatter from the default task list', async () => {
+    const realTask = taskEngine.create({ title: '行业调研任务', goal: '输出调研结论' });
+    taskEngine.transition(realTask.id, 'ready');
+    taskEngine.transition(realTask.id, 'running');
+    taskEngine.transition(realTask.id, 'done');
+
+    const chatterTask = taskEngine.create({ title: 'hi', goal: 'hi' });
+    taskEngine.transition(chatterTask.id, 'ready');
+    taskEngine.transition(chatterTask.id, 'running');
+    taskEngine.transition(chatterTask.id, 'done');
+
+    const result = await tasksCommand.execute([], context);
+
+    expect(result.content).toContain(realTask.id);
+    expect(result.content).not.toContain(chatterTask.id);
+    expect(result.content).not.toContain('[DONE] hi');
+  });
 });

@@ -1,7 +1,8 @@
 import type { ContextRecaller } from './context-recaller.js';
 import type { MemoryEngine } from './memory-engine.js';
 import type { TaskEngine } from './task-engine.js';
-import type { ExecutionContextBundle, ResolvedPreference } from './types.js';
+import type { ExecutionContextBundle, ResolvedPreference, WorkspaceContext } from './types.js';
+import { resolve } from 'path';
 
 interface BuildContextInput {
   taskId: string;
@@ -54,7 +55,8 @@ export class ResumeContextBuilder {
 
     const blockedReason = task.dependencies.find(dependency => dependency.status === 'waiting')?.description
       ?? task.dependencies[task.dependencies.length - 1]?.description;
-    const executionInstructions = this.buildExecutionInstructions(input.mode, input.newlyProvidedResources);
+    const workspaceContext = this.buildWorkspaceContext(input.userInput);
+    const executionInstructions = this.buildExecutionInstructions(input.mode, input.newlyProvidedResources, workspaceContext);
 
     return {
       mode: input.mode,
@@ -90,6 +92,7 @@ export class ResumeContextBuilder {
       materialContext: {
         resources,
       },
+      workspaceContext,
       executionInstructions,
     };
   }
@@ -97,18 +100,33 @@ export class ResumeContextBuilder {
   private buildExecutionInstructions(
     mode: BuildContextInput['mode'],
     newlyProvidedResources?: string[],
+    workspaceContext?: WorkspaceContext,
   ): string[] {
     const baseInstructions = [
       '使用与用户相同的语言回复',
     ];
 
+    const fileInstructions = workspaceContext?.allowFilesystem
+      ? [
+          '必须把结果写入本地文件系统，不要只在回复中描述结果',
+          `工作目录：${workspaceContext.workingDirectory}`,
+          ...workspaceContext.targetPaths.map(path => `目标目录：${path}`),
+          '如果目标目录不存在，请先创建目录，再写入一个合适命名的 Markdown 文件',
+          '完成后明确返回保存路径和文件名',
+        ]
+      : [];
+
     if (mode === 'fresh') {
-      return baseInstructions;
+      return [
+        ...baseInstructions,
+        ...fileInstructions,
+      ];
     }
 
     if (mode === 'resume-blocked') {
       return [
         ...baseInstructions,
+        ...fileInstructions,
         '这是恢复执行，不要从头重做',
         '优先从上次未完成步骤继续',
         newlyProvidedResources && newlyProvidedResources.length > 0
@@ -119,9 +137,33 @@ export class ResumeContextBuilder {
 
     return [
       ...baseInstructions,
+      ...fileInstructions,
       '这是恢复执行，不要从头重做',
       '优先从上次未完成步骤继续',
     ];
+  }
+
+  private buildWorkspaceContext(userInput: string): WorkspaceContext | undefined {
+    if (!/(存档|归档|保存|写入)/.test(userInput)) {
+      return undefined;
+    }
+
+    const currentProjectDirMatch = userInput.match(/当前项目的([A-Za-z0-9._-]+)目录/);
+    const explicitDirMatch = userInput.match(/(?:存档|归档|保存|写入)到([A-Za-z0-9_./-]+)目录/);
+    const directoryName = currentProjectDirMatch?.[1] ?? explicitDirMatch?.[1];
+
+    if (!directoryName) {
+      return undefined;
+    }
+
+    const workingDirectory = process.cwd();
+    const targetDirectory = resolve(workingDirectory, directoryName);
+
+    return {
+      allowFilesystem: true,
+      workingDirectory,
+      targetPaths: [targetDirectory],
+    };
   }
 
   private extractKeywords(input: string): string[] {

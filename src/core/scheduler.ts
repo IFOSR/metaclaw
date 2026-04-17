@@ -4,6 +4,7 @@ import type { TaskEngine } from './task-engine.js';
 import type { OrchestrationEngine } from './orchestration.js';
 
 const PREEMPT_DELTA = 5;
+const AUTO_RESUME_READY_REASON = '高优任务完成，恢复进入待调度队列';
 
 export interface SubmitResult {
   action: 'started' | 'queued' | 'preempted';
@@ -16,6 +17,11 @@ export interface SubmitOptions {
   priorityHint?: 'normal' | 'high' | 'urgent';
 }
 
+export interface DispatchContext {
+  executionMode?: 'fresh' | 'resume-parked';
+  schedulingReason?: string;
+}
+
 export class SchedulerEngine {
   private lastEvent: string | null = null;
 
@@ -23,18 +29,19 @@ export class SchedulerEngine {
     private taskEngine: TaskEngine,
     private orchestration: OrchestrationEngine,
     private executor: ExecutorAdapter,
-    private onDispatch?: (taskId: string) => Promise<void> | void,
+    private onDispatch?: (taskId: string, context?: DispatchContext) => Promise<void> | void,
   ) {}
 
   async scheduleNext(): Promise<string | null> {
     const currentTask = this.getCurrentRunningTask();
     if (currentTask) return currentTask.id;
 
-    const prioritized = this.orchestration.getPrioritizedTasks();
-    if (prioritized.length === 0) return null;
+    this.promoteAutoResumableParkedTasks();
 
-    const next = prioritized[0];
-    await this.startTask(next.task.id, next.reasons[0] || '最高优先级任务');
+    const next = this.getNextSchedulableTask();
+    if (!next) return null;
+
+    await this.startTask(next.task.id, next.reason, next.dispatchContext);
     return next.task.id;
   }
 
@@ -115,7 +122,7 @@ export class SchedulerEngine {
     }
   }
 
-  private async startTask(taskId: string, reason: string): Promise<void> {
+  private async startTask(taskId: string, reason: string, dispatchContext?: DispatchContext): Promise<void> {
     const repo = this.taskEngine['taskRepo'];
     const task = repo.findById(taskId);
     if (!task) throw new Error(`任务不存在: ${taskId}`);
@@ -138,7 +145,7 @@ export class SchedulerEngine {
     this.lastEvent = `开始执行任务 #${taskId}`;
 
     if (this.onDispatch) {
-      void Promise.resolve(this.onDispatch(taskId));
+      void Promise.resolve(this.onDispatch(taskId, dispatchContext));
     }
   }
 
@@ -157,5 +164,53 @@ export class SchedulerEngine {
     const hasManualPriorityHint = priorityHint === 'urgent' || /紧急|优先|立刻|马上/.test(reason);
 
     return hasManualPriorityHint || candidateScore >= currentScore + PREEMPT_DELTA;
+  }
+
+  private getNextSchedulableTask():
+    | { task: Task; reason: string; dispatchContext?: DispatchContext }
+    | null {
+    const prioritized = this.orchestration.getPrioritizedTasks();
+    if (prioritized.length === 0) return null;
+
+    const task = prioritized[0].task;
+    const schedulingReason = this.isAutoResumableReadyTask(task)
+      ? task.lastSchedulingReason || AUTO_RESUME_READY_REASON
+      : prioritized[0].reasons[0] || '最高优先级任务';
+
+    return {
+      task,
+      reason: schedulingReason,
+      dispatchContext: this.isAutoResumableReadyTask(task)
+        ? {
+            executionMode: 'resume-parked',
+            schedulingReason,
+          }
+        : undefined,
+    };
+  }
+
+  private promoteAutoResumableParkedTasks(): void {
+    const repo = this.taskEngine['taskRepo'];
+    const candidates = repo
+      .findByStatus('parked')
+      .filter(task => this.isAutoResumableParkedTask(task));
+
+    for (const task of candidates) {
+      this.taskEngine.transition(task.id, 'ready');
+      repo.update(task.id, {
+        lastSchedulingReason: AUTO_RESUME_READY_REASON,
+      });
+      this.lastEvent = `任务 #${task.id} 已从挂起恢复到待调度队列`;
+    }
+  }
+
+  private isAutoResumableParkedTask(task: Task): boolean {
+    return /抢占/.test(task.lastInterruptionReason);
+  }
+
+  private isAutoResumableReadyTask(task: Task): boolean {
+    return task.status === 'ready'
+      && /抢占/.test(task.lastInterruptionReason)
+      && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
   }
 }

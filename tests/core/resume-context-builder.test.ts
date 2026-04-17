@@ -181,4 +181,20 @@ describe('ResumeContextBuilder', () => {
       'pref_global',
     ]);
   });
+
+  it('builds a workspace write context for archive-to-project-directory requests', async () => {
+    const task = taskEngine.create({ title: 'harness 分析归档', goal: '将 harness 分析存档到项目目录' });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '刚才我让你做了harness的一个分析，文章写的很好，存档到当前项目的projects目录下',
+      sessionId: 'sess_4',
+    });
+
+    expect(bundle.workspaceContext?.allowFilesystem).toBe(true);
+    expect(bundle.workspaceContext?.targetPaths[0]).toMatch(/\/projects$/);
+    expect(bundle.executionInstructions.some(line => line.includes('必须把结果写入本地文件系统'))).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('projects'))).toBe(true);
+  });
 });

@@ -227,6 +227,12 @@ export interface MaterialContext {
   resources: string[];
 }
 
+export interface WorkspaceContext {
+  allowFilesystem: boolean;
+  workingDirectory: string;
+  targetPaths: string[];
+}
+
 export interface ExecutionContextBundle {
   mode: 'fresh' | 'resume-parked' | 'resume-blocked' | 'follow-up';
   taskBrief: TaskBrief;
@@ -234,6 +240,7 @@ export interface ExecutionContextBundle {
   memoryContext: MemoryContext;
   historyContext: HistoryContext;
   materialContext: MaterialContext;
+  workspaceContext?: WorkspaceContext;
   executionInstructions: string[];
 }
 

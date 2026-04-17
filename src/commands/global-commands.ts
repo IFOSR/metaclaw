@@ -77,7 +77,7 @@ export const historyCommand: CommandHandler = {
     }
 
     const lines = rows.map((row) => {
-      const taskPrefix = row.task_id ? `#${row.task_id}` : '#unknown';
+      const taskPrefix = row.task_id ? `#${row.task_id}` : '#conversation';
       return `${row.created_at} ${taskPrefix} ${row.user_input}`;
     });
 

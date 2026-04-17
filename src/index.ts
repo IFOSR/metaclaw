@@ -46,6 +46,7 @@ async function main() {
   const executor = createExecutor({
     command: config.executor.command,
     timeout: config.executor.timeout,
+    workspaceRoot: process.cwd(),
   });
 
   // 7. 检查执行器可用性
