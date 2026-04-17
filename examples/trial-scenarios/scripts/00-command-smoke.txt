@@ -1,0 +1,5 @@
+# 基础命令烟测：不依赖外部执行器结果
+/help
+/tasks
+/dashboard
+/config

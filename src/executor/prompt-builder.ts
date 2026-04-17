@@ -1,0 +1,138 @@
+import type { ExecutorInput } from './adapter.js';
+
+export function buildExecutorContextPrompt(input: ExecutorInput): string {
+  if (input.executionContextBundle) {
+    const bundle = input.executionContextBundle;
+    const lines = [
+      '[Metaclaw 执行上下文]',
+      '[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。',
+      '',
+      `模式：${bundle.mode}`,
+      `任务：${bundle.taskBrief.title}`,
+      `目标：${bundle.taskBrief.goal}`,
+      `当前状态：${bundle.taskBrief.status}`,
+    ];
+
+    if (bundle.resumeContext) {
+      lines.push(
+        '',
+        '恢复摘要：',
+        `- 上次做到：${bundle.resumeContext.lastProgress}`,
+        `- 暂停/中断原因：${bundle.resumeContext.interruptionReason || bundle.resumeContext.pauseReason}`,
+      );
+      if (bundle.resumeContext.blockedReason) {
+        lines.push(`- 阻塞原因：${bundle.resumeContext.blockedReason}`);
+      }
+      lines.push(
+        `- 当前未完成：${bundle.resumeContext.pendingItems.join('；') || '无'}`,
+        `- 建议下一步：${bundle.resumeContext.nextStep}`,
+      );
+      if (bundle.resumeContext.schedulingReason) {
+        lines.push(`- 本次恢复原因：${bundle.resumeContext.schedulingReason}`);
+      }
+    }
+
+    if (bundle.memoryContext.resolvedPreferences.length > 0) {
+      lines.push('', '相关偏好：');
+      bundle.memoryContext.resolvedPreferences.forEach((preference) => {
+        lines.push(`- [${preference.scope}] ${preference.content}（命中原因：${preference.reason}）`);
+      });
+    }
+
+    if (bundle.materialContext.resources.length > 0) {
+      lines.push('', `关联材料：${bundle.materialContext.resources.join(', ')}`);
+    }
+
+    if (bundle.historyContext.taskTurns.length > 0) {
+      lines.push('', '当前任务对话：');
+      bundle.historyContext.taskTurns.forEach((turn, idx) => {
+        lines.push(`[${idx + 1}] 用户: ${turn.userInput}`);
+        lines.push(`    助手: ${turn.systemOutput}`);
+      });
+    }
+
+    if (bundle.historyContext.sessionTurns.length > 0) {
+      lines.push('', '会话近期上下文：');
+      bundle.historyContext.sessionTurns.forEach((turn) => {
+        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+
+    if (bundle.historyContext.relatedTurns.length > 0) {
+      lines.push('', '关联历史：');
+      bundle.historyContext.relatedTurns.forEach((turn) => {
+        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+
+    lines.push('', `用户指令：${input.userPrompt}`);
+    if (bundle.executionInstructions.length > 0) {
+      lines.push('', '执行要求：');
+      bundle.executionInstructions.forEach((instruction) => {
+        lines.push(`- ${instruction}`);
+      });
+    }
+
+    return lines.join('\n');
+  }
+
+  const lines = [
+    '[Metaclaw 上下文注入]',
+    '[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。',
+    '',
+    `任务：${input.task.title}`,
+    `目标：${input.task.goal}`,
+  ];
+
+  if (input.task.summary) {
+    lines.push(`已完成：${input.task.summary}`);
+  }
+
+  if (input.preferences.length > 0) {
+    lines.push('用户偏好：');
+    input.preferences.forEach((p) => {
+      lines.push(`  - [${p.scope}] ${p.content}`);
+    });
+  }
+
+  if (input.task.resources.length > 0) {
+    lines.push(`关联材料：${input.task.resources.join(', ')}`);
+  }
+
+  const taskTurns = input.conversationHistory.filter((t) => t.source === 'task');
+  const sessionTurns = input.conversationHistory.filter((t) => t.source === 'session');
+  const keywordTurns = input.conversationHistory.filter((t) => t.source === 'keyword' || t.source === 'llm');
+
+  if (input.conversationHistory.length === 0) {
+    lines.push('', '无相关对话历史。这是一个全新的对话，不要假设任何之前的上下文。');
+  } else {
+    if (taskTurns.length > 0) {
+      lines.push('', '当前任务对话：');
+      taskTurns.forEach((turn, idx) => {
+        lines.push(`[${idx + 1}] 用户: ${turn.userInput}`);
+        lines.push(`    助手: ${turn.systemOutput}`);
+      });
+    }
+
+    if (sessionTurns.length > 0) {
+      lines.push('', '会话近期上下文：');
+      sessionTurns.forEach((turn) => {
+        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+
+    if (keywordTurns.length > 0) {
+      lines.push('', '关联历史：');
+      keywordTurns.forEach((turn) => {
+        lines.push(`[任务#${turn.taskId}] 用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+  }
+
+  lines.push('', `用户指令：${input.userPrompt}`);
+  return lines.join('\n');
+}

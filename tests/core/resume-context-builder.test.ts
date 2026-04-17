@@ -1,0 +1,184 @@
+import { describe, expect, it, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { tmpdir } from 'os';
+import { resolve } from 'path';
+import { runMigrations } from '../../src/storage/migrations.js';
+import { TaskRepo } from '../../src/storage/task-repo.js';
+import { PreferenceRepo } from '../../src/storage/preference-repo.js';
+import { ObservationRepo } from '../../src/storage/observation-repo.js';
+import { TaskEngine } from '../../src/core/task-engine.js';
+import { MemoryEngine } from '../../src/core/memory-engine.js';
+import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { ResumeContextBuilder } from '../../src/core/resume-context-builder.js';
+import type { Preference } from '../../src/core/types.js';
+
+function createTestDb() {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  runMigrations(db);
+  return db;
+}
+
+describe('ResumeContextBuilder', () => {
+  let db: Database.Database;
+  let taskRepo: TaskRepo;
+  let prefRepo: PreferenceRepo;
+  let taskEngine: TaskEngine;
+  let memoryEngine: MemoryEngine;
+  let contextRecaller: ContextRecaller;
+  let builder: ResumeContextBuilder;
+
+  beforeEach(() => {
+    db = createTestDb();
+    taskRepo = new TaskRepo(db);
+    prefRepo = new PreferenceRepo(db);
+    taskEngine = new TaskEngine(taskRepo, resolve(tmpdir(), 'metaclaw-test-snapshots'));
+    memoryEngine = new MemoryEngine(prefRepo, new ObservationRepo(db));
+    contextRecaller = new ContextRecaller(db);
+    builder = new ResumeContextBuilder(taskEngine, memoryEngine, contextRecaller);
+  });
+
+  function insertInteraction(input: {
+    id: string;
+    taskId: string;
+    sessionId: string;
+    userInput: string;
+    systemOutput: string;
+    createdAt: string;
+  }) {
+    db.prepare(
+      'INSERT INTO interactions (id, task_id, session_id, user_input, system_output, executor_used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(input.id, input.taskId, input.sessionId, input.userInput, input.systemOutput, 'codex-cli', input.createdAt);
+  }
+
+  function insertPreference(pref: Preference) {
+    prefRepo.insert(pref);
+  }
+
+  it('builds a parked resume bundle with last progress and interruption reason', async () => {
+    const task = taskEngine.create({ title: '行业分析', goal: '完成分析摘要', resources: ['/tmp/report-a.md'] });
+    taskEngine.transition(task.id, 'ready');
+    taskEngine.transition(task.id, 'running');
+    taskEngine.park(task.id, '被高优任务抢占', {
+      done: ['报告 A 已完成'],
+      pending: ['报告 B 待分析'],
+      nextStep: '继续分析报告 B',
+      pauseReason: '被高优任务抢占',
+    });
+    taskRepo.update(task.id, { lastInterruptionReason: '被任务 #task_high 抢占' });
+
+    insertInteraction({
+      id: 'int_1',
+      taskId: task.id,
+      sessionId: 'sess_1',
+      userInput: '先分析报告 A',
+      systemOutput: '报告 A 分析已完成',
+      createdAt: '2026-04-16T00:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'resume-parked',
+      userInput: '继续刚才的分析',
+      sessionId: 'sess_1',
+      schedulingReason: '高优任务已完成，恢复主线',
+    });
+
+    expect(bundle.mode).toBe('resume-parked');
+    expect(bundle.resumeContext?.lastProgress).toContain('报告 A 已完成');
+    expect(bundle.resumeContext?.interruptionReason).toBe('被任务 #task_high 抢占');
+    expect(bundle.resumeContext?.nextStep).toBe('继续分析报告 B');
+    expect(bundle.historyContext.taskTurns).toHaveLength(1);
+    expect(bundle.materialContext.resources).toContain('/tmp/report-a.md');
+  });
+
+  it('builds a blocked resume bundle with blocked reason and newly provided resources', async () => {
+    const task = taskEngine.create({ title: '起诉书草稿', goal: '补齐起诉材料' });
+    taskEngine.transition(task.id, 'ready');
+    taskEngine.transition(task.id, 'running');
+    taskEngine.block(task.id, {
+      taskId: task.id,
+      type: 'manual',
+      description: '等待客户补充证据文件',
+      status: 'waiting',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'resume-blocked',
+      userInput: '客户已经补了材料，继续',
+      sessionId: 'sess_2',
+      schedulingReason: '阻塞已解除',
+      newlyProvidedResources: ['/tmp/evidence-v3.pdf'],
+    });
+
+    expect(bundle.mode).toBe('resume-blocked');
+    expect(bundle.resumeContext?.blockedReason).toBe('等待客户补充证据文件');
+    expect(bundle.materialContext.resources).toContain('/tmp/evidence-v3.pdf');
+    expect(bundle.executionInstructions.some(line => line.includes('先检查新增材料是否足以推进任务'))).toBe(true);
+  });
+
+  it('orders memory context as current input, then task-local, then broader scopes', async () => {
+    const task = taskEngine.create({ title: '周报整理', goal: '整理本周周报' });
+
+    insertPreference({
+      id: 'pref_task',
+      type: 'style',
+      scope: 'task-local',
+      subject: null,
+      content: '输出用表格格式',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [task.id],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-16T00:00:00Z',
+      createdAt: '2026-04-16T00:00:00Z',
+      updatedAt: '2026-04-16T00:00:00Z',
+    });
+    insertPreference({
+      id: 'pref_contact',
+      type: 'contact',
+      scope: 'contact',
+      subject: '张总',
+      content: '给张总的内容用正式语气并保持表格结构',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-16T00:00:00Z',
+      createdAt: '2026-04-16T00:00:00Z',
+      updatedAt: '2026-04-16T00:00:00Z',
+    });
+    insertPreference({
+      id: 'pref_global',
+      type: 'style',
+      scope: 'global',
+      subject: null,
+      content: '输出尽量简洁并保留表格',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-16T00:00:00Z',
+      createdAt: '2026-04-16T00:00:00Z',
+      updatedAt: '2026-04-16T00:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '给张总整理一份周报，今天明确要求先保留表格格式',
+      sessionId: 'sess_3',
+    });
+
+    expect(bundle.memoryContext.explicitUserInstruction).toContain('今天明确要求先保留表格格式');
+    expect(bundle.memoryContext.resolvedPreferences.map(pref => pref.id)).toEqual([
+      'pref_task',
+      'pref_contact',
+      'pref_global',
+    ]);
+  });
+});

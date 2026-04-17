@@ -1,0 +1,40 @@
+{
+  "name": "metaclaw",
+  "version": "1.0.0",
+  "description": "任务连续性、偏好记忆与主动编排中枢",
+  "type": "module",
+  "bin": {
+    "metaclaw": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "ink": "^5.0.0",
+    "react": "^18.3.0",
+    "better-sqlite3": "^11.0.0",
+    "commander": "^12.0.0",
+    "js-yaml": "^4.1.0",
+    "pino": "^9.0.0",
+    "nanoid": "^5.0.0",
+    "dayjs": "^1.11.0",
+    "chalk": "^5.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsup": "^8.0.0",
+    "vitest": "^2.0.0",
+    "@types/react": "^18.3.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/js-yaml": "^4.0.0",
+    "ink-testing-library": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

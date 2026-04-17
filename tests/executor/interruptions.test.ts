@@ -1,0 +1,112 @@
+import { EventEmitter } from 'events';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+class MockChildProcess extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+
+  kill() {
+    this.emit('close', null);
+    return true;
+  }
+}
+
+const spawnMock = vi.fn();
+const spawnSyncMock = vi.fn().mockReturnValue({ status: 0 });
+
+vi.mock('child_process', () => ({
+  spawn: spawnMock,
+  spawnSync: spawnSyncMock,
+}));
+
+describe('executor interruption semantics', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it('marks codex execution as interrupted after abort', async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { CodexCliAdapter } = await import('../../src/executor/codex-cli.js');
+    const adapter = new CodexCliAdapter({ command: 'codex', timeout: 300 });
+
+    const resultPromise = adapter.execute({
+      task: {
+        id: 'task_1',
+        title: '测试任务',
+        goal: '测试目标',
+        status: 'running',
+        summary: '',
+        snapshots: [],
+        resources: [],
+        dependencies: [],
+        prioritySignals: {
+          dueAt: null,
+          isReady: true,
+          progressRatio: 0,
+          blocksOthers: false,
+          idleHours: 0,
+        },
+        injectedPreferences: [],
+        lastSchedulingReason: '',
+        lastInterruptionReason: '',
+        interruptionCount: 0,
+        createdAt: '2026-04-16T00:00:00Z',
+        updatedAt: '2026-04-16T00:00:00Z',
+      },
+      preferences: [],
+      userPrompt: '继续',
+      conversationHistory: [],
+    });
+
+    adapter.abort();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.interrupted).toBe(true);
+    expect(result.error).toContain('interrupted');
+  });
+
+  it('marks claude execution as interrupted after abort', async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { ClaudeCodeAdapter } = await import('../../src/executor/claude-code.js');
+    const adapter = new ClaudeCodeAdapter({ command: 'claude', timeout: 300 });
+
+    const resultPromise = adapter.execute({
+      task: {
+        id: 'task_1',
+        title: '测试任务',
+        goal: '测试目标',
+        status: 'running',
+        summary: '',
+        snapshots: [],
+        resources: [],
+        dependencies: [],
+        prioritySignals: {
+          dueAt: null,
+          isReady: true,
+          progressRatio: 0,
+          blocksOthers: false,
+          idleHours: 0,
+        },
+        injectedPreferences: [],
+        lastSchedulingReason: '',
+        lastInterruptionReason: '',
+        interruptionCount: 0,
+        createdAt: '2026-04-16T00:00:00Z',
+        updatedAt: '2026-04-16T00:00:00Z',
+      },
+      preferences: [],
+      userPrompt: '继续',
+      conversationHistory: [],
+    });
+
+    adapter.abort();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.interrupted).toBe(true);
+    expect(result.error).toContain('interrupted');
+  });
+});
