@@ -126,6 +126,7 @@ describe('App input availability', () => {
     await type('务');
 
     expect(app.lastFrame()).toContain('> 排队任务');
+    expect(app.lastFrame()).toContain('status: running codex-cli');
 
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();

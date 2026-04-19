@@ -116,7 +116,7 @@ describe('App network failure blocking', () => {
     const blockedTask = taskRepo.findByStatus('blocked')[0];
     expect(blockedTask).toBeTruthy();
     expect(blockedTask.dependencies[0]?.description).toBe('执行器网络连接失败，请检查网络或代理配置');
-    expect(app.lastFrame()).toContain('✗ 执行失败: 执行器网络连接失败，请检查网络或代理配置');
+    expect(app.lastFrame()).toContain('! 执行失败: 执行器网络连接失败，请检查网络或代理配置');
     expect(app.lastFrame()).toContain(`任务 #${blockedTask.id} 已转为阻塞`);
     expect(app.lastFrame()).toContain(`/task ${blockedTask.id} unblock`);
 

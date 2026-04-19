@@ -121,7 +121,7 @@ describe('App execution indicator', () => {
     const submitPromise = inputCapture.handler?.('', { return: true }) ?? Promise.resolve();
     await flushUpdates();
 
-    expect(app.frames.some(frame => frame.includes('当前执行: 1'))).toBe(true);
+    expect(app.frames.some(frame => frame.includes('当前执行 1 | 待执行 0 | 已挂起 0 | 阻塞 0'))).toBe(true);
 
     deferred.resolve({
       success: true,
@@ -134,10 +134,11 @@ describe('App execution indicator', () => {
     await flushUpdates();
 
     expect(
-      app.frames.some(frame => frame.includes('✓ 任务完成') && frame.includes('当前执行: 1'))
+      app.frames.some(frame => frame.includes('✓ 任务完成') && frame.includes('当前执行 1 |'))
     ).toBe(false);
     expect(app.lastFrame()).toContain('✓ 任务完成');
-    expect(app.lastFrame()).toContain('当前执行: 0');
+    expect(app.lastFrame()).toContain('当前执行 0 | 待执行 0 | 已挂起 0 | 阻塞 0');
+    expect(app.lastFrame()).toContain('status: idle');
 
     app.unmount();
     app.cleanup();
@@ -187,9 +188,8 @@ describe('App execution indicator', () => {
 
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('当前执行: 0');
-    expect(app.lastFrame()).toContain('已挂起: 1');
-    expect(app.lastFrame()).toContain('最近事件: 无');
+    expect(app.lastFrame()).toContain('当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
+    expect(app.lastFrame()).toContain('最近事件 0');
 
     app.unmount();
     app.cleanup();
@@ -242,7 +242,7 @@ describe('App execution indicator', () => {
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('最近事件: 开始执行任务 #');
+    expect(app.lastFrame()).toContain('最近事件 开始执行任务 #');
 
     app.unmount();
     app.cleanup();

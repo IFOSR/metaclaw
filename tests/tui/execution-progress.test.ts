@@ -128,13 +128,80 @@ describe('App execution progress', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('正在回忆任务 #');
-    expect(app.lastFrame()).toContain('执行上下文已准备完成');
+    expect(app.lastFrame()).toContain('→ 正在回忆任务 #');
+    expect(app.lastFrame()).toContain('→ 执行上下文已准备完成');
+    expect(app.lastFrame()).toContain('· #');
     expect(app.lastFrame()).toContain('已启动 codex-cli 执行器');
     expect(app.lastFrame()).toContain('正在检索市场份额数据');
-    expect(app.lastFrame()).toContain('已注入');
+    expect(app.lastFrame()).toContain('  · 已注入');
     expect(app.lastFrame()).toContain('confidence=');
     expect(app.lastFrame()).toContain('命中原因');
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows a waiting executor hint while a task is running but no fresh progress arrived yet', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 240));
+        return {
+          success: true,
+          output: '调研完成',
+          exitCode: 0,
+          durationMs: 280,
+        };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '明确调研任务',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_execution_waiting_hint',
+        contextRecaller,
+        llmBridge,
+      }),
+    );
+
+    for (const char of '整理 Phoenix 项目周报') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    const submitPromise = inputCapture.handler?.('', { return: true }) ?? Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 140));
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('正在等待执行器返回');
+
+    await submitPromise;
+    await flushUpdates();
 
     app.unmount();
     app.cleanup();

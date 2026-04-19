@@ -113,7 +113,13 @@ describe('App static transcript rendering', () => {
     await flushUpdates();
 
     expect(staticCapture.calls.length).toBeGreaterThan(0);
-    expect(staticCapture.calls.at(-1)?.join('\n')).toContain('Metaclaw v1.0');
+    const latestItems = staticCapture.calls.at(-1) ?? [];
+    const latestFrame = latestItems
+      .map(item => (typeof item === 'string' ? item : JSON.stringify(item)))
+      .join('\n');
+
+    expect(latestFrame).toContain('Metaclaw v1.0');
+    expect(latestFrame).toContain('┌─');
 
     app.unmount();
     app.cleanup();

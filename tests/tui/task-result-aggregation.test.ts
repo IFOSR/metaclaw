@@ -118,6 +118,7 @@ describe('App task result aggregation', () => {
     await flushUpdates();
     await flushUpdates();
 
+    expect(app.lastFrame()).toContain('✓ 任务完成');
     expect(app.lastFrame()).toContain('任务结果');
     expect(app.lastFrame()).toContain('摘要:');
     expect(app.lastFrame()).toContain('下一步:');

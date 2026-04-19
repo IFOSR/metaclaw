@@ -6,6 +6,14 @@ import { prepareEditorSubmission } from '../session/session-helpers.js';
 
 interface AppProps extends MetaclawSessionDeps {}
 
+type OutputKind = 'blank' | 'user' | 'system' | 'context' | 'agent' | 'result' | 'warning';
+
+interface RenderLine {
+  kind: OutputKind;
+  text: string;
+  indent: number;
+}
+
 const EMPTY_SNAPSHOT: SessionSnapshot = {
   output: [],
   currentTaskId: null,
@@ -19,12 +27,197 @@ const EMPTY_SNAPSHOT: SessionSnapshot = {
   latestGuidance: null,
 };
 
+function isResultBoundary(line: string): boolean {
+  return line.startsWith('→ 已记录 ')
+    || line.startsWith('┌─ 操作指引')
+    || line.startsWith('💡 ')
+    || line.startsWith('⚠️ ')
+    || line.startsWith('> ');
+}
+
+function normalizeWarningLine(line: string): string {
+  if (line.startsWith('✗ ')) {
+    return `! ${line.slice(2)}`;
+  }
+
+  if (line.startsWith('错误')) {
+    return `! ${line}`;
+  }
+
+  return line;
+}
+
+function classifyOutputLine(line: string, inResultBlock: boolean): RenderLine {
+  if (!line.trim()) {
+    return {
+      kind: 'blank',
+      text: '',
+      indent: 0,
+    };
+  }
+
+  if (line.startsWith('> ')) {
+    return { kind: 'user', text: line, indent: 0 };
+  }
+
+  if (line.startsWith('✓ ')) {
+    return { kind: 'result', text: line, indent: 0 };
+  }
+
+  if (line.startsWith('✗ ') || line.startsWith('⚠️ ') || line.startsWith('错误') || line.startsWith('确认失败')) {
+    return {
+      kind: 'warning',
+      text: normalizeWarningLine(line),
+      indent: 0,
+    };
+  }
+
+  if (line.startsWith('┌─ 任务结果') || line.startsWith('│ 摘要') || line.startsWith('│ 下一步') || (inResultBlock && line.startsWith('└'))) {
+    return { kind: 'result', text: line, indent: 0 };
+  }
+
+  if (inResultBlock && !isResultBoundary(line)) {
+    return { kind: 'result', text: line, indent: 0 };
+  }
+
+  if (line.startsWith('→ 已注入 ')) {
+    return {
+      kind: 'context',
+      text: `· ${line.replace(/^→ /, '')}`,
+      indent: 1,
+    };
+  }
+
+  if (line.startsWith('   - ')) {
+    return {
+      kind: 'context',
+      text: `· ${line.trim().replace(/^- /, '')}`,
+      indent: 2,
+    };
+  }
+
+  if (
+    line.startsWith('→ 正在回忆任务')
+    || line.startsWith('→ 已召回 ')
+    || line.startsWith('→ 正在构建任务')
+    || line.startsWith('→ 执行上下文已准备完成')
+  ) {
+    return { kind: 'context', text: line, indent: 0 };
+  }
+
+  if (line.startsWith('· #')) {
+    return { kind: 'agent', text: line, indent: 0 };
+  }
+
+  if (line.startsWith('任务 #')) {
+    return { kind: 'system', text: `→ ${line}`, indent: 0 };
+  }
+
+  if (
+    line.startsWith('→ ')
+    || line.startsWith('┌─ ')
+    || line.startsWith('│ ')
+    || line.startsWith('└')
+    || line.startsWith('已记住')
+    || line.startsWith('已确认')
+    || line.startsWith('已忽略')
+    || line.startsWith('请输入 ')
+    || line.startsWith('未找到')
+    || line.startsWith('当前没有')
+  ) {
+    return { kind: 'system', text: line, indent: 0 };
+  }
+
+  return { kind: 'system', text: line, indent: 0 };
+}
+
+function buildRenderLines(lines: string[]): RenderLine[] {
+  let inResultBlock = false;
+
+  return lines.map(line => {
+    if (line.startsWith('✓ ')) {
+      inResultBlock = true;
+    } else if (inResultBlock && isResultBoundary(line)) {
+      inResultBlock = false;
+    }
+
+    return classifyOutputLine(line, inResultBlock);
+  });
+}
+
+function getLineColor(kind: OutputKind): string | undefined {
+  switch (kind) {
+    case 'user':
+      return 'green';
+    case 'system':
+      return 'cyan';
+    case 'context':
+      return 'gray';
+    case 'agent':
+      return 'blue';
+    case 'result':
+      return 'green';
+    case 'warning':
+      return 'yellow';
+    default:
+      return undefined;
+  }
+}
+
+function formatRenderLine(line: RenderLine): string {
+  if (line.kind === 'blank') {
+    return '';
+  }
+
+  return `${'  '.repeat(line.indent)}${line.text}`;
+}
+
+function hasPendingConfirmation(lines: string[]): boolean {
+  const recentOutput = lines.slice(-8).join('\n');
+  return recentOutput.includes('[y] 确认')
+    || recentOutput.includes('输入“确认执行”继续')
+    || recentOutput.includes('输入“取消执行”放弃');
+}
+
+function getComposerStatus(snapshot: SessionSnapshot, lines: string[], executorName: string): string {
+  if (hasPendingConfirmation(lines)) {
+    return 'waiting_confirm';
+  }
+
+  if (snapshot.runtimeState.runningTaskId) {
+    return `running ${executorName}`;
+  }
+
+  if (snapshot.runtimeState.blockedTaskIds.length > 0) {
+    return 'blocked';
+  }
+
+  return 'idle';
+}
+
+function shouldShowWaitingHint(snapshot: SessionSnapshot, lines: string[], showWaitingIndicator: boolean): boolean {
+  if (!snapshot.runtimeState.runningTaskId) {
+    return false;
+  }
+
+  const lastMeaningfulLine = [...lines].reverse().find(line => line.trim().length > 0);
+  if (!lastMeaningfulLine) {
+    return false;
+  }
+
+  return showWaitingIndicator
+    || lastMeaningfulLine.startsWith('→ 正在执行任务')
+    || lastMeaningfulLine.startsWith('→ 派发给');
+}
+
 export function App(props: AppProps) {
   const [editor, setEditor] = useState({ text: '', cursor: 0 });
   const editorRef = useRef({ text: '', cursor: 0 });
   const lastInputAtRef = useRef(Date.now());
+  const lastOutputAtRef = useRef(Date.now());
   const [snapshot, setSnapshot] = useState<SessionSnapshot>(EMPTY_SNAPSHOT);
   const [committedOutput, setCommittedOutput] = useState<string[]>([]);
+  const [showWaitingIndicator, setShowWaitingIndicator] = useState(false);
   const sessionRef = useRef<MetaclawSession | null>(null);
 
   if (!sessionRef.current) {
@@ -45,6 +238,11 @@ export function App(props: AppProps) {
   }, [snapshot.output, committedOutput.length]);
 
   useEffect(() => {
+    lastOutputAtRef.current = Date.now();
+    setShowWaitingIndicator(false);
+  }, [committedOutput]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       const session = sessionRef.current;
       if (!session) return;
@@ -55,6 +253,21 @@ export function App(props: AppProps) {
 
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const isRunning = Boolean(snapshot.runtimeState.runningTaskId);
+      if (!isRunning) {
+        setShowWaitingIndicator(false);
+        return;
+      }
+
+      const shouldShow = Date.now() - lastOutputAtRef.current >= 80;
+      setShowWaitingIndicator(previous => (previous === shouldShow ? previous : shouldShow));
+    }, 50);
+
+    return () => clearInterval(timer);
+  }, [snapshot.runtimeState.runningTaskId]);
 
   useInput(async (char, key) => {
     const editorState = editorRef.current;
@@ -110,12 +323,25 @@ export function App(props: AppProps) {
     }
   });
 
+  const renderLines = buildRenderLines(committedOutput);
+  const composerStatus = getComposerStatus(snapshot, committedOutput, props.executor.name);
+  const runtimeSummary = `当前执行 ${snapshot.runtimeState.runningTaskId ? 1 : 0} | 待执行 ${snapshot.runtimeState.readyTaskIds.length} | 已挂起 ${snapshot.runtimeState.parkedTaskIds.length} | 阻塞 ${snapshot.runtimeState.blockedTaskIds.length}`;
+  const latestEvent = `最近事件 ${snapshot.runtimeState.lastEvent ?? '0'}`;
+  const waitingHintVisible = shouldShowWaitingHint(snapshot, committedOutput, showWaitingIndicator);
+
   return (
     <Box flexDirection="column">
       <Box flexDirection="column" marginBottom={1}>
-        <Static items={committedOutput}>
-          {(line, index) => <Text key={`${index}-${line}`}>{line}</Text>}
+        <Static items={renderLines}>
+          {(line, index) => (
+            <Text key={`${index}-${line.kind}-${line.text}`} color={getLineColor(line.kind)}>
+              {formatRenderLine(line)}
+            </Text>
+          )}
         </Static>
+        {waitingHintVisible && (
+          <Text color="gray">  · 正在等待执行器返回...</Text>
+        )}
       </Box>
       {snapshot.latestGuidance && (
         <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={1}>
@@ -129,19 +355,17 @@ export function App(props: AppProps) {
         </Box>
       )}
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">当前执行: {snapshot.runtimeState.runningTaskId ? 1 : 0}</Text>
-        <Text>待执行: {snapshot.runtimeState.readyTaskIds.length}</Text>
-        <Text>已挂起: {snapshot.runtimeState.parkedTaskIds.length}</Text>
-        <Text>阻塞: {snapshot.runtimeState.blockedTaskIds.length}</Text>
-        <Text color="gray">最近事件: {snapshot.runtimeState.lastEvent ?? '无'}</Text>
+        <Text color="yellow">{runtimeSummary}</Text>
+        <Text color="gray">{latestEvent}</Text>
       </Box>
-      <Box>
-        <>
+      <Box flexDirection="column">
+        <Text color="gray">status: {composerStatus}</Text>
+        <Box>
           <Text color="green">&gt; </Text>
           <Text>{editor.text.slice(0, editor.cursor)}</Text>
           <Text inverse>{editor.text[editor.cursor] ?? ' '}</Text>
           <Text>{editor.text.slice(editor.cursor + 1)}</Text>
-        </>
+        </Box>
       </Box>
     </Box>
   );

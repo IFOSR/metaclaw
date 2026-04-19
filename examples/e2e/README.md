@@ -40,6 +40,8 @@
   - 候选偏好 `y/n/e` 交互验收包
 - `round-14-task-artifacts/`
   - 任务产物回流与展示验收包
+- `round-15-tui-refresh/`
+  - TUI 语义分层、运行摘要、composer 状态、结果块验收包
 
 ## 目录约定
 

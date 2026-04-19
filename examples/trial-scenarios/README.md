@@ -62,6 +62,8 @@ metaclaw --script examples/trial-scenarios/scripts/00-command-smoke.txt
   - 候选偏好支持 `y / n / e <新内容>`
 - `examples/e2e/round-14-task-artifacts/`
   - 执行器写出的文件回流为任务产物
+- `examples/e2e/round-15-tui-refresh/`
+  - 新 TUI 的运行摘要、执行步骤、等待提示、结果块
 
 ## 素材文件
 
