@@ -214,4 +214,74 @@ describe('App input availability', () => {
     app.unmount();
     app.cleanup();
   });
+
+  it('falls back quickly when llm routing is stalled while another task is already running', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const firstDeferred = createDeferredResult();
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const never = () => new Promise<never>(() => {});
+    const llmBridge = {
+      resolveRoute: vi.fn()
+        .mockResolvedValueOnce({ route: 'durable_task', reason: '首个任务' })
+        .mockImplementationOnce(never),
+      resolveIntent: vi.fn()
+        .mockResolvedValueOnce({ type: 'new', taskId: null, reason: '首个任务' })
+        .mockImplementationOnce(never),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_llm_stalled_while_running',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    const typeAndSubmit = async (text: string) => {
+      for (const char of text) {
+        await inputCapture.handler?.(char, {});
+        await flushUpdates();
+      }
+      return inputCapture.handler?.('', { return: true }) ?? Promise.resolve();
+    };
+
+    await typeAndSubmit('主线任务');
+    await flushUpdates();
+
+    const secondSubmit = typeAndSubmit('排队任务');
+    await new Promise(resolve => setTimeout(resolve, 600));
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('已进入待执行队列');
+    expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(1);
+
+    void secondSubmit;
+    firstDeferred.resolve({
+      success: true,
+      output: 'first done',
+      exitCode: 0,
+      durationMs: 1000,
+    });
+    await flushUpdates();
+
+    app.unmount();
+    app.cleanup();
+  });
 });

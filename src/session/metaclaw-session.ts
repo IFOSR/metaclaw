@@ -78,6 +78,9 @@ interface PendingPreferenceConfirmation {
   pattern: string;
 }
 
+const BUSY_LLM_TIMEOUT_MS = 250;
+const DEFAULT_LLM_TIMEOUT_MS = 5_000;
+
 export class MetaclawSession {
   private output: string[] = [];
   private currentTaskId: string | null = null;
@@ -483,9 +486,7 @@ export class MetaclawSession {
       summary: task.summary,
       status: task.status,
     }));
-    const llmRouteDecision = typeof this.deps.llmBridge.resolveRoute === 'function'
-      ? await this.deps.llmBridge.resolveRoute(userInput, recentTasks)
-      : { route: 'unknown', reason: '缺少 resolveRoute，fallback' as const };
+    const llmRouteDecision = await this.resolveRouteDecision(userInput, recentTasks);
     let route: 'conversation' | 'task_control' | 'durable_task';
     if (llmRouteDecision.route === 'unknown') {
       route = classifyNaturalLanguageInput(userInput, durableTasks);
@@ -508,7 +509,7 @@ export class MetaclawSession {
       return;
     }
 
-    const rawIntent = await this.deps.llmBridge.resolveIntent(userInput, recentTasks);
+    const rawIntent = await this.resolveIntentDecision(userInput, recentTasks);
     const intent = this.applyFocusAwareIntentOverride(userInput, effectiveRoute, rawIntent);
 
     let taskId: string;
@@ -616,6 +617,53 @@ export class MetaclawSession {
         : buildSchedulingReason(userInput),
       priorityHint: parsePriorityHint(userInput),
     });
+  }
+
+  private async resolveRouteDecision(
+    userInput: string,
+    recentTasks: Array<{ id: string; title: string; goal: string; summary: string; status: Task['status'] }>,
+  ): Promise<{ route: 'conversation' | 'task_control' | 'durable_task' | 'unknown'; reason: string }> {
+    if (typeof this.deps.llmBridge.resolveRoute !== 'function') {
+      return { route: 'unknown', reason: '缺少 resolveRoute，fallback' };
+    }
+
+    return this.awaitWithTimeout(
+      Promise.resolve(this.deps.llmBridge.resolveRoute(userInput, recentTasks)),
+      this.getLlmTimeoutMs(),
+      { route: 'unknown', reason: 'LLM route 超时，fallback' },
+    );
+  }
+
+  private async resolveIntentDecision(
+    userInput: string,
+    recentTasks: Array<{ id: string; title: string; goal: string; summary: string; status: Task['status'] }>,
+  ): Promise<{ type: 'new' | 'reference'; taskId: string | null; reason: string }> {
+    return this.awaitWithTimeout(
+      Promise.resolve(this.deps.llmBridge.resolveIntent(userInput, recentTasks)),
+      this.getLlmTimeoutMs(),
+      { type: 'new', taskId: null, reason: 'LLM intent 超时，fallback' },
+    );
+  }
+
+  private getLlmTimeoutMs(): number {
+    return this.runtimeState.runningTaskId ? BUSY_LLM_TIMEOUT_MS : DEFAULT_LLM_TIMEOUT_MS;
+  }
+
+  private async awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>(resolve => {
+          timer = setTimeout(() => resolve(fallback), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   private handlePendingPreferenceConfirmation(userInput: string): boolean {
