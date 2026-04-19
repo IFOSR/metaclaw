@@ -37,4 +37,73 @@ describe('memoryCommand', () => {
     expect(result.content).toContain('已更新偏好');
     expect(engine.list()[0].content).toBe('输出用表格格式');
   });
+
+  it('supports adding a scoped preference with subject flags', async () => {
+    const result = await memoryCommand.execute([
+      'add',
+      '--scope',
+      'contact',
+      '--type',
+      'contact',
+      '--subject',
+      '张总',
+      '给张总的邮件用正式语气',
+    ], {
+      memoryEngine: engine,
+    } as any);
+
+    expect(result.content).toContain('已添加偏好');
+
+    const pref = engine.list()[0];
+    expect(pref.scope).toBe('contact');
+    expect(pref.type).toBe('contact');
+    expect(pref.subject).toBe('张总');
+    expect(pref.content).toBe('给张总的邮件用正式语气');
+  });
+
+  it('supports editing scope and subject for an existing preference', async () => {
+    const pref = engine.addManual({
+      content: '当前任务保留表格结构',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const result = await memoryCommand.execute([
+      'edit',
+      pref.id,
+      '--scope',
+      'task-local',
+      '--type',
+      'style',
+      '--subject',
+      'task_demo123',
+      '当前任务保留表格结构并增加风险栏目',
+    ], {
+      memoryEngine: engine,
+    } as any);
+
+    expect(result.content).toContain('已更新偏好');
+
+    const updated = engine.list()[0];
+    expect(updated.scope).toBe('task-local');
+    expect(updated.subject).toBe('task_demo123');
+    expect(updated.content).toBe('当前任务保留表格结构并增加风险栏目');
+  });
+
+  it('shows scope and subject in the default memory list output', async () => {
+    engine.addManual({
+      content: 'Phoenix 项目统一使用 Phoenix 术语',
+      scope: 'project',
+      type: 'domain',
+      subject: 'Phoenix',
+    });
+
+    const result = await memoryCommand.execute([], {
+      memoryEngine: engine,
+    } as any);
+
+    expect(result.content).toContain('[project]');
+    expect(result.content).toContain('(Phoenix)');
+    expect(result.content).toContain('Phoenix 项目统一使用 Phoenix 术语');
+  });
 });

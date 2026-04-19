@@ -75,6 +75,78 @@ describe('CodexCliAdapter', () => {
       expect(prompt).toContain('/repo/projects');
       expect(prompt).not.toContain('不要读取或访问本地文件系统和工作目录');
     });
+
+    it('injects text material excerpts into the prompt when available', () => {
+      const prompt = getPrompt(adapter, makeInput({
+        executionContextBundle: {
+          mode: 'fresh',
+          taskBrief: {
+            id: 'task_1',
+            title: 'Phoenix 周报',
+            goal: '整理 Phoenix 周报',
+            status: 'ready',
+            summary: '',
+          },
+          memoryContext: {
+            explicitUserInstruction: '结合材料整理 Phoenix 周报结论',
+            resolvedPreferences: [],
+          },
+          historyContext: {
+            taskTurns: [],
+            sessionTurns: [],
+            relatedTurns: [],
+          },
+          materialContext: {
+            resources: ['/repo/materials/phoenix-weekly.md'],
+            textSnippets: [
+              {
+                path: '/repo/materials/phoenix-weekly.md',
+                content: '# Phoenix Weekly\n本周完成核心模块联调，主线推进稳定。',
+              },
+            ],
+          },
+          executionInstructions: [],
+        },
+      }));
+
+      expect(prompt).toContain('关联材料：/repo/materials/phoenix-weekly.md');
+      expect(prompt).toContain('材料摘录：');
+      expect(prompt).toContain('核心模块联调');
+    });
+
+    it('separates local files and web links in the prompt materials section', () => {
+      const prompt = getPrompt(adapter, makeInput({
+        executionContextBundle: {
+          mode: 'fresh',
+          taskBrief: {
+            id: 'task_1',
+            title: 'Phoenix 周报',
+            goal: '整理 Phoenix 周报',
+            status: 'ready',
+            summary: '',
+          },
+          memoryContext: {
+            explicitUserInstruction: '整理 Phoenix 周报',
+            resolvedPreferences: [],
+          },
+          historyContext: {
+            taskTurns: [],
+            sessionTurns: [],
+            relatedTurns: [],
+          },
+          materialContext: {
+            resources: ['/repo/materials/phoenix-weekly.md', 'https://example.com/phoenix-weekly'],
+            textSnippets: [],
+          },
+          executionInstructions: [],
+        },
+      }));
+
+      expect(prompt).toContain('材料概览：');
+      expect(prompt).toContain('材料状态：');
+      expect(prompt).toContain('本地文件材料：/repo/materials/phoenix-weekly.md');
+      expect(prompt).toContain('网页链接材料：https://example.com/phoenix-weekly');
+    });
   });
 
   describe('spawn args', () => {

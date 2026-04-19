@@ -1,0 +1,6 @@
+/memory
+/memory add --scope global --type style 输出用 Markdown 格式
+/memory add --scope project --subject Phoenix --type domain 项目代号统一叫 Phoenix
+/memory add --scope contact --subject 张总 --type contact 给张总的邮件用正式语气
+/memory search Phoenix
+/memory stats

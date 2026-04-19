@@ -109,4 +109,45 @@ describe('MemoryEngine', () => {
     // contact 优先级高于 global
     expect(results[0].scope).toBe('contact');
   });
+
+  it('should recall task-local preferences directly for the current task', () => {
+    engine.addManual({
+      content: '当前任务固定保留风险栏目',
+      scope: 'task-local',
+      type: 'style',
+      subject: 'task_demo_1',
+    });
+    engine.addManual({
+      content: '输出尽量简洁',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      taskId: 'task_demo_1',
+      keywords: [],
+      userInput: '继续刚才那个任务',
+    });
+
+    expect(results[0].scope).toBe('task-local');
+    expect(results[0].subject).toBe('task_demo_1');
+    expect(results[1].scope).toBe('global');
+  });
+
+  it('includes confirmed global preferences as low-priority defaults', () => {
+    engine.addManual({
+      content: '输出尽量简洁',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      keywords: [],
+      userInput: '整理 Phoenix 项目周报',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].scope).toBe('global');
+    expect(results[0].content).toBe('输出尽量简洁');
+  });
 });

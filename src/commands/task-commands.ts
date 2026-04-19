@@ -1,5 +1,6 @@
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
 import { filterDurableTasks } from '../core/task-routing.js';
+import { buildMaterialSummary, extractMaterialTextSnippets, isWebLink, splitTaskResources } from '../core/material-utils.js';
 
 function formatTaskLine(task: {
   id: string;
@@ -20,6 +21,81 @@ function formatTaskLine(task: {
   }
 
   return lines.join('\n');
+}
+
+function buildStatusExplanation(task: {
+  status: string;
+  lastSchedulingReason: string;
+  lastInterruptionReason: string;
+  dependencies: Array<{ status: string; description: string }>;
+}): string {
+  if (task.status === 'blocked') {
+    return task.dependencies.find(dep => dep.status === 'waiting')?.description || '等待解除阻塞';
+  }
+
+  if (task.status === 'parked') {
+    return task.lastInterruptionReason || '等待恢复';
+  }
+
+  if (task.status === 'ready' || task.status === 'running') {
+    return task.lastSchedulingReason || '等待调度';
+  }
+
+  if (task.status === 'done') {
+    return '已完成，可查看结果摘要与后续动作';
+  }
+
+  return '暂无额外说明';
+}
+
+function buildLatestNextStep(task: {
+  status: string;
+  snapshots: Array<{ nextStep: string }>;
+  dependencies: Array<{ status: string; description: string }>;
+}): string {
+  const latestSnapshot = task.snapshots[task.snapshots.length - 1];
+  if (latestSnapshot?.nextStep) {
+    return latestSnapshot.nextStep;
+  }
+
+  if (task.status === 'blocked') {
+    const blocker = task.dependencies.find(dep => dep.status === 'waiting')?.description;
+    return blocker ? `先解除阻塞：${blocker}` : '先确认阻塞条件';
+  }
+
+  if (task.status === 'done') {
+    return '如需延续，可基于当前结果创建 follow-up 任务';
+  }
+
+  return '继续推进当前任务';
+}
+
+function buildRecoveryAction(task: {
+  id: string;
+  status: string;
+  resources?: string[];
+  materialSummary?: { status: 'missing' | 'partial' | 'ready'; sufficiency: string };
+}): string {
+  if (task.status === 'blocked') {
+    const hasLinks = (task.resources ?? []).some(resource => isWebLink(resource));
+    if (task.materialSummary?.status === 'ready') {
+      return `现有材料已具备可读内容，可直接执行 /task ${task.id} unblock；如仍不够，再补充材料：/task ${task.id} unblock [材料路径]`;
+    }
+    if (hasLinks) {
+      return `若现有链接信息已足够，直接执行 /task ${task.id} unblock；如需补材料：/task ${task.id} unblock [材料路径]`;
+    }
+    return `/task ${task.id} unblock [材料路径]`;
+  }
+
+  if (task.status === 'parked') {
+    return `/task ${task.id} resume`;
+  }
+
+  if (task.status === 'done') {
+    return '直接输入 follow-up 指令，基于当前结果继续';
+  }
+
+  return '无';
 }
 
 export const tasksCommand: CommandHandler = {
@@ -91,17 +167,59 @@ export const taskCommand: CommandHandler = {
     }
 
     if (!action) {
-      // 显示任务详情
+      const latestInteraction = context.db.prepare(
+        'SELECT executor_used, system_output, created_at FROM interactions WHERE task_id = ? ORDER BY created_at DESC LIMIT 1'
+      ).get(taskId) as { executor_used: string | null; system_output: string | null; created_at: string } | undefined;
+      const injectedPreferences = context.memoryEngine
+        .list()
+        .filter(preference => task.injectedPreferences.includes(preference.id));
+      const latestSnapshot = task.snapshots[task.snapshots.length - 1] ?? null;
+      const blocker = task.dependencies.find(dep => dep.status === 'waiting')?.description || '无';
+      const latestResult = task.summary || latestInteraction?.system_output || '无';
+      const latestNextStep = buildLatestNextStep(task);
+      const statusExplanation = buildStatusExplanation(task);
+      const lastProgress = latestSnapshot?.done.join('；') || task.summary || '无';
+      const materialGroups = splitTaskResources(task.resources);
+      const materialSnippets = await extractMaterialTextSnippets(task.resources);
+      const materialSummary = buildMaterialSummary(task.resources, materialSnippets);
+      const recoveryAction = buildRecoveryAction({
+        ...task,
+        materialSummary,
+      });
+
       const lines = [
-        `任务 #${task.id}`,
+        `任务视图 #${task.id}`,
         `标题: ${task.title}`,
         `目标: ${task.goal}`,
-        `状态: ${task.status}`,
-        `摘要: ${task.summary || '无'}`,
-        `资源: ${task.resources.join(', ') || '无'}`,
+        '',
+        `当前状态: ${task.status}`,
+        `状态说明: ${statusExplanation}`,
+        `上次做到: ${lastProgress}`,
+        `最新结果摘要: ${latestResult}`,
+        `最新下一步: ${latestNextStep}`,
+        `当前阻塞: ${blocker}`,
+        `材料概览: ${materialSummary.overview}`,
+        `材料状态: ${materialSummary.sufficiency}`,
+        `关联材料: ${task.resources.join(', ') || '无'}`,
+        `本地文件材料: ${materialGroups.files.join(', ') || '无'}`,
+        `网页链接材料: ${materialGroups.links.join(', ') || '无'}`,
+        `任务产物: ${task.artifacts.join(', ') || '无'}`,
+        `恢复操作: ${recoveryAction}`,
+        '',
+        `最近执行器: ${latestInteraction?.executor_used || '无'}`,
+        `最近调度原因: ${task.lastSchedulingReason || '无'}`,
+        `最近中断原因: ${task.lastInterruptionReason || '无'}`,
+        `最新快照时间: ${latestSnapshot ? latestSnapshot.createdAt : '无'}`,
         `创建时间: ${task.createdAt}`,
         `更新时间: ${task.updatedAt}`,
       ];
+      if (injectedPreferences.length > 0) {
+        lines.push('', '注入偏好:');
+        injectedPreferences.forEach(preference => {
+          const subjectText = preference.subject ? ` (${preference.subject})` : '';
+          lines.push(`  - [${preference.scope}]${subjectText} ${preference.content}`);
+        });
+      }
       return { type: 'text', content: lines.join('\n') };
     }
 

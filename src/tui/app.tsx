@@ -16,11 +16,13 @@ const EMPTY_SNAPSHOT: SessionSnapshot = {
     parkedTaskIds: [],
     lastEvent: null,
   },
+  latestGuidance: null,
 };
 
 export function App(props: AppProps) {
   const [editor, setEditor] = useState({ text: '', cursor: 0 });
   const editorRef = useRef({ text: '', cursor: 0 });
+  const lastInputAtRef = useRef(Date.now());
   const [snapshot, setSnapshot] = useState<SessionSnapshot>(EMPTY_SNAPSHOT);
   const [committedOutput, setCommittedOutput] = useState<string[]>([]);
   const sessionRef = useRef<MetaclawSession | null>(null);
@@ -42,8 +44,21 @@ export function App(props: AppProps) {
     }
   }, [snapshot.output, committedOutput.length]);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const session = sessionRef.current;
+      if (!session) return;
+      if (editorRef.current.text.trim().length > 0) return;
+      if (Date.now() - lastInputAtRef.current < 2_000) return;
+      session.maybeEmitIdleGuidance();
+    }, 1_000);
+
+    return () => clearInterval(timer);
+  }, []);
+
   useInput(async (char, key) => {
     const editorState = editorRef.current;
+    lastInputAtRef.current = Date.now();
 
     if (key.return) {
       if (!editorState.text.trim()) return;
@@ -102,6 +117,17 @@ export function App(props: AppProps) {
           {(line, index) => <Text key={`${index}-${line}`}>{line}</Text>}
         </Static>
       </Box>
+      {snapshot.latestGuidance && (
+        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={1}>
+          <Text color="cyan">当前建议</Text>
+          <Text>场景: {snapshot.latestGuidance.scene}</Text>
+          <Text>动作: {snapshot.latestGuidance.recommendedAction}</Text>
+          <Text>任务: #{snapshot.latestGuidance.taskId}{snapshot.latestGuidance.taskTitle ? ` ${snapshot.latestGuidance.taskTitle}` : ''}</Text>
+          {snapshot.latestGuidance.reasons.map((reason, index) => (
+            <Text key={`${snapshot.latestGuidance!.taskId}-reason-${index}`}>原因{index + 1}: {reason}</Text>
+          ))}
+        </Box>
+      )}
       <Box flexDirection="column" marginBottom={1}>
         <Text color="yellow">当前执行: {snapshot.runtimeState.runningTaskId ? 1 : 0}</Text>
         <Text>待执行: {snapshot.runtimeState.readyTaskIds.length}</Text>

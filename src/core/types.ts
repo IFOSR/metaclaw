@@ -39,6 +39,7 @@ export interface Task {
   summary: string;
   snapshots: TaskSnapshot[];
   resources: string[];
+  artifacts: string[];
   dependencies: Dependency[];
   prioritySignals: PrioritySignals;
   injectedPreferences: string[];
@@ -225,6 +226,22 @@ export interface HistoryContext {
 
 export interface MaterialContext {
   resources: string[];
+  textSnippets?: Array<{
+    path: string;
+    content: string;
+    sourceType: 'file' | 'link';
+  }>;
+  summary?: {
+    totalCount: number;
+    localFileCount: number;
+    webLinkCount: number;
+    fileSnippetCount: number;
+    linkSnippetCount: number;
+    readableSnippetCount: number;
+    status: 'missing' | 'partial' | 'ready';
+    overview: string;
+    sufficiency: string;
+  };
 }
 
 export interface WorkspaceContext {

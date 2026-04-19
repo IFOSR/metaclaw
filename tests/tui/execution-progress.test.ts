@@ -69,6 +69,12 @@ describe('App execution progress', () => {
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    memoryEngine.addManual({
+      content: 'Phoenix 项目材料统一使用 Phoenix 术语体系',
+      scope: 'project',
+      type: 'domain',
+      subject: 'Phoenix',
+    });
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
 
@@ -114,7 +120,7 @@ describe('App execution progress', () => {
       }),
     );
 
-    for (const char of '调研佛塑科技与新能源电池产业链关系') {
+    for (const char of '整理 Phoenix 项目周报') {
       await inputCapture.handler?.(char, {});
       await flushUpdates();
     }
@@ -126,6 +132,9 @@ describe('App execution progress', () => {
     expect(app.lastFrame()).toContain('执行上下文已准备完成');
     expect(app.lastFrame()).toContain('已启动 codex-cli 执行器');
     expect(app.lastFrame()).toContain('正在检索市场份额数据');
+    expect(app.lastFrame()).toContain('已注入');
+    expect(app.lastFrame()).toContain('confidence=');
+    expect(app.lastFrame()).toContain('命中原因');
 
     app.unmount();
     app.cleanup();

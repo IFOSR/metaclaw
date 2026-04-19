@@ -1,4 +1,5 @@
 import type { ExecutorInput } from './adapter.js';
+import { buildMaterialSummary, splitTaskResources } from '../core/material-utils.js';
 
 export function buildExecutorContextPrompt(input: ExecutorInput): string {
   if (input.executionContextBundle) {
@@ -43,7 +44,22 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     }
 
     if (bundle.materialContext.resources.length > 0) {
+      const materialGroups = splitTaskResources(bundle.materialContext.resources);
+      const materialSummary = bundle.materialContext.summary
+        ?? buildMaterialSummary(bundle.materialContext.resources, bundle.materialContext.textSnippets ?? []);
       lines.push('', `关联材料：${bundle.materialContext.resources.join(', ')}`);
+      lines.push(`材料概览：${materialSummary.overview}`);
+      lines.push(`材料状态：${materialSummary.sufficiency}`);
+      lines.push(`本地文件材料：${materialGroups.files.join(', ') || '无'}`);
+      lines.push(`网页链接材料：${materialGroups.links.join(', ') || '无'}`);
+    }
+
+    if ((bundle.materialContext.textSnippets?.length ?? 0) > 0) {
+      lines.push('', '材料摘录：');
+      bundle.materialContext.textSnippets!.forEach((snippet) => {
+        lines.push(`- ${snippet.path}`);
+        lines.push(snippet.content);
+      });
     }
 
     if (bundle.workspaceContext?.allowFilesystem) {
@@ -111,7 +127,13 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
   }
 
   if (input.task.resources.length > 0) {
+    const materialGroups = splitTaskResources(input.task.resources);
+    const materialSummary = buildMaterialSummary(input.task.resources);
     lines.push(`关联材料：${input.task.resources.join(', ')}`);
+    lines.push(`材料概览：${materialSummary.overview}`);
+    lines.push(`材料状态：${materialSummary.sufficiency}`);
+    lines.push(`本地文件材料：${materialGroups.files.join(', ') || '无'}`);
+    lines.push(`网页链接材料：${materialGroups.links.join(', ') || '无'}`);
   }
 
   const taskTurns = input.conversationHistory.filter((t) => t.source === 'task');

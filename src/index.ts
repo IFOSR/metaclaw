@@ -1,5 +1,4 @@
 import { resolve } from 'path';
-import { homedir } from 'os';
 import { mkdirSync, existsSync } from 'fs';
 import { createDatabase } from './storage/database.js';
 import { TaskRepo } from './storage/task-repo.js';
@@ -12,6 +11,7 @@ import { createExecutor } from './executor/factory.js';
 import { ContextRecaller } from './core/context-recaller.js';
 import { LlmBridge } from './core/llm-bridge.js';
 import { loadConfig } from './utils/config.js';
+import { resolveMetaclawDir } from './utils/paths.js';
 import { renderApp } from './tui/app.js';
 import { parseCliArgs } from './cli/args.js';
 import { runScriptedSessionFile } from './session/scripted-session.js';
@@ -21,7 +21,7 @@ async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
 
   // 1. 初始化目录
-  const metaclawDir = resolve(homedir(), '.metaclaw');
+  const metaclawDir = resolveMetaclawDir();
   const snapshotDir = resolve(metaclawDir, 'snapshots');
   if (!existsSync(metaclawDir)) mkdirSync(metaclawDir, { recursive: true });
   if (!existsSync(snapshotDir)) mkdirSync(snapshotDir, { recursive: true });

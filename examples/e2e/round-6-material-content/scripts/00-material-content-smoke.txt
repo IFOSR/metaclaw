@@ -1,0 +1,4 @@
+整理 Phoenix 项目的周报，输出一个简短结论
+/attach {{last_task_id}} examples/e2e/round-6-material-content/fixtures/phoenix-weekly.md examples/e2e/round-6-material-content/fixtures/risks.md
+/task {{last_task_id}} unblock
+

@@ -91,6 +91,12 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN interruption_count INTEGER DEFAULT 0;
     `,
   },
+  {
+    version: 4,
+    up: `
+      ALTER TABLE tasks ADD COLUMN artifacts_json TEXT DEFAULT '[]';
+    `,
+  },
 ];
 
 /**

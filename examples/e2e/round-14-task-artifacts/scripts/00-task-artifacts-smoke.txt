@@ -1,0 +1,2 @@
+写一段 Phoenix 周报测试摘要，保存到/tmp/metaclaw-e2e-artifacts目录下
+/task {{last_task_id}}

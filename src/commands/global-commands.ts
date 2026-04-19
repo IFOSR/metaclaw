@@ -46,20 +46,41 @@ export const dashboardCommand: CommandHandler = {
 export const attachCommand: CommandHandler = {
   name: 'attach',
   aliases: [],
-  description: '关联文件到当前任务：/attach <文件路径>',
+  description: '关联文件到任务：/attach [taskId] <文件路径...>',
   async execute(args, context) {
-    if (!context.currentTaskId) {
-      return { type: 'text', content: '当前没有活跃任务' };
-    }
-
     if (args.length === 0) {
-      return { type: 'text', content: '用法: /attach <文件路径>' };
+      return { type: 'text', content: '用法: /attach [taskId] <文件路径...>' };
     }
 
-    const resourcePath = args.join(' ');
-    context.taskEngine.attachResource(context.currentTaskId, resourcePath);
+    const explicitTask = context.taskEngine['taskRepo'].findById(args[0]);
+    const targetTaskId = explicitTask?.id ?? context.currentTaskId;
+    const resourceArgs = explicitTask ? args.slice(1) : args;
 
-    return { type: 'text', content: `已关联文件到任务 #${context.currentTaskId}: ${resourcePath}` };
+    if (!targetTaskId) {
+      return { type: 'text', content: '当前没有活跃任务，请使用 /attach <taskId> <文件路径...>' };
+    }
+
+    if (resourceArgs.length === 0) {
+      return { type: 'text', content: '用法: /attach [taskId] <文件路径...>' };
+    }
+
+    const attachedResources: string[] = [];
+    for (const resourcePath of resourceArgs) {
+      context.taskEngine.attachResource(targetTaskId, resourcePath);
+      attachedResources.push(resourcePath);
+    }
+
+    const targetTask = context.taskEngine['taskRepo'].findById(targetTaskId)!;
+    const summaryLine = `已关联 ${attachedResources.length} 个文件到任务 #${targetTaskId}: ${attachedResources.join(', ')}`;
+
+    if (targetTask.status === 'blocked') {
+      return {
+        type: 'text',
+        content: `${summaryLine}\n任务 #${targetTaskId} 当前仍为 BLOCKED，可继续执行 /task ${targetTaskId} unblock`,
+      };
+    }
+
+    return { type: 'text', content: summaryLine };
   },
 };
 
@@ -124,17 +145,20 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
 偏好管理：
   /memory                       查看已确认偏好
   /memory search <关键词>       搜索偏好
-  /memory add <内容>            手动添加偏好
-  /memory edit <id> <新内容>    修改偏好
+  /memory add [--scope ...] [--type ...] [--subject ...] <内容>
+                                手动添加偏好
+  /memory edit <id> [--scope ...] [--type ...] [--subject ...] <新内容>
+                                修改偏好
   /memory delete <id>           删除偏好
   /memory candidates            查看待确认偏好
-  /memory confirm <id>          确认偏好
+  /memory confirm <id> [--scope ...] [--subject ...]
+                                确认偏好
   /memory reject <id>           拒绝偏好
   /memory stats                 偏好统计
 
 全局命令：
   /dashboard                    显示任务盘面
-  /attach <文件路径>            关联文件到当前任务
+  /attach [taskId] <文件路径...>  关联文件到当前任务或指定任务
   /history                      查看最近交互历史
   /config                       查看当前配置
   /exit                         退出 Metaclaw
@@ -143,6 +167,8 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
 自然语言：
   直接输入任务描述创建新任务
   "暂停" / "继续" 等关键词会自动识别
+  高风险外发动作会先要求“确认执行”
+  候选偏好可直接输入 y / n / e <新内容>
 `;
     return { type: 'text', content: help.trim() };
   },

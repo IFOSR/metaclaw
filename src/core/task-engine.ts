@@ -43,6 +43,7 @@ export class TaskEngine {
       summary: '',
       snapshots: [],
       resources: input.resources || [],
+      artifacts: [],
       dependencies: [],
       prioritySignals: {
         dueAt: null,
@@ -179,7 +180,7 @@ export class TaskEngine {
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error(`任务不存在: ${taskId}`);
 
-    const resources = [...task.resources, resourcePath];
+    const resources = Array.from(new Set([...task.resources, resourcePath]));
     this.taskRepo.update(taskId, { resources });
 
     return this.taskRepo.findById(taskId)!;

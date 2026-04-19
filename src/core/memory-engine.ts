@@ -10,6 +10,7 @@ interface RecallContext {
   keywords: string[];
   subject?: string;
   topK?: number;
+  userInput?: string;
 }
 
 interface ScoredPreference {
@@ -18,10 +19,10 @@ interface ScoredPreference {
 }
 
 const SCOPE_PRIORITY: Record<string, number> = {
-  'task-local': 4,
-  contact: 3,
-  project: 2,
-  global: 1,
+  'task-local': 40,
+  contact: 30,
+  project: 20,
+  global: 10,
 };
 
 export class MemoryEngine {
@@ -120,16 +121,76 @@ export class MemoryEngine {
   recall(context: RecallContext): Preference[] {
     const results: ScoredPreference[] = [];
     const seen = new Set<string>();
+    const userInput = context.userInput ?? '';
+    const communicationCue = /(邮件|发信|发给|回复|消息|沟通|通知)/.test(userInput);
+    const projectCue = /(项目|术语|周报|方案|里程碑|复盘|材料)/.test(userInput);
+
+    for (const preference of this.prefRepo.findAll()) {
+      if (preference.status !== 'confirmed') continue;
+
+      if (
+        preference.scope === 'task-local'
+        && context.taskId
+        && (preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId))
+      ) {
+        results.push({
+          pref: preference,
+          score: 1_000 + (SCOPE_PRIORITY[preference.scope] ?? 0),
+        });
+        seen.add(preference.id);
+      }
+    }
 
     // 1. 精确匹配 subject
     if (context.subject) {
       const exact = this.prefRepo.findBySubject(context.subject);
       for (const p of exact) {
         if (!seen.has(p.id)) {
-          results.push({ pref: p, score: 10 });
+          results.push({ pref: p, score: 200 + (SCOPE_PRIORITY[p.scope] ?? 0) });
           seen.add(p.id);
         }
       }
+    }
+
+    // 2.5 用户输入直接命中已有 subject，并按场景做 contact/project 裁决
+    if (userInput) {
+      for (const preference of this.prefRepo.findAll()) {
+        if (preference.status !== 'confirmed' || !preference.subject || !userInput.includes(preference.subject)) {
+          continue;
+        }
+
+        let score = 100 + (SCOPE_PRIORITY[preference.scope] ?? 0);
+        if (preference.scope === 'contact' && communicationCue) {
+          score += 300;
+        } else if (preference.scope === 'project' && projectCue) {
+          score += 300;
+        } else if (preference.scope === 'contact') {
+          score += 60;
+        } else if (preference.scope === 'project') {
+          score += 120;
+        }
+
+        if (seen.has(preference.id)) {
+          const existing = results.find(result => result.pref.id === preference.id);
+          if (existing) existing.score = Math.max(existing.score, score);
+        } else {
+          results.push({ pref: preference, score });
+          seen.add(preference.id);
+        }
+      }
+    }
+
+    // 2.75 confirmed global 偏好作为最低优先级默认工作方式兜底
+    for (const preference of this.prefRepo.findByScope('global')) {
+      if (preference.status !== 'confirmed' || seen.has(preference.id)) {
+        continue;
+      }
+
+      results.push({
+        pref: preference,
+        score: 5 + (SCOPE_PRIORITY[preference.scope] ?? 0),
+      });
+      seen.add(preference.id);
     }
 
     // 2. 关键词匹配 content
@@ -138,9 +199,9 @@ export class MemoryEngine {
       for (const p of matched) {
         if (seen.has(p.id)) {
           const existing = results.find(r => r.pref.id === p.id);
-          if (existing) existing.score += 3;
+          if (existing) existing.score += 30;
         } else {
-          results.push({ pref: p, score: 3 });
+          results.push({ pref: p, score: 30 + (SCOPE_PRIORITY[p.scope] ?? 0) });
           seen.add(p.id);
         }
       }
@@ -148,8 +209,13 @@ export class MemoryEngine {
 
     // 3. 按作用域优先级排序
     results.sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+
       const scopeDiff = (SCOPE_PRIORITY[b.pref.scope] ?? 0) - (SCOPE_PRIORITY[a.pref.scope] ?? 0);
-      return scopeDiff !== 0 ? scopeDiff : b.score - a.score;
+      return scopeDiff;
     });
 
     // 4. Top-K 截取

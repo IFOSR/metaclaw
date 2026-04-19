@@ -1,0 +1,3 @@
+/dashboard
+整理 Phoenix 项目的周报，输出一个简短结论
+/dashboard

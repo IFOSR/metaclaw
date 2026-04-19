@@ -2,6 +2,7 @@ import type { ContextRecaller } from './context-recaller.js';
 import type { MemoryEngine } from './memory-engine.js';
 import type { TaskEngine } from './task-engine.js';
 import type { ExecutionContextBundle, ResolvedPreference, WorkspaceContext } from './types.js';
+import { buildMaterialSummary, extractMaterialTextSnippets } from './material-utils.js';
 import { resolve } from 'path';
 
 interface BuildContextInput {
@@ -18,6 +19,7 @@ export class ResumeContextBuilder {
     private taskEngine: TaskEngine,
     private memoryEngine: MemoryEngine,
     private contextRecaller: ContextRecaller,
+    private fetchImpl: typeof fetch = fetch,
   ) {}
 
   async build(input: BuildContextInput): Promise<ExecutionContextBundle> {
@@ -36,12 +38,17 @@ export class ResumeContextBuilder {
     const resolvedPreferences = this.memoryEngine.recall({
       taskId: task.id,
       keywords,
+      userInput: input.userInput,
     }).map<ResolvedPreference>((preference) => ({
       id: preference.id,
       content: preference.content,
       scope: preference.scope,
       confidence: preference.confidence,
-      reason: preference.sourceTasks.includes(task.id)
+      reason: preference.scope === 'task-local' && (
+        preference.subject === task.id || preference.sourceTasks.includes(task.id)
+      )
+        ? '命中当前任务局部偏好'
+        : preference.sourceTasks.includes(task.id)
         ? '当前任务历史中已使用'
         : preference.subject
           ? `命中主体：${preference.subject}`
@@ -52,11 +59,20 @@ export class ResumeContextBuilder {
       ...task.resources,
       ...(input.newlyProvidedResources ?? []),
     ]));
+    const textSnippets = await extractMaterialTextSnippets(resources, {
+      fetchImpl: this.fetchImpl,
+    });
+    const materialSummary = buildMaterialSummary(resources, textSnippets);
 
     const blockedReason = task.dependencies.find(dependency => dependency.status === 'waiting')?.description
       ?? task.dependencies[task.dependencies.length - 1]?.description;
     const workspaceContext = this.buildWorkspaceContext(input.userInput);
-    const executionInstructions = this.buildExecutionInstructions(input.mode, input.newlyProvidedResources, workspaceContext);
+    const executionInstructions = this.buildExecutionInstructions(
+      input.mode,
+      input.newlyProvidedResources,
+      workspaceContext,
+      textSnippets.length > 0,
+    );
 
     return {
       mode: input.mode,
@@ -91,6 +107,8 @@ export class ResumeContextBuilder {
       },
       materialContext: {
         resources,
+        textSnippets,
+        summary: materialSummary,
       },
       workspaceContext,
       executionInstructions,
@@ -101,9 +119,11 @@ export class ResumeContextBuilder {
     mode: BuildContextInput['mode'],
     newlyProvidedResources?: string[],
     workspaceContext?: WorkspaceContext,
+    hasMaterialText = false,
   ): string[] {
     const baseInstructions = [
       '使用与用户相同的语言回复',
+      ...(hasMaterialText ? ['优先基于已注入的材料摘录作答，不要忽略其中已提供的事实'] : []),
     ];
 
     const fileInstructions = workspaceContext?.allowFilesystem
@@ -112,7 +132,7 @@ export class ResumeContextBuilder {
           `工作目录：${workspaceContext.workingDirectory}`,
           ...workspaceContext.targetPaths.map(path => `目标目录：${path}`),
           '如果目标目录不存在，请先创建目录，再写入一个合适命名的 Markdown 文件',
-          '完成后明确返回保存路径和文件名',
+          '完成后明确返回保存路径和文件名，优先返回绝对路径',
         ]
       : [];
 

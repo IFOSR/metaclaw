@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
+import { mkdirSync, writeFileSync } from 'fs';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
@@ -182,6 +183,53 @@ describe('ResumeContextBuilder', () => {
     ]);
   });
 
+  it('prefers project memory over contact memory for project artifact tasks', async () => {
+    const task = taskEngine.create({ title: 'Phoenix 项目术语表', goal: '整理 Phoenix 项目术语表给张总审阅' });
+
+    insertPreference({
+      id: 'pref_project',
+      type: 'domain',
+      scope: 'project',
+      subject: 'Phoenix',
+      content: 'Phoenix 项目材料统一使用 Phoenix 术语体系',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-16T00:00:00Z',
+      createdAt: '2026-04-16T00:00:00Z',
+      updatedAt: '2026-04-16T00:00:00Z',
+    });
+    insertPreference({
+      id: 'pref_contact',
+      type: 'contact',
+      scope: 'contact',
+      subject: '张总',
+      content: '给张总的内容使用正式语气',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-16T00:00:00Z',
+      createdAt: '2026-04-16T00:00:00Z',
+      updatedAt: '2026-04-16T00:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '整理 Phoenix 项目术语表给张总审阅，术语必须统一',
+      sessionId: 'sess_5',
+    });
+
+    expect(bundle.memoryContext.resolvedPreferences.map(pref => pref.id)).toEqual([
+      'pref_project',
+      'pref_contact',
+    ]);
+  });
+
   it('builds a workspace write context for archive-to-project-directory requests', async () => {
     const task = taskEngine.create({ title: 'harness 分析归档', goal: '将 harness 分析存档到项目目录' });
 
@@ -196,5 +244,32 @@ describe('ResumeContextBuilder', () => {
     expect(bundle.workspaceContext?.targetPaths[0]).toMatch(/\/projects$/);
     expect(bundle.executionInstructions.some(line => line.includes('必须把结果写入本地文件系统'))).toBe(true);
     expect(bundle.executionInstructions.some(line => line.includes('projects'))).toBe(true);
+  });
+
+  it('extracts readable text material excerpts into the execution bundle', async () => {
+    const fixturesDir = resolve(tmpdir(), 'metaclaw-material-fixtures');
+    mkdirSync(fixturesDir, { recursive: true });
+    const weeklyPath = resolve(fixturesDir, 'phoenix-weekly.md');
+    const risksPath = resolve(fixturesDir, 'risks.md');
+    writeFileSync(weeklyPath, '# Phoenix Weekly\n本周完成核心模块联调，主线推进稳定。', 'utf-8');
+    writeFileSync(risksPath, '# Risks\n跨团队依赖确认滞后，测试数据准备不足。', 'utf-8');
+
+    const task = taskEngine.create({
+      title: 'Phoenix 周报整理',
+      goal: '整理 Phoenix 周报',
+      resources: [weeklyPath, risksPath],
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '结合材料整理 Phoenix 周报结论',
+      sessionId: 'sess_6',
+    });
+
+    expect(bundle.materialContext.resources).toEqual([weeklyPath, risksPath]);
+    expect(bundle.materialContext.textSnippets).toHaveLength(2);
+    expect(bundle.materialContext.textSnippets[0]?.content).toContain('核心模块联调');
+    expect(bundle.materialContext.textSnippets[1]?.content).toContain('测试数据准备不足');
   });
 });

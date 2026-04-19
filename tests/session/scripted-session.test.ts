@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { resolve } from 'path';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
@@ -115,5 +118,148 @@ describe('scripted session', () => {
     expect(executionBundle.materialContext.resources).toContain('/tmp/evidence-v3.pdf');
     expect(result.output.join('\n')).toContain(`任务 #${blockedTask.id} 已解除阻塞，并新增资源 /tmp/evidence-v3.pdf`);
     expect(result.output.join('\n')).toContain(`任务列表：\n  #${blockedTask.id} [DONE] 起诉书草稿`);
+  });
+
+  it('resolves the last task id placeholder so scripted acceptance can open task detail after creation', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'Phoenix 周报结论：本周主线推进稳定，主要风险在跨团队依赖。',
+        exitCode: 0,
+        durationMs: 200,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '明确工作任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const result = await runScriptedSession({
+      inputs: [
+        '整理 Phoenix 项目的周报，输出一个简短结论',
+        '/task {{last_task_id}}',
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_detail',
+      contextRecaller,
+      llmBridge,
+    });
+
+    expect(result.output.join('\n')).toContain('任务视图');
+    expect(result.output.join('\n')).toContain('最新结果摘要');
+    expect(result.output.join('\n')).toContain('Phoenix 周报结论');
+  });
+
+  it('gates risky external actions in scripted sessions until the user confirms execution', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '已发送给客户',
+        exitCode: 0,
+        durationMs: 200,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '明确执行动作' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const result = await runScriptedSession({
+      inputs: [
+        '直接把邮件发给客户',
+        '确认执行',
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_risky_gate',
+      contextRecaller,
+      llmBridge,
+    });
+
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(result.output.join('\n')).toContain('⚠️ 这是高风险动作');
+    expect(result.output.join('\n')).toContain('→ 已确认高风险动作，继续执行原请求');
+    expect(result.output.join('\n')).toContain('已发送给客户');
+  });
+
+  it('records file artifacts returned by the executor for workspace write tasks', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const artifactDir = resolve(tmpdir(), 'metaclaw-artifact-tests');
+    const artifactPath = resolve(artifactDir, 'artifact-note.md');
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockImplementation(async () => {
+        mkdirSync(artifactDir, { recursive: true });
+        writeFileSync(artifactPath, '# Artifact\nsaved by test\n', 'utf-8');
+        return {
+          success: true,
+          output: `已保存结果到 ${artifactPath}`,
+          exitCode: 0,
+          durationMs: 200,
+        };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '写入任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    await runScriptedSession({
+      inputs: [
+        `写一段测试内容，保存到${artifactDir}目录下`,
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_artifact',
+      contextRecaller,
+      llmBridge,
+    });
+
+    const doneTask = taskEngine.list().find(task => task.status === 'done');
+    expect((doneTask as any)?.artifacts).toEqual([artifactPath]);
   });
 });

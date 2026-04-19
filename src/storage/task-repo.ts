@@ -9,6 +9,7 @@ interface TaskRow {
   summary: string;
   snapshot_json: string;
   resources_json: string;
+  artifacts_json: string | null;
   dependencies_json: string;
   priority_json: string | null;
   injected_prefs_json: string;
@@ -28,6 +29,7 @@ function rowToTask(row: TaskRow): Task {
     summary: row.summary,
     snapshots: JSON.parse(row.snapshot_json),
     resources: JSON.parse(row.resources_json),
+    artifacts: JSON.parse(row.artifacts_json ?? '[]'),
     dependencies: JSON.parse(row.dependencies_json),
     prioritySignals: row.priority_json
       ? JSON.parse(row.priority_json)
@@ -46,13 +48,14 @@ export class TaskRepo {
 
   insert(task: Task): void {
     this.db.prepare(`
-      INSERT INTO tasks (id, title, goal, status, summary, snapshot_json, resources_json,
+      INSERT INTO tasks (id, title, goal, status, summary, snapshot_json, resources_json, artifacts_json,
         dependencies_json, priority_json, injected_prefs_json, last_scheduling_reason,
         last_interruption_reason, interruption_count, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id, task.title, task.goal, task.status, task.summary,
       JSON.stringify(task.snapshots), JSON.stringify(task.resources),
+      JSON.stringify(task.artifacts),
       JSON.stringify(task.dependencies), JSON.stringify(task.prioritySignals),
       JSON.stringify(task.injectedPreferences), task.lastSchedulingReason,
       task.lastInterruptionReason, task.interruptionCount, task.createdAt, task.updatedAt,
@@ -92,6 +95,7 @@ export class TaskRepo {
     if (changes.summary !== undefined) { sets.push('summary = ?'); values.push(changes.summary); }
     if (changes.snapshots !== undefined) { sets.push('snapshot_json = ?'); values.push(JSON.stringify(changes.snapshots)); }
     if (changes.resources !== undefined) { sets.push('resources_json = ?'); values.push(JSON.stringify(changes.resources)); }
+    if (changes.artifacts !== undefined) { sets.push('artifacts_json = ?'); values.push(JSON.stringify(changes.artifacts)); }
     if (changes.dependencies !== undefined) { sets.push('dependencies_json = ?'); values.push(JSON.stringify(changes.dependencies)); }
     if (changes.prioritySignals !== undefined) { sets.push('priority_json = ?'); values.push(JSON.stringify(changes.prioritySignals)); }
     if (changes.injectedPreferences !== undefined) { sets.push('injected_prefs_json = ?'); values.push(JSON.stringify(changes.injectedPreferences)); }

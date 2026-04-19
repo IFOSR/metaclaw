@@ -25,6 +25,7 @@ metaclaw
 ```
 
 首次启动会在 `~/.metaclaw/` 创建配置和数据库。
+默认执行器是 `codex`，仍保留 `claude` 兼容入口。
 
 ### 脚本化烟测
 
@@ -38,6 +39,11 @@ metaclaw --script /tmp/metaclaw-flow.txt
 ```
 
 `--script` 会按行执行输入脚本，适合做可重复的端到端烟测。空行和以 `#` 开头的注释会被忽略。
+
+### 发布前验收入口
+
+- 分轮验收包：`examples/e2e/`
+- 用户试用场景：`examples/trial-scenarios/`
 
 ## 核心功能
 
@@ -75,6 +81,12 @@ metaclaw --script /tmp/metaclaw-flow.txt
 /task <id> unblock  # 解除阻塞
 /task <id> unblock /tmp/evidence-v3.pdf  # 解除阻塞并附带新材料
 /task <id> done     # 完成
+
+# 任务详情会展示
+# - 最新结果摘要
+# - 本地文件材料 / 网页链接材料
+# - 材料概览 / 材料状态
+# - 任务产物
 ```
 
 ### 偏好记忆与自动提取
@@ -90,10 +102,11 @@ metaclaw --script /tmp/metaclaw-flow.txt
 > 用正式语气回复王总
 [执行...]
 💡 检测到重复模式（3次）："用正式语气"
-   要记为长期偏好吗？输入 /memory confirm obs_123
+   要把它记为长期偏好吗？
+   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认
 
-# 确认后，后续任务会自动注入该偏好
-/memory confirm obs_123
+# 也可以继续用命令确认
+/memory confirm obs_123 --scope contact --subject 张总
 已确认偏好 #pref_abc: 用正式语气
 
 # 查看偏好
@@ -108,10 +121,43 @@ metaclaw --script /tmp/metaclaw-flow.txt
 /memory delete <pref_id>
 ```
 
+### 材料与产物
+
+```bash
+# 直接在自然语言里附带文件和链接材料
+> 基于 ./weekly.md 和 https://example.com/report 整理 Phoenix 周报
+
+# /task 详情里会拆开展示
+# - 本地文件材料
+# - 网页链接材料
+# - 材料概览
+# - 材料状态
+
+# 如果任务要求把结果写到目录
+> 把刚才的分析存档到当前项目的projects目录下
+
+# 执行成功后，Metaclaw 会记录任务产物路径
+> /task <id>
+任务产物: /abs/path/to/output.md
+```
+
+### 高风险动作门控
+
+```bash
+> 直接把邮件发给客户
+⚠️ 这是高风险动作，默认不会直接执行。
+→ 输入“确认执行”后继续，或输入“取消执行”放弃。
+
+> 确认执行
+→ 已确认高风险动作，继续执行原请求
+```
+
 ### 任务盘面
 
 ```bash
 /dashboard          # 显示优先级排序、阻塞任务、建议
+/history            # 查看最近交互历史
+/config             # 查看当前配置
 ```
 
 ## 工作流程
@@ -124,8 +170,9 @@ metaclaw --script /tmp/metaclaw-flow.txt
 4. **上下文注入** → 将任务目标、已完成进度、偏好注入执行器
 5. **调用默认执行器（Codex CLI）** → 通过 CLI 子进程执行
 6. **结果回流** → 更新任务摘要、标记完成
-7. **模式观察** → 提取重复模式，达到 3 次提示确认
+7. **模式观察** → 提取重复模式，达到 3 次进入候选偏好确认
 8. **主动建议** → 推荐下一个优先任务
+9. **结果回流** → 文件产物会登记回任务对象并展示在任务视图中
 
 ### 偏好生命周期
 
@@ -136,9 +183,9 @@ observations 表记录（第 1 次）
   ↓
 重复出现（第 2 次）
   ↓
-达到阈值（第 3 次）→ 提示用户确认
+达到阈值（第 3 次）→ 进入候选偏好确认
   ↓
-用户确认 → preferences 表（status=confirmed）
+用户通过 `y` / `e <新内容>` / `/memory confirm` 确认 → preferences 表（status=confirmed）
   ↓
 后续任务自动召回并注入执行器
 ```
@@ -236,14 +283,18 @@ npm run test:watch      # 监听模式
 
 试用案例见：
 
+- `examples/e2e/README.md`
 - `examples/trial-scenarios/README.md`
 - `examples/trial-scenarios/scripts/`
 - `examples/trial-scenarios/manual/`
 
-当前测试覆盖：
-- TaskEngine：状态机、挂起/恢复、阻塞/解除、资源关联
-- MemoryEngine：三次确认、偏好召回、作用域优先级
-- OrchestrationEngine：优先级评分、盘面生成、建议生成
+当前自动化测试覆盖：
+- 多任务调度、抢占、挂起恢复、阻塞解除
+- 对话 vs 任务边界
+- 偏好三次确认、inline `y/n/e` 确认、注入透明
+- 材料链路：文件、链接、网页抓取、材料摘要
+- 高风险动作确认门控
+- 任务产物回流与 `/task` 详情视图
 
 ## 设计文档
 

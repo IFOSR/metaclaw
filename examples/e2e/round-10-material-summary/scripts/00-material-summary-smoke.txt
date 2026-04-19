@@ -1,0 +1,2 @@
+基于 examples/e2e/round-10-material-summary/fixtures/phoenix-weekly.md 和 http://127.0.0.1:8123/phoenix-weekly.html 整理 Phoenix 周报，输出一个简短结论
+/task {{last_task_id}}

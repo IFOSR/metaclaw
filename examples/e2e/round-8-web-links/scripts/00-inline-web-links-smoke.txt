@@ -1,0 +1,3 @@
+基于 examples/e2e/round-8-web-links/fixtures/phoenix-weekly.md 和 https://example.com/phoenix-weekly 整理 Phoenix 周报，输出一个简短结论
+/task {{last_task_id}}
+
