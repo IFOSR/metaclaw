@@ -5,6 +5,7 @@ import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { MemoryEngine } from '../../src/core/memory-engine.js';
 import { memoryCommand } from '../../src/commands/memory-commands.js';
+import { RecallReviewPolicyRepo } from '../../src/storage/recall-review-policy-repo.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -15,9 +16,10 @@ function createTestDb() {
 
 describe('memoryCommand', () => {
   let engine: MemoryEngine;
+  let db: Database.Database;
 
   beforeEach(() => {
-    const db = createTestDb();
+    db = createTestDb();
     const prefRepo = new PreferenceRepo(db);
     const obsRepo = new ObservationRepo(db);
     engine = new MemoryEngine(prefRepo, obsRepo);
@@ -105,5 +107,39 @@ describe('memoryCommand', () => {
     expect(result.content).toContain('[project]');
     expect(result.content).toContain('(Phoenix)');
     expect(result.content).toContain('Phoenix 项目统一使用 Phoenix 术语');
+  });
+
+  it('lists and revokes recall review policies', async () => {
+    const repo = new RecallReviewPolicyRepo(db);
+    repo.upsert({
+      id: 'policy:proposal:resume_task',
+      policyType: 'proposal_type',
+      scope: null,
+      subject: null,
+      proposalType: 'resume_task',
+      autoApply: true,
+      createdAt: '2026-04-20T00:00:00Z',
+      updatedAt: '2026-04-20T00:00:00Z',
+    });
+
+    const listResult = await memoryCommand.execute(['review-policy'], {
+      memoryEngine: engine,
+      db,
+    } as any);
+    expect(listResult.content).toContain('Recall Review Policies');
+    expect(listResult.content).toContain('proposal_type');
+    expect(listResult.content).toContain('resume_task');
+
+    const revokeResult = await memoryCommand.execute(['review-policy', 'revoke', 'policy:proposal:resume_task'], {
+      memoryEngine: engine,
+      db,
+    } as any);
+    expect(revokeResult.content).toContain('已撤销');
+
+    const listAfterRevoke = await memoryCommand.execute(['review-policy'], {
+      memoryEngine: engine,
+      db,
+    } as any);
+    expect(listAfterRevoke.content).toContain('暂无 recall review policy');
   });
 });

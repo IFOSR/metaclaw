@@ -1,7 +1,16 @@
 import type Database from 'better-sqlite3';
-import { existsSync } from 'fs';
-import type { Config, RuntimeState } from '../core/types.js';
-import type { Task } from '../core/types.js';
+import { existsSync, mkdirSync } from 'fs';
+import type {
+  Config,
+  GuidanceActionType,
+  GuidanceProposal,
+  PreferenceMemoryCandidate,
+  RecallReviewCard,
+  ResolvedPreference,
+  RuntimeState,
+  Task,
+  TaskMemoryCandidate,
+} from '../core/types.js';
 import type { TaskEngine } from '../core/task-engine.js';
 import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
@@ -12,15 +21,20 @@ import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
 import { classifyNaturalLanguageInput, filterDurableTasks } from '../core/task-routing.js';
 import { ResumeContextBuilder } from '../core/resume-context-builder.js';
+import { RecallReviewBuilder } from '../core/recall-review-builder.js';
+import { RecallPolicyService } from '../core/recall-policy-service.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
 import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCommand, exitCommand } from '../commands/global-commands.js';
 import { generateInteractionId } from '../utils/id.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
+import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
+import { SessionStateRepo } from '../storage/session-state-repo.js';
 import {
   buildSchedulingReason,
   extractPatterns,
+  isContinuePreviousTaskInstruction,
   isConversationDerivedWorkInstruction,
   isConversationalContinuationInstruction,
   isExplicitTaskControlReference,
@@ -78,6 +92,39 @@ interface PendingPreferenceConfirmation {
   pattern: string;
 }
 
+interface PendingProposalConfirmation {
+  scene: string;
+  proposal: GuidanceProposal;
+}
+
+interface PendingLastTaskConfirmation {
+  originalInput: string;
+  completedTaskId: string;
+  unfinishedTaskId: string | null;
+}
+
+interface PendingRecallSelection {
+  authoritative: boolean;
+  resolvedPreferences: ResolvedPreference[];
+  relatedTaskIds: string[];
+  acceptedMemoryResources: string[];
+}
+
+interface PendingRecallReview {
+  taskId: string;
+  taskTitle: string;
+  request: QueuedExecutionRequest;
+  proposalType: GuidanceActionType | null;
+  card: RecallReviewCard;
+  preferenceCandidates: PreferenceMemoryCandidate[];
+  taskCandidates: TaskMemoryCandidate[];
+  selectionItems: Array<
+    | { kind: 'preference'; candidate: PreferenceMemoryCandidate }
+    | { kind: 'task'; candidate: TaskMemoryCandidate }
+  >;
+  auditId: string | null;
+}
+
 const BUSY_LLM_TIMEOUT_MS = 250;
 const DEFAULT_LLM_TIMEOUT_MS = 5_000;
 
@@ -95,6 +142,10 @@ export class MetaclawSession {
   private latestGuidance: GuidanceState | null = null;
   private pendingRiskConfirmation: PendingRiskConfirmation | null = null;
   private pendingPreferenceConfirmation: PendingPreferenceConfirmation | null = null;
+  private pendingProposalConfirmation: PendingProposalConfirmation | null = null;
+  private pendingLastTaskConfirmation: PendingLastTaskConfirmation | null = null;
+  private pendingRecallReview: PendingRecallReview | null = null;
+  private approvedRecallSelections = new Map<string, PendingRecallSelection>();
   private initialized = false;
   private listeners = new Set<(snapshot: SessionSnapshot) => void>();
   private queuedExecution = new Map<string, QueuedExecutionRequest>();
@@ -105,8 +156,10 @@ export class MetaclawSession {
   private readonly resumeContextBuilder: ResumeContextBuilder;
   private readonly router: CommandRouter;
   private readonly scheduler: SchedulerEngine;
+  private readonly sessionStateRepo: SessionStateRepo;
 
   constructor(private deps: MetaclawSessionDeps) {
+    this.sessionStateRepo = new SessionStateRepo(deps.db);
     this.resumeContextBuilder = new ResumeContextBuilder(
       deps.taskEngine,
       deps.memoryEngine,
@@ -130,6 +183,7 @@ export class MetaclawSession {
   }
 
   getSnapshot(): SessionSnapshot {
+    this.reconcileLatestGuidance();
     return {
       output: [...this.output],
       currentTaskId: this.currentTaskId,
@@ -141,6 +195,25 @@ export class MetaclawSession {
           }
         : null,
     };
+  }
+
+  private reconcileLatestGuidance(): void {
+    if (!this.latestGuidance) {
+      return;
+    }
+
+    const task = this.deps.taskEngine['taskRepo'].findById(this.latestGuidance.taskId);
+    if (!task || !['created', 'ready', 'running', 'parked', 'blocked'].includes(task.status)) {
+      this.latestGuidance = null;
+      return;
+    }
+
+    if (this.latestGuidance.taskTitle !== task.title) {
+      this.latestGuidance = {
+        ...this.latestGuidance,
+        taskTitle: task.title,
+      };
+    }
   }
 
   initialize(): void {
@@ -178,6 +251,11 @@ export class MetaclawSession {
           `→ 可执行 /task ${task.id} resume 继续，或直接说“继续刚才那个任务”`,
         );
       }
+    }
+
+    const startupProposal = this.deps.orchestration.generateProposals('startup')[0];
+    if (startupProposal) {
+      this.queueProposal('启动建议', startupProposal);
     }
 
     this.initialized = true;
@@ -314,6 +392,525 @@ export class MetaclawSession {
     this.appendOutput(...lines);
   }
 
+  private appendProposalBlock(scene: string, proposal: GuidanceProposal): void {
+    const taskTitle = proposal.taskId
+      ? this.deps.taskEngine['taskRepo'].findById(proposal.taskId)?.title ?? ''
+      : '';
+
+    this.appendOutput(
+      '',
+      '┌─ 操作提案 ───────────────────────────────────────┐',
+      `│ 场景：${scene}`,
+      `│ 动作：${proposal.recommendedAction}`,
+      proposal.taskId ? `│ 目标任务：#${proposal.taskId}${taskTitle ? ` ${taskTitle}` : ''}` : '│ 目标任务：无',
+      ...proposal.reasons.map((reason, index) => `${index === 0 ? '│ 理由：' : '│       '}${reason}`),
+      `│ 置信度：${proposal.confidence.toFixed(2)}`,
+      '│ 请输入 [y] 接受并继续恢复 / [n] 暂不处理 / [r] 重新查看',
+      '└──────────────────────────────────────────────────┘',
+    );
+  }
+
+  private appendRecallReviewBlock(review: PendingRecallReview): void {
+    const lines = [
+      '',
+      '┌─ 记忆召回确认 ───────────────────────────────────┐',
+      `│ 当前任务：#${review.taskId} ${review.taskTitle}`,
+    ];
+
+    if (review.selectionItems.length === 0) {
+      lines.push('│ 没有可确认的召回项，将直接继续执行');
+    } else {
+      review.selectionItems.forEach((item, index) => {
+        const label = item.kind === 'preference'
+          ? `[${item.candidate.scope}] ${item.candidate.summary}`
+          : `${item.candidate.title}: ${item.candidate.summary}`;
+        lines.push(`│ ${index + 1}. ${label}`);
+        lines.push(`│    判断依据：${item.kind === 'preference' ? item.candidate.reason : item.candidate.reason}`);
+      });
+    }
+
+    lines.push(
+      '│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [a] 后续同类自动采用 / [r] 重新查看',
+      '└──────────────────────────────────────────────────┘',
+    );
+
+    this.appendOutput(...lines);
+  }
+
+  private appendLastTaskConfirmationBlock(pending: PendingLastTaskConfirmation): void {
+    const completedTask = this.deps.taskEngine['taskRepo'].findById(pending.completedTaskId);
+    if (!completedTask) {
+      return;
+    }
+
+    const unfinishedTask = pending.unfinishedTaskId
+      ? this.deps.taskEngine['taskRepo'].findById(pending.unfinishedTaskId)
+      : null;
+
+    const lines = [
+      '',
+      '┌─ 上次任务确认 ───────────────────────────────────┐',
+      `│ 上一个任务：#${completedTask.id} ${completedTask.title}`,
+      '│ 上一个任务已完成。',
+      '│ 请选择如何继续：',
+      '│ [f] 基于该任务创建 follow-up',
+      unfinishedTask
+        ? `│ [u] 改为恢复最近未完成任务 #${unfinishedTask.id} ${unfinishedTask.title}`
+        : '│ [u] 当前没有可恢复的未完成任务',
+      '│ [n] 本次不自动关联',
+      '│ [r] 重新查看',
+      '└──────────────────────────────────────────────────┘',
+    ];
+
+    this.appendOutput(...lines);
+  }
+
+  private queueProposal(scene: string, proposal: GuidanceProposal): void {
+    if (this.pendingProposalConfirmation || this.pendingRecallReview) {
+      return;
+    }
+
+    this.pendingProposalConfirmation = {
+      scene,
+      proposal,
+    };
+    this.appendProposalBlock(scene, proposal);
+  }
+
+  private createRecallPolicyService(): RecallPolicyService {
+    return new RecallPolicyService(new RecallReviewPolicyRepo(this.deps.db));
+  }
+
+  private async prepareTaskExecution(
+    taskId: string,
+    request: QueuedExecutionRequest,
+    proposalType: GuidanceActionType | null = null,
+  ): Promise<void> {
+    const task = this.deps.taskEngine['taskRepo'].findById(taskId);
+    if (!task) {
+      this.appendOutput(`错误：任务不存在 ${taskId}`);
+      return;
+    }
+
+    const recallResult = await this.deps.memoryEngine.recallForReview({
+      taskId,
+      keywords: this.extractRecallKeywords(request.userPrompt),
+      userInput: request.userPrompt,
+    });
+
+    const decision = this.createRecallPolicyService().resolve({
+      proposalType,
+      taskCandidates: recallResult.taskCandidates,
+      preferenceCandidates: recallResult.preferenceCandidates,
+    });
+
+    if (recallResult.preferenceCandidates.length === 0 && recallResult.taskCandidates.length === 0) {
+      await this.submitScheduledTask(taskId, request);
+      return;
+    }
+
+    if (!decision.requiresReview) {
+      this.approvedRecallSelections.set(
+        taskId,
+        this.buildAcceptedRecallSelection(
+          recallResult.preferenceCandidates,
+          recallResult.taskCandidates,
+        ),
+      );
+      this.appendOutput(
+        '',
+        '┌─ 记忆自动采用 ───────────────────────────────────┐',
+        `│ 当前任务：#${taskId} ${task.title}`,
+        `│ 已按既有策略自动采用 ${recallResult.preferenceCandidates.length + recallResult.taskCandidates.length} 条召回内容`,
+        '└──────────────────────────────────────────────────┘',
+      );
+      await this.submitScheduledTask(taskId, request);
+      return;
+    }
+
+    const reviewBuilder = new RecallReviewBuilder();
+    const card = reviewBuilder.build({
+      taskCandidates: recallResult.taskCandidates,
+      preferenceCandidates: recallResult.preferenceCandidates,
+    });
+    const selectionItems = [
+      ...recallResult.preferenceCandidates.map(candidate => ({ kind: 'preference' as const, candidate })),
+      ...recallResult.taskCandidates.map(candidate => ({ kind: 'task' as const, candidate })),
+    ];
+
+    this.pendingRecallReview = {
+      taskId,
+      taskTitle: task.title,
+      request,
+      proposalType,
+      card,
+      preferenceCandidates: recallResult.preferenceCandidates,
+      taskCandidates: recallResult.taskCandidates,
+      selectionItems,
+      auditId: recallResult.auditId,
+    };
+    this.appendRecallReviewBlock(this.pendingRecallReview);
+  }
+
+  private buildAcceptedRecallSelection(
+    preferenceCandidates: PreferenceMemoryCandidate[],
+    taskCandidates: TaskMemoryCandidate[],
+  ): PendingRecallSelection {
+    return {
+      authoritative: true,
+      resolvedPreferences: preferenceCandidates.map(candidate => ({
+        id: candidate.preferenceId,
+        content: candidate.summary,
+        scope: candidate.scope,
+        confidence: Math.min(1, candidate.score / 100),
+        reason: candidate.reason,
+      })),
+      relatedTaskIds: Array.from(new Set(taskCandidates.map(candidate => candidate.taskId))),
+      acceptedMemoryResources: Array.from(new Set(
+        taskCandidates.flatMap(candidate => candidate.artifactPaths),
+      )),
+    };
+  }
+
+  private parseRecallSelectionInput(input: string, maxIndex: number): number[] | null {
+    const match = input.trim().match(/^s(?:\s+(.+))$/iu);
+    if (!match) {
+      return null;
+    }
+
+    const indexes = (match[1] ?? '')
+      .split(/[\s,，]+/)
+      .map(token => Number.parseInt(token, 10))
+      .filter(index => Number.isInteger(index) && index >= 1 && index <= maxIndex);
+
+    return Array.from(new Set(indexes));
+  }
+
+  private handlePendingProposalConfirmation(userInput: string): boolean {
+    if (!this.pendingProposalConfirmation) {
+      return false;
+    }
+
+    const trimmed = userInput.trim();
+    const pending = this.pendingProposalConfirmation;
+
+    if (/^r$/iu.test(trimmed)) {
+      this.appendProposalBlock(pending.scene, pending.proposal);
+      return true;
+    }
+
+    if (/^n$/iu.test(trimmed)) {
+      this.pendingProposalConfirmation = null;
+      this.appendOutput('→ 已忽略当前操作提案');
+      return true;
+    }
+
+    if (/^y$/iu.test(trimmed)) {
+      this.pendingProposalConfirmation = null;
+      void this.acceptProposal(pending).catch(error => {
+        this.appendOutput(`错误: ${(error as Error).message}`);
+      });
+      return true;
+    }
+
+    this.pendingProposalConfirmation = null;
+    return false;
+  }
+
+  private handlePendingLastTaskConfirmation(userInput: string): boolean {
+    if (!this.pendingLastTaskConfirmation) {
+      return false;
+    }
+
+    const trimmed = userInput.trim();
+    const pending = this.pendingLastTaskConfirmation;
+
+    if (/^r$/iu.test(trimmed)) {
+      this.appendLastTaskConfirmationBlock(pending);
+      return true;
+    }
+
+    if (/^n$/iu.test(trimmed)) {
+      this.pendingLastTaskConfirmation = null;
+      this.appendOutput('→ 已取消本次跨会话自动关联');
+      return true;
+    }
+
+    if (/^f$/iu.test(trimmed)) {
+      this.pendingLastTaskConfirmation = null;
+      void this.createFollowUpFromCompletedTask(pending).catch(error => {
+        this.appendOutput(`错误: ${(error as Error).message}`);
+      });
+      return true;
+    }
+
+    if (/^u$/iu.test(trimmed)) {
+      if (!pending.unfinishedTaskId) {
+        this.appendOutput('→ 当前没有可恢复的未完成任务，请输入 `f` / `n` / `r`。');
+        return true;
+      }
+
+      this.pendingLastTaskConfirmation = null;
+      void this.resumeUnfinishedTaskFromConfirmation(pending).catch(error => {
+        this.appendOutput(`错误: ${(error as Error).message}`);
+      });
+      return true;
+    }
+
+    this.appendOutput('→ 当前有待确认的上次任务恢复，可输入 `f` / `u` / `n` / `r`。');
+    return true;
+  }
+
+  private async acceptProposal(pending: PendingProposalConfirmation): Promise<void> {
+    const proposal = pending.proposal;
+    if (!proposal.taskId) {
+      this.appendOutput('错误：提案缺少目标任务');
+      return;
+    }
+
+    const task = this.deps.taskEngine['taskRepo'].findById(proposal.taskId);
+    if (!task) {
+      this.appendOutput(`错误：任务不存在 ${proposal.taskId}`);
+      return;
+    }
+
+    if (proposal.actionType === 'unblock_and_resume' && task.status === 'blocked') {
+      this.deps.taskEngine.unblock(task.id);
+    }
+
+    const executionMode = task.status === 'parked'
+      ? 'resume-parked'
+      : proposal.actionType === 'unblock_and_resume'
+        ? 'resume-blocked'
+        : 'fresh';
+
+    await this.prepareTaskExecution(task.id, {
+      userPrompt: task.goal,
+      contextTaskId: task.id,
+      executionMode,
+      schedulingReason: proposal.recommendedAction,
+    }, proposal.actionType);
+  }
+
+  private async createFollowUpFromCompletedTask(pending: PendingLastTaskConfirmation): Promise<void> {
+    const completedTask = this.deps.taskEngine['taskRepo'].findById(pending.completedTaskId);
+    if (!completedTask) {
+      this.appendOutput(`错误：任务不存在 ${pending.completedTaskId}`);
+      return;
+    }
+
+    const followUpTask = this.deps.taskEngine.create({
+      title: completedTask.title,
+      goal: completedTask.goal,
+      resources: completedTask.resources,
+    });
+
+    this.setCurrentTaskId(followUpTask.id);
+    this.setFocusContext({ kind: 'task', taskId: followUpTask.id });
+    this.appendOutput(
+      `→ 基于上一个已完成任务 #${completedTask.id} 创建 follow-up 任务 #${followUpTask.id}`,
+    );
+    await this.prepareTaskExecution(followUpTask.id, {
+      userPrompt: pending.originalInput,
+      contextTaskId: completedTask.id,
+      executionMode: 'follow-up',
+      schedulingReason: '基于上次已完成任务继续',
+      priorityHint: parsePriorityHint(pending.originalInput),
+    });
+  }
+
+  private async resumeUnfinishedTaskFromConfirmation(pending: PendingLastTaskConfirmation): Promise<void> {
+    const unfinishedTask = pending.unfinishedTaskId
+      ? this.deps.taskEngine['taskRepo'].findById(pending.unfinishedTaskId)
+      : null;
+
+    if (!unfinishedTask) {
+      this.appendOutput('错误：未找到可恢复的未完成任务');
+      return;
+    }
+
+    const plan = planTaskExecution(unfinishedTask, pending.originalInput);
+    if (plan.mode === 'blocked') {
+      this.appendOutput(`错误：${plan.error}`);
+      return;
+    }
+
+    if (plan.mode === 'fork-follow-up') {
+      this.appendOutput(`错误：最近未完成任务 #${unfinishedTask.id} 当前不可直接恢复`);
+      return;
+    }
+
+    this.setCurrentTaskId(plan.executionTaskId);
+    this.setFocusContext({ kind: 'task', taskId: plan.executionTaskId });
+    this.appendOutput(`→ 改为恢复最近未完成任务 #${unfinishedTask.id}`);
+    await this.prepareTaskExecution(plan.executionTaskId, {
+      userPrompt: pending.originalInput,
+      contextTaskId: plan.contextTaskId,
+      executionMode: unfinishedTask.status === 'parked' ? 'resume-parked' : 'fresh',
+      schedulingReason: unfinishedTask.status === 'parked' ? '恢复最近未完成任务' : '继续最近未完成任务',
+      priorityHint: parsePriorityHint(pending.originalInput),
+    });
+  }
+
+  private handlePendingRecallReview(userInput: string): boolean {
+    if (!this.pendingRecallReview) {
+      return false;
+    }
+
+    const trimmed = userInput.trim();
+    const pending = this.pendingRecallReview;
+
+    if (/^r$/iu.test(trimmed)) {
+      this.appendRecallReviewBlock(pending);
+      return true;
+    }
+
+    if (/^y$/iu.test(trimmed)) {
+      this.pendingRecallReview = null;
+      const selection = this.buildAcceptedRecallSelection(
+        pending.preferenceCandidates,
+        pending.taskCandidates,
+      );
+      this.approvedRecallSelections.set(pending.taskId, selection);
+      void this.submitScheduledTask(pending.taskId, pending.request);
+      return true;
+    }
+
+    if (/^n$/iu.test(trimmed)) {
+      this.pendingRecallReview = null;
+      this.approvedRecallSelections.set(pending.taskId, {
+        authoritative: true,
+        resolvedPreferences: [],
+        relatedTaskIds: [],
+        acceptedMemoryResources: [],
+      });
+      void this.submitScheduledTask(pending.taskId, pending.request);
+      return true;
+    }
+
+    if (/^a$/iu.test(trimmed)) {
+      this.persistAutoApplyPolicies(pending);
+      this.pendingRecallReview = null;
+      const selection = this.buildAcceptedRecallSelection(
+        pending.preferenceCandidates,
+        pending.taskCandidates,
+      );
+      this.approvedRecallSelections.set(pending.taskId, selection);
+      this.appendOutput('→ 已记录后续自动采用策略，本次也将直接采用当前召回内容');
+      void this.submitScheduledTask(pending.taskId, pending.request);
+      return true;
+    }
+
+    const indexes = this.parseRecallSelectionInput(trimmed, pending.selectionItems.length);
+    if (indexes) {
+      const selectedPreferences: PreferenceMemoryCandidate[] = [];
+      const selectedTasks: TaskMemoryCandidate[] = [];
+
+      for (const index of indexes) {
+        const item = pending.selectionItems[index - 1];
+        if (!item) {
+          continue;
+        }
+
+        if (item.kind === 'preference') {
+          selectedPreferences.push(item.candidate);
+        } else {
+          selectedTasks.push(item.candidate);
+        }
+      }
+
+      this.pendingRecallReview = null;
+      this.approvedRecallSelections.set(
+        pending.taskId,
+        this.buildAcceptedRecallSelection(selectedPreferences, selectedTasks),
+      );
+      void this.submitScheduledTask(pending.taskId, pending.request);
+      return true;
+    }
+
+    this.appendOutput('→ 当前有待确认的记忆召回，可输入 `y` / `n` / `s 编号...` / `a` / `r`。');
+    return true;
+  }
+
+  private persistAutoApplyPolicies(pending: PendingRecallReview): void {
+    const repo = new RecallReviewPolicyRepo(this.deps.db);
+    const now = new Date().toISOString();
+    const seenKeys = new Set<string>();
+
+    const upsertPolicy = (policy: {
+      id: string;
+      policyType: 'task_memory' | 'project_preference' | 'contact_preference' | 'proposal_type';
+      scope: string | null;
+      subject: string | null;
+      proposalType: GuidanceActionType | null;
+    }) => {
+      if (seenKeys.has(policy.id)) {
+        return;
+      }
+      seenKeys.add(policy.id);
+      repo.upsert({
+        id: policy.id,
+        policyType: policy.policyType,
+        scope: policy.scope,
+        subject: policy.subject,
+        proposalType: policy.proposalType,
+        autoApply: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    };
+
+    if (pending.proposalType) {
+      upsertPolicy({
+        id: `policy:proposal:${pending.proposalType}`,
+        policyType: 'proposal_type',
+        scope: null,
+        subject: null,
+        proposalType: pending.proposalType,
+      });
+      return;
+    }
+
+    if (pending.taskCandidates.length > 0) {
+      upsertPolicy({
+        id: 'policy:task_memory:default',
+        policyType: 'task_memory',
+        scope: null,
+        subject: null,
+        proposalType: null,
+      });
+    }
+
+    for (const candidate of pending.preferenceCandidates) {
+      if (candidate.scope === 'project' && candidate.subject) {
+        upsertPolicy({
+          id: `policy:project:${candidate.subject}`,
+          policyType: 'project_preference',
+          scope: candidate.scope,
+          subject: candidate.subject,
+          proposalType: null,
+        });
+      }
+
+      if (candidate.scope === 'contact' && candidate.subject) {
+        upsertPolicy({
+          id: `policy:contact:${candidate.subject}`,
+          policyType: 'contact_preference',
+          scope: candidate.scope,
+          subject: candidate.subject,
+          proposalType: null,
+        });
+      }
+    }
+  }
+
+  private extractRecallKeywords(userPrompt: string): string[] {
+    return userPrompt.split(/[\s，。？！、；：""''（）\[\]{}]+/)
+      .filter(Boolean)
+      .filter(token => token.length >= 2)
+      .slice(0, 12);
+  }
+
   private maybeAppendExecutionGuidance(task: Task, request: QueuedExecutionRequest): void {
     if (request.executionMode === 'resume-blocked') {
       const reasons = ['阻塞已解除，任务重新具备执行条件'];
@@ -385,6 +982,91 @@ export class MetaclawSession {
     this.notify();
   }
 
+  private persistSessionState(changes: {
+    lastFocusedTaskId?: string | null;
+    lastCompletedTaskId?: string | null;
+    lastSessionId?: string | null;
+  }): void {
+    this.sessionStateRepo.upsert(changes);
+  }
+
+  private findMostRecentUnfinishedTask(excludeTaskIds: string[] = []): Task | null {
+    const excluded = new Set(excludeTaskIds);
+    return this.deps.taskEngine.list().find(task =>
+      !excluded.has(task.id) && ['created', 'ready', 'running', 'parked', 'blocked'].includes(task.status)
+    ) ?? null;
+  }
+
+  private async maybeHandlePersistedLastTaskContinuation(userInput: string): Promise<boolean> {
+    if (!isContinuePreviousTaskInstruction(userInput)) {
+      return false;
+    }
+
+    const state = this.sessionStateRepo.get();
+    if (!state) {
+      return false;
+    }
+
+    const lastFocusedTask = state.lastFocusedTaskId
+      ? this.deps.taskEngine['taskRepo'].findById(state.lastFocusedTaskId)
+      : null;
+    const lastCompletedTask = state.lastCompletedTaskId
+      ? this.deps.taskEngine['taskRepo'].findById(state.lastCompletedTaskId)
+      : null;
+
+    if (!lastFocusedTask && !lastCompletedTask) {
+      return false;
+    }
+
+    const targetTask = lastFocusedTask ?? lastCompletedTask;
+    if (!targetTask) {
+      return false;
+    }
+
+    this.pendingProposalConfirmation = null;
+    this.pendingRecallReview = null;
+
+    if (['created', 'ready', 'running', 'parked', 'blocked'].includes(targetTask.status)) {
+      const plan = planTaskExecution(targetTask, userInput);
+      if (plan.mode === 'blocked') {
+        this.appendOutput(`错误：${plan.error}`);
+        return true;
+      }
+
+      if (plan.mode === 'fork-follow-up') {
+        return false;
+      }
+
+      this.setCurrentTaskId(plan.executionTaskId);
+      this.setFocusContext({ kind: 'task', taskId: plan.executionTaskId });
+      this.appendOutput(`→ 命中上次任务指针 #${targetTask.id}`);
+      await this.prepareTaskExecution(plan.executionTaskId, {
+        userPrompt: userInput,
+        contextTaskId: plan.contextTaskId,
+        executionMode: targetTask.status === 'parked' ? 'resume-parked' : 'fresh',
+        schedulingReason: targetTask.status === 'parked' ? '恢复上一个任务' : '继续上一个任务',
+        priorityHint: parsePriorityHint(userInput),
+      });
+      return true;
+    }
+
+    const completedTask = lastFocusedTask && ['done', 'archived', 'cancelled'].includes(lastFocusedTask.status)
+      ? lastFocusedTask
+      : lastCompletedTask;
+    if (!completedTask) {
+      return false;
+    }
+
+    const unfinishedTask = this.findMostRecentUnfinishedTask([completedTask.id]);
+    this.pendingLastTaskConfirmation = {
+      originalInput: userInput,
+      completedTaskId: completedTask.id,
+      unfinishedTaskId: unfinishedTask?.id ?? null,
+    };
+    this.appendLastTaskConfirmationBlock(this.pendingLastTaskConfirmation);
+    return true;
+  }
+
   private async handleCommand(userInput: string): Promise<boolean> {
     const result = await this.router.execute(userInput, {
       taskEngine: this.deps.taskEngine,
@@ -399,6 +1081,7 @@ export class MetaclawSession {
     this.appendOutput(result.content);
 
     if (result.type === 'exit') {
+      this.persistSessionState({ lastSessionId: this.deps.sessionId });
       return true;
     }
 
@@ -415,7 +1098,7 @@ export class MetaclawSession {
       const resumedTask = this.deps.taskEngine['taskRepo'].findById(schedulerData.taskId);
       if (resumedTask) {
         this.setCurrentTaskId(resumedTask.id);
-        await this.submitScheduledTask(resumedTask.id, {
+        await this.prepareTaskExecution(resumedTask.id, {
           userPrompt: resumedTask.goal,
           contextTaskId: resumedTask.id,
           executionMode: schedulerData.mode,
@@ -432,6 +1115,31 @@ export class MetaclawSession {
     userInput: string,
     options: { skipRiskConfirmation?: boolean } = {},
   ): Promise<void> {
+    if (await this.maybeHandlePersistedLastTaskContinuation(userInput)) {
+      return;
+    }
+
+    if (this.pendingLastTaskConfirmation) {
+      const handled = this.handlePendingLastTaskConfirmation(userInput);
+      if (handled) {
+        return;
+      }
+    }
+
+    if (this.pendingProposalConfirmation) {
+      const handled = this.handlePendingProposalConfirmation(userInput);
+      if (handled) {
+        return;
+      }
+    }
+
+    if (this.pendingRecallReview) {
+      const handled = this.handlePendingRecallReview(userInput);
+      if (handled) {
+        return;
+      }
+    }
+
     if (this.pendingPreferenceConfirmation) {
       const handled = this.handlePendingPreferenceConfirmation(userInput);
       if (handled) {
@@ -528,7 +1236,7 @@ export class MetaclawSession {
             `→ 关联到任务 #${referencedTask.id}`,
             `→ 任务 #${referencedTask.id} 已解除阻塞，继续执行`,
           );
-          await this.submitScheduledTask(referencedTask.id, {
+          await this.prepareTaskExecution(referencedTask.id, {
             userPrompt: userInput,
             contextTaskId: referencedTask.id,
             executionMode: 'resume-blocked',
@@ -555,7 +1263,7 @@ export class MetaclawSession {
           `→ 关联到任务 #${referencedTask.id}`,
           `→ 已完成任务不可直接重跑，创建跟进任务 #${taskId}`,
         );
-        await this.submitScheduledTask(taskId, {
+        await this.prepareTaskExecution(taskId, {
           userPrompt: userInput,
           contextTaskId: plan.contextTaskId,
           executionMode: 'follow-up',
@@ -575,7 +1283,7 @@ export class MetaclawSession {
         return;
       }
       const executionMode = referencedTask.status === 'parked' ? 'resume-parked' : 'fresh';
-      await this.submitScheduledTask(taskId, {
+      await this.prepareTaskExecution(taskId, {
         userPrompt: userInput,
         contextTaskId: taskId,
         executionMode,
@@ -608,7 +1316,7 @@ export class MetaclawSession {
       this.appendOutput(`→ 已自动关联 ${inlineResources.length} 份材料`);
     }
 
-    await this.submitScheduledTask(taskId, {
+    await this.prepareTaskExecution(taskId, {
       userPrompt: userInput,
       contextTaskId: taskId,
       executionMode: 'fresh',
@@ -878,17 +1586,28 @@ export class MetaclawSession {
     this.maybeAppendExecutionGuidance(task, request);
 
     const keywords = userPrompt.split(/\s+/).filter(word => word.length > 2);
-    const preferences = this.deps.memoryEngine.recall({ taskId, keywords, userInput: userPrompt });
+    const rawApprovedRecallSelection = this.approvedRecallSelections.get(taskId);
+    const approvedRecallSelection = rawApprovedRecallSelection ?? {
+      authoritative: false,
+      resolvedPreferences: [],
+      relatedTaskIds: [],
+      acceptedMemoryResources: [],
+    };
+    this.approvedRecallSelections.delete(taskId);
+    const preferences = rawApprovedRecallSelection?.authoritative
+      ? this.deps.memoryEngine.list().filter(preference =>
+          approvedRecallSelection.resolvedPreferences.some(resolved => resolved.id === preference.id)
+        )
+      : this.deps.memoryEngine.recall({ taskId, keywords, userInput: userPrompt });
 
-    this.appendOutput(`→ 正在回忆任务 #${taskId} 的上下文...`);
+    this.appendOutput('【提取最近历史记录上下文】');
     const conversationHistory = await this.deps.contextRecaller.recallAsync({
       taskId: contextTaskId,
       sessionId: this.deps.sessionId,
       userInput: userPrompt,
     });
-    this.appendOutput(`→ 已召回 ${conversationHistory.length} 条相关上下文`);
 
-    this.appendOutput(`→ 正在构建任务 #${taskId} 的执行上下文...`);
+    this.appendOutput('【构建执行上下文】');
     const executionContextBundle = await this.resumeContextBuilder.build({
       taskId,
       mode: executionMode,
@@ -896,8 +1615,17 @@ export class MetaclawSession {
       sessionId: this.deps.sessionId,
       schedulingReason,
       newlyProvidedResources,
+      resolvedPreferencesOverride: approvedRecallSelection.authoritative
+        ? approvedRecallSelection.resolvedPreferences
+        : undefined,
+      relatedTaskIdsOverride: approvedRecallSelection.authoritative
+        ? approvedRecallSelection.relatedTaskIds
+        : undefined,
+      acceptedMemoryResources: approvedRecallSelection.authoritative
+        ? approvedRecallSelection.acceptedMemoryResources
+        : undefined,
     });
-    this.appendOutput('→ 执行上下文已准备完成');
+    this.appendOutput('【执行上下文准备完成】');
     if (executionContextBundle.memoryContext.resolvedPreferences.length > 0) {
       for (const resolvedPreference of executionContextBundle.memoryContext.resolvedPreferences) {
         this.deps.memoryEngine.recordUsage(resolvedPreference.id, taskId);
@@ -924,6 +1652,8 @@ export class MetaclawSession {
         this.refreshRuntimeState();
         return;
       }
+
+      this.ensureWorkspaceTargets(executionContextBundle.workspaceContext?.targetPaths ?? []);
 
       const result = await this.deps.executor.execute({
         task: this.deps.taskEngine['taskRepo'].findById(taskId)!,
@@ -960,12 +1690,14 @@ export class MetaclawSession {
       );
 
       if (result.success) {
+        const workspaceContext = executionContextBundle.workspaceContext;
         const artifactPaths = this.collectArtifactPaths(
           result.output,
-          executionContextBundle.workspaceContext?.targetPaths ?? [],
+          workspaceContext?.targetPaths ?? [],
         );
+        const taskSummary = this.buildTaskResultSummary(result.output, artifactPaths, workspaceContext);
         this.deps.taskEngine['taskRepo'].update(taskId, {
-          summary: result.output.slice(0, 200),
+          summary: taskSummary,
           injectedPreferences: executionContextBundle.memoryContext.resolvedPreferences.map(preference => preference.id),
           artifacts: artifactPaths,
         });
@@ -991,17 +1723,29 @@ export class MetaclawSession {
         }
 
         this.deps.taskEngine.transition(taskId, 'done');
+        this.persistSessionState({
+          lastFocusedTaskId: taskId,
+          lastCompletedTaskId: taskId,
+        });
         const suggestion = this.deps.orchestration.suggestNext(taskId);
+        const nextProposal = this.deps.orchestration.suggestNextProposal(taskId);
         completionLines.push(
           `✓ 任务完成 (${(result.durationMs / 1000).toFixed(1)}s)`,
           '',
           '┌─ 任务结果 ───────────────────────────────────────┐',
-          `│ 摘要: ${result.output.slice(0, 200) || '无'}`,
+          `│ 摘要: ${taskSummary || '无'}`,
           `│ 下一步: ${this.buildCompletionNextStep(suggestion)}`,
           '└──────────────────────────────────────────────────┘',
-          '',
-          result.output,
         );
+        if (workspaceContext?.allowFilesystem) {
+          completionLines.push(
+            '',
+            `→ 文件输出目录: ${workspaceContext.targetPaths[0]}`,
+            '→ 已省略文件正文输出，请直接查看生成文件',
+          );
+        } else {
+          completionLines.push('', result.output);
+        }
         if (artifactPaths.length > 0) {
           completionLines.push(
             '',
@@ -1030,6 +1774,9 @@ export class MetaclawSession {
         }
 
         await finishExecution(completionLines);
+        if (nextProposal) {
+          this.queueProposal('完成后建议', nextProposal);
+        }
         this.lastProgressLineByTask.delete(taskId);
         return;
       }
@@ -1095,6 +1842,14 @@ export class MetaclawSession {
       return `→ 任务 #${taskId} 已转为阻塞，请先确认相关目录权限或系统授权；确认后执行 /task ${taskId} unblock，或直接说“已授权，继续刚才那个任务”`;
     }
 
+    if (/执行器空闲超时|executor idle timeout/i.test(errorMessage)) {
+      return `→ 任务 #${taskId} 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。请检查执行器是否仍在正常推进，必要时补充信息后执行 /task ${taskId} unblock 继续`;
+    }
+
+    if (/执行器运行总时长超限|executor max duration exceeded/i.test(errorMessage)) {
+      return `→ 任务 #${taskId} 已转为阻塞；任务运行时间已超过总时长上限。若确认仍应继续，可调大 executor.max_duration 后执行 /task ${taskId} unblock 重试`;
+    }
+
     return `→ 任务 #${taskId} 已转为阻塞，排除问题后执行 /task ${taskId} unblock 继续`;
   }
 
@@ -1112,8 +1867,71 @@ export class MetaclawSession {
     return Array.from(new Set(normalized));
   }
 
+  private ensureWorkspaceTargets(targetPaths: string[]): void {
+    for (const targetPath of targetPaths) {
+      mkdirSync(targetPath, { recursive: true });
+    }
+  }
+
+  private buildTaskResultSummary(
+    output: string,
+    artifactPaths: string[],
+    workspaceContext?: { allowFilesystem: boolean; targetPaths: string[] },
+  ): string {
+    if (!workspaceContext?.allowFilesystem) {
+      return output.slice(0, 200) || '无';
+    }
+
+    const conciseSummary = this.extractConciseExecutorSummary(output, artifactPaths);
+    if (conciseSummary) {
+      return conciseSummary;
+    }
+
+    if (artifactPaths.length > 0) {
+      return `已写入 ${artifactPaths.length} 个任务文件到 ${workspaceContext.targetPaths[0]}`;
+    }
+
+    return `已完成文件写入任务，目标目录：${workspaceContext.targetPaths[0]}`;
+  }
+
+  private extractConciseExecutorSummary(output: string, artifactPaths: string[]): string | null {
+    const lines = output
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      if (/^```/.test(line)) {
+        continue;
+      }
+      if (/(<!DOCTYPE|<html|<body|<head|<script|<style)/i.test(line)) {
+        continue;
+      }
+
+      let normalized = line;
+      for (const artifactPath of artifactPaths) {
+        normalized = normalized.replace(artifactPath, '').trim();
+      }
+      normalized = normalized.replace(/[：:，,\-]+$/u, '').trim();
+
+      if (!normalized) {
+        continue;
+      }
+      if (/<[a-z][^>]*>/i.test(normalized)) {
+        continue;
+      }
+
+      return normalized.slice(0, 200);
+    }
+
+    return null;
+  }
+
   private setFocusContext(focus: FocusContext | null): void {
     this.focusContext = focus;
+    if (focus?.kind === 'task' && focus.taskId) {
+      this.persistSessionState({ lastFocusedTaskId: focus.taskId });
+    }
   }
 
   private applyFocusAwareRouteOverride(

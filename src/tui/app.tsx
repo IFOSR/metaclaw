@@ -14,6 +14,14 @@ interface RenderLine {
   indent: number;
 }
 
+const META_TEXT_COLOR = 'whiteBright';
+const PANEL_HEADER_COLOR = 'whiteBright';
+const RUNTIME_SUMMARY_COLOR = 'cyanBright';
+const GUIDANCE_BORDER_COLOR = 'cyanBright';
+const STATUS_PANEL_BORDER_COLOR = 'cyanBright';
+const COMPOSER_PANEL_BORDER_COLOR = 'whiteBright';
+const PROMPT_COLOR = 'greenBright';
+
 const EMPTY_SNAPSHOT: SessionSnapshot = {
   output: [],
   currentTaskId: null,
@@ -97,10 +105,9 @@ function classifyOutputLine(line: string, inResultBlock: boolean): RenderLine {
   }
 
   if (
-    line.startsWith('→ 正在回忆任务')
-    || line.startsWith('→ 已召回 ')
-    || line.startsWith('→ 正在构建任务')
-    || line.startsWith('→ 执行上下文已准备完成')
+    line === '【提取最近历史记录上下文】'
+    || line === '【构建执行上下文】'
+    || line === '【执行上下文准备完成】'
   ) {
     return { kind: 'context', text: line, indent: 0 };
   }
@@ -131,34 +138,51 @@ function classifyOutputLine(line: string, inResultBlock: boolean): RenderLine {
   return { kind: 'system', text: line, indent: 0 };
 }
 
+function shouldInsertUserTurnSeparator(previous: RenderLine | undefined, next: RenderLine): boolean {
+  return next.kind === 'user'
+    && previous !== undefined
+    && previous.kind !== 'blank';
+}
+
 function buildRenderLines(lines: string[]): RenderLine[] {
   let inResultBlock = false;
+  const rendered: RenderLine[] = [];
 
-  return lines.map(line => {
+  for (const line of lines) {
     if (line.startsWith('✓ ')) {
       inResultBlock = true;
     } else if (inResultBlock && isResultBoundary(line)) {
       inResultBlock = false;
     }
 
-    return classifyOutputLine(line, inResultBlock);
-  });
+    const renderLine = classifyOutputLine(line, inResultBlock);
+    if (shouldInsertUserTurnSeparator(rendered[rendered.length - 1], renderLine)) {
+      rendered.push({
+        kind: 'blank',
+        text: '',
+        indent: 0,
+      });
+    }
+    rendered.push(renderLine);
+  }
+
+  return rendered;
 }
 
 function getLineColor(kind: OutputKind): string | undefined {
   switch (kind) {
     case 'user':
-      return 'green';
+      return 'greenBright';
     case 'system':
-      return 'cyan';
+      return 'whiteBright';
     case 'context':
-      return 'gray';
+      return 'cyanBright';
     case 'agent':
-      return 'blue';
+      return 'blueBright';
     case 'result':
-      return 'green';
+      return 'greenBright';
     case 'warning':
-      return 'yellow';
+      return 'yellowBright';
     default:
       return undefined;
   }
@@ -166,7 +190,7 @@ function getLineColor(kind: OutputKind): string | undefined {
 
 function formatRenderLine(line: RenderLine): string {
   if (line.kind === 'blank') {
-    return '';
+    return ' ';
   }
 
   return `${'  '.repeat(line.indent)}${line.text}`;
@@ -175,6 +199,9 @@ function formatRenderLine(line: RenderLine): string {
 function hasPendingConfirmation(lines: string[]): boolean {
   const recentOutput = lines.slice(-8).join('\n');
   return recentOutput.includes('[y] 确认')
+    || recentOutput.includes('[y] 接受并继续恢复')
+    || recentOutput.includes('[y] 全部采用')
+    || recentOutput.includes('[f] 基于该任务创建 follow-up')
     || recentOutput.includes('输入“确认执行”继续')
     || recentOutput.includes('输入“取消执行”放弃');
 }
@@ -340,12 +367,12 @@ export function App(props: AppProps) {
           )}
         </Static>
         {waitingHintVisible && (
-          <Text color="gray">  · 正在等待执行器返回...</Text>
+          <Text color={META_TEXT_COLOR}>  · 正在等待执行器返回...</Text>
         )}
       </Box>
       {snapshot.latestGuidance && (
-        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={1}>
-          <Text color="cyan">当前建议</Text>
+        <Box flexDirection="column" borderStyle="round" borderColor={GUIDANCE_BORDER_COLOR} paddingX={1} marginBottom={1}>
+          <Text color={PANEL_HEADER_COLOR} bold>当前建议</Text>
           <Text>场景: {snapshot.latestGuidance.scene}</Text>
           <Text>动作: {snapshot.latestGuidance.recommendedAction}</Text>
           <Text>任务: #{snapshot.latestGuidance.taskId}{snapshot.latestGuidance.taskTitle ? ` ${snapshot.latestGuidance.taskTitle}` : ''}</Text>
@@ -354,22 +381,37 @@ export function App(props: AppProps) {
           ))}
         </Box>
       )}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">{runtimeSummary}</Text>
-        <Text color="gray">{latestEvent}</Text>
+      <Box flexDirection="column" borderStyle="round" borderColor={STATUS_PANEL_BORDER_COLOR} paddingX={1} marginBottom={1}>
+        <Text color={PANEL_HEADER_COLOR} bold>运行状态</Text>
+        <Text color={RUNTIME_SUMMARY_COLOR}>{runtimeSummary}</Text>
+        <Text color={META_TEXT_COLOR}>{latestEvent}</Text>
       </Box>
-      <Box flexDirection="column">
-        <Text color="gray">status: {composerStatus}</Text>
+      <Box flexDirection="column" borderStyle="round" borderColor={COMPOSER_PANEL_BORDER_COLOR} paddingX={1}>
+        <Text color={PANEL_HEADER_COLOR} bold>当前输入</Text>
+        <Text color={META_TEXT_COLOR}>status: {composerStatus}</Text>
         <Box>
-          <Text color="green">&gt; </Text>
-          <Text>{editor.text.slice(0, editor.cursor)}</Text>
+          <Text color={PROMPT_COLOR} bold>&gt; </Text>
+          <Text color={META_TEXT_COLOR}>{editor.text.slice(0, editor.cursor)}</Text>
           <Text inverse>{editor.text[editor.cursor] ?? ' '}</Text>
-          <Text>{editor.text.slice(editor.cursor + 1)}</Text>
+          <Text color={META_TEXT_COLOR}>{editor.text.slice(editor.cursor + 1)}</Text>
         </Box>
       </Box>
     </Box>
   );
 }
+
+export {
+  COMPOSER_PANEL_BORDER_COLOR,
+  GUIDANCE_BORDER_COLOR,
+  META_TEXT_COLOR,
+  PANEL_HEADER_COLOR,
+  PROMPT_COLOR,
+  RUNTIME_SUMMARY_COLOR,
+  STATUS_PANEL_BORDER_COLOR,
+  buildRenderLines,
+  formatRenderLine,
+  getLineColor,
+};
 
 export {
   parseExplicitRemember,

@@ -128,8 +128,21 @@ describe('App execution progress', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('→ 正在回忆任务 #');
-    expect(app.lastFrame()).toContain('→ 执行上下文已准备完成');
+    expect(app.lastFrame()).toContain('记忆召回确认');
+
+    await inputCapture.handler?.('y', {});
+    await flushUpdates();
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('【提取最近历史记录上下文】');
+    expect(app.lastFrame()).toContain('【构建执行上下文】');
+    expect(app.lastFrame()).toContain('【执行上下文准备完成】');
+    expect(app.lastFrame()).not.toContain('→ 正在回忆任务 #');
+    expect(app.lastFrame()).not.toContain('→ 已召回 ');
+    expect(app.lastFrame()).not.toContain('→ 正在构建任务 #');
+    expect(app.lastFrame()).not.toContain('→ 执行上下文已准备完成');
     expect(app.lastFrame()).toContain('· #');
     expect(app.lastFrame()).toContain('已启动 codex-cli 执行器');
     expect(app.lastFrame()).toContain('正在检索市场份额数据');

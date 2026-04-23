@@ -1,11 +1,13 @@
 import type { Preference, PreferenceScope, PreferenceStatus, Observation } from './types.js';
 import type { PreferenceRepo } from '../storage/preference-repo.js';
 import type { ObservationRepo } from '../storage/observation-repo.js';
+import type { PreferenceEmbeddingService } from './preference-embedding-service.js';
+import type { HybridMemoryRecaller, HybridMemoryRecallResult } from './hybrid-memory-recaller.js';
 import { generatePreferenceId } from '../utils/id.js';
 
 const CONFIRM_THRESHOLD = 3;
 
-interface RecallContext {
+export interface RecallContext {
   taskId?: string;
   keywords: string[];
   subject?: string;
@@ -29,6 +31,8 @@ export class MemoryEngine {
   constructor(
     private prefRepo: PreferenceRepo,
     private obsRepo: ObservationRepo,
+    private preferenceEmbeddingService?: PreferenceEmbeddingService,
+    private hybridMemoryRecaller?: Pick<HybridMemoryRecaller, 'recall'>,
   ) {}
 
   /**
@@ -74,6 +78,7 @@ export class MemoryEngine {
 
     this.prefRepo.insert(pref);
     this.obsRepo.markPromoted(observationId, pref.id);
+    this.refreshEmbedding(pref);
     return pref;
   }
 
@@ -112,6 +117,7 @@ export class MemoryEngine {
     };
 
     this.prefRepo.insert(pref);
+    this.refreshEmbedding(pref);
     return pref;
   }
 
@@ -186,6 +192,10 @@ export class MemoryEngine {
         continue;
       }
 
+      if (!this.isGlobalPreferenceSceneCompatible(preference, userInput)) {
+        continue;
+      }
+
       results.push({
         pref: preference,
         score: 5 + (SCOPE_PRIORITY[preference.scope] ?? 0),
@@ -223,12 +233,55 @@ export class MemoryEngine {
     return results.slice(0, topK).map(r => r.pref);
   }
 
+  async recallForReview(context: RecallContext): Promise<HybridMemoryRecallResult> {
+    const rulePreferenceCandidates = this.recall(context).map(preference => ({
+      id: preference.id,
+      preferenceId: preference.id,
+      scope: preference.scope,
+      subject: preference.subject,
+      summary: preference.content,
+      reason: preference.scope === 'task-local' && context.taskId && (
+        preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId)
+      )
+        ? '命中当前任务局部偏好'
+        : preference.subject
+          ? `命中主体：${preference.subject}`
+          : preference.scope === 'global' && preference.type === 'style'
+            ? this.isPersonalityTonePreference(preference.content)
+              ? '匹配当前场合后采用该表达风格'
+              : '命中通用表达偏好'
+            : '命中当前输入关键词',
+      source: 'rule' as const,
+      score: Math.round(preference.confidence * 100),
+    }));
+
+    if (!this.hybridMemoryRecaller) {
+      return {
+        preferenceCandidates: rulePreferenceCandidates,
+        taskCandidates: [],
+        auditId: null,
+      };
+    }
+
+    return this.hybridMemoryRecaller.recall({
+      taskId: context.taskId,
+      queryText: context.userInput ?? [context.subject, ...context.keywords].filter(Boolean).join(' '),
+      keywords: context.keywords,
+      subject: context.subject,
+      topK: context.topK,
+      rulePreferenceCandidates,
+      ruleTaskCandidates: [],
+    });
+  }
+
   /**
    * 偏好 CRUD
    */
   update(prefId: string, changes: Partial<Preference>): Preference {
     this.prefRepo.update(prefId, changes);
-    return this.prefRepo.findById(prefId)!;
+    const updated = this.prefRepo.findById(prefId)!;
+    this.refreshEmbedding(updated);
+    return updated;
   }
 
   recordUsage(prefId: string, taskId: string): Preference {
@@ -258,5 +311,57 @@ export class MemoryEngine {
     if (/格式|风格|语气|语言/.test(pattern)) return 'style';
     if (/流程|步骤|方式/.test(pattern)) return 'workflow';
     return 'domain';
+  }
+
+  private refreshEmbedding(preference: Preference): void {
+    if (!this.preferenceEmbeddingService) {
+      return;
+    }
+
+    void this.preferenceEmbeddingService.embedPreference(preference).catch(() => {
+      // Embedding is an optional enhancement layer and must not block memory flows.
+    });
+  }
+
+  private isGlobalPreferenceSceneCompatible(preference: Preference, userInput: string): boolean {
+    if (preference.scope !== 'global' || preference.type !== 'style') {
+      return true;
+    }
+
+    if (!this.isPersonalityTonePreference(preference.content)) {
+      return true;
+    }
+
+    return this.isPersonalityToneSceneCompatible(userInput);
+  }
+
+  private isPersonalityTonePreference(content: string): boolean {
+    return /(活泼|幽默|俏皮|轻松|亲切|热情|温暖|严肃|正式|口语化|随意|克制|文艺|犀利|毒舌)/.test(content)
+      || /(语气|风格|口吻|语调)/.test(content);
+  }
+
+  private isPersonalityToneSceneCompatible(userInput: string): boolean {
+    const normalized = userInput.replace(/\s+/g, '');
+    if (!normalized) {
+      return false;
+    }
+
+    if (/(活泼|幽默|俏皮|轻松|亲切|热情|温暖|严肃|正式|口语化|随意|克制|文艺|犀利|毒舌|语气|风格|口吻|语调)/.test(normalized)) {
+      return true;
+    }
+
+    if (/(文案|宣传|推文|帖子|小红书|朋友圈|口播|脚本|slogan|标题|开场白|欢迎词|广告|海报|宣传语|简介)/i.test(normalized)) {
+      return true;
+    }
+
+    if (/(邮件|发信|发给|回复|消息|沟通|通知)/.test(normalized)) {
+      return true;
+    }
+
+    if (/(ppt|幻灯片|slides|报告|周报|纪要|总结|提纲|方案|一页|表格|文档|材料|复盘|汇报|调研|分析|研究|投资|估值|财务|市场|竞争|尽调)/i.test(normalized)) {
+      return false;
+    }
+
+    return false;
   }
 }

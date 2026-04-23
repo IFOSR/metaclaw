@@ -42,6 +42,8 @@
   - 任务产物回流与展示验收包
 - `round-15-tui-refresh/`
   - TUI 语义分层、运行摘要、composer 状态、结果块验收包
+- `round-16-proposal-and-recall-review/`
+  - V2 proposal 确认、recall review、auto-apply policy 验收包
 
 ## 目录约定
 

@@ -1,7 +1,15 @@
-import type { Task, Dashboard, Suggestion, PriorityScore } from './types.js';
+import type {
+  Task,
+  Dashboard,
+  GuidanceProposal,
+  PriorityScore,
+  Suggestion,
+} from './types.js';
 import type { TaskEngine } from './task-engine.js';
 import dayjs from 'dayjs';
 import { filterDurableTasks } from './task-routing.js';
+import { GuidancePolicyEngine } from './guidance-policy-engine.js';
+import { TaskSignalService } from './task-signal-service.js';
 
 const AUTO_RESUME_READY_REASON = '高优任务完成，恢复进入待调度队列';
 
@@ -14,7 +22,14 @@ const WEIGHTS = {
 };
 
 export class OrchestrationEngine {
-  constructor(private taskEngine: TaskEngine) {}
+  private readonly taskSignalService: TaskSignalService;
+
+  private readonly guidancePolicyEngine: GuidancePolicyEngine;
+
+  constructor(private taskEngine: TaskEngine) {
+    this.taskSignalService = new TaskSignalService(taskEngine);
+    this.guidancePolicyEngine = new GuidancePolicyEngine();
+  }
 
   /**
    * 生成任务盘面
@@ -87,50 +102,69 @@ export class OrchestrationEngine {
    * 任务完成后推荐下一个
    */
   suggestNext(completedTaskId: string): Suggestion | null {
-    const prioritized = this.getPrioritizedTasks();
-    if (prioritized.length === 0) return null;
-
-    const next = prioritized[0];
-    return {
-      taskId: next.task.id,
-      type: 'priority_suggestion',
-      reasons: next.reasons,
-      recommendedAction: `继续处理任务 #${next.task.id}: ${next.task.title}`,
-      generatedAt: new Date().toISOString(),
-    };
+    const proposal = this.suggestNextProposal(completedTaskId);
+    return proposal ? this.mapProposalToSuggestion(proposal) : null;
   }
 
   /**
    * 生成主动建议
    */
   generateSuggestions(): Suggestion[] {
-    const suggestions: Suggestion[] = [];
-
-    // 高优先级任务建议
-    const prioritized = this.getPrioritizedTasks();
-    if (prioritized.length > 0 && prioritized[0].score.total >= 20) {
-      suggestions.push({
-        taskId: prioritized[0].task.id,
-        type: 'priority_suggestion',
-        reasons: prioritized[0].reasons,
-        recommendedAction: `建议优先处理: ${prioritized[0].task.title}`,
-        generatedAt: new Date().toISOString(),
-      });
-    }
-
-    // Blocked 任务提醒
+    const suggestions = this.generateProposals().map(proposal => this.mapProposalToSuggestion(proposal));
     const blocked = this.getBlockedTasks();
+
     for (const task of blocked) {
+      if (suggestions.some(suggestion => suggestion.taskId === task.id)) {
+        continue;
+      }
+
       suggestions.push({
         taskId: task.id,
         type: 'unblock_reminder',
         reasons: [`任务被阻塞: ${task.blockReason}`],
-        recommendedAction: `检查并解除阻塞`,
+        recommendedAction: '检查并解除阻塞',
         generatedAt: new Date().toISOString(),
       });
     }
 
     return suggestions;
+  }
+
+  generateProposals(trigger = 'system'): GuidanceProposal[] {
+    const tasks = filterDurableTasks(this.taskEngine['taskRepo'].findActive());
+    const taskLookup = new Map(tasks.map(task => [task.id, task] as const));
+    const readyTaskIds = this.getPrioritizedTasks().map(({ task }) => task.id);
+
+    return this.guidancePolicyEngine.build(
+      tasks.map(task => this.taskSignalService.build(task)),
+      {
+        trigger,
+        taskLookup,
+        readyTaskIds,
+      },
+    );
+  }
+
+  suggestNextProposal(completedTaskId: string): GuidanceProposal | null {
+    const readyTasks = this.getPrioritizedTasks()
+      .map(({ task }) => task)
+      .filter(task => task.id !== completedTaskId);
+
+    if (readyTasks.length === 0) {
+      return null;
+    }
+
+    const taskLookup = new Map(readyTasks.map(task => [task.id, task] as const));
+    const proposals = this.guidancePolicyEngine.build(
+      readyTasks.map(task => this.taskSignalService.build(task)),
+      {
+        trigger: 'task_completed',
+        taskLookup,
+        readyTaskIds: readyTasks.map(task => task.id),
+      },
+    );
+
+    return proposals.find(proposal => proposal.actionType === 'prioritize_task') ?? null;
   }
 
   /**
@@ -214,5 +248,15 @@ export class OrchestrationEngine {
     return task.status === 'ready'
       && /抢占/.test(task.lastInterruptionReason)
       && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
+  }
+
+  private mapProposalToSuggestion(proposal: GuidanceProposal): Suggestion {
+    return {
+      taskId: proposal.taskId ?? 'unknown',
+      type: proposal.actionType === 'unblock_and_resume' ? 'unblock_reminder' : 'priority_suggestion',
+      reasons: proposal.reasons,
+      recommendedAction: proposal.recommendedAction,
+      generatedAt: proposal.createdAt,
+    };
   }
 }

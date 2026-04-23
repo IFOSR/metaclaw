@@ -133,4 +133,39 @@ describe('Round 2 guidance acceptance', () => {
 
     expect(session.getSnapshot().output.join('\n')).not.toContain('💡 提醒');
   });
+
+  it('clears stale guidance after a resumed parked task finishes with no next suggestion', async () => {
+    const { session, taskEngine, taskRepo } = createSession(createConfig({
+      reminder_enabled: true,
+      reminder_throttle: 60,
+    }));
+
+    const task = taskEngine.create({ title: 'Phoenix 周报', goal: '整理 Phoenix 周报' });
+    taskRepo.update(task.id, {
+      status: 'parked',
+      summary: '已整理风险栏目，待补经营数据',
+      snapshots: [{
+        done: ['已整理风险栏目'],
+        pending: ['待补经营数据'],
+        nextStep: '补齐经营数据',
+        pauseReason: '等待经营数据',
+        createdAt: '2026-04-20T00:00:00Z',
+      }],
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0.8,
+        blocksOthers: false,
+        idleHours: 1,
+      },
+      lastInterruptionReason: '被更高优先任务抢占',
+    });
+
+    session.initialize();
+
+    await session.submit(`/task ${task.id} resume`, { awaitAsyncWork: true });
+
+    expect(taskRepo.findById(task.id)?.status).toBe('done');
+    expect(session.getSnapshot().latestGuidance).toBeNull();
+  });
 });

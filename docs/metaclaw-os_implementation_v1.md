@@ -1084,7 +1084,8 @@ version: 1
 
 executor:
   command: codex           # 默认执行器；可改为 claude
-  timeout: 300             # 执行超时（秒）
+  timeout: 300             # 空闲超时（秒）
+  max_duration: 3600       # 总时长上限（秒）
 
 orchestration:
   reminder_enabled: true   # 是否启用主动提醒

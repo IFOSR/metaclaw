@@ -233,14 +233,10 @@ describe('App guidance blocks', () => {
       status: 'waiting',
     });
 
+    const deferred = createDeferredResult();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockResolvedValue({
-        success: true,
-        output: '阻塞解除后已恢复执行',
-        exitCode: 0,
-        durationMs: 400,
-      }),
+      execute: vi.fn().mockImplementationOnce(() => deferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -273,6 +269,15 @@ describe('App guidance blocks', () => {
       expect(app.lastFrame()).toContain(blockedTask.title);
     });
 
+    deferred.resolve({
+      success: true,
+      output: '阻塞解除后已恢复执行',
+      exitCode: 0,
+      durationMs: 400,
+    });
+    await flushUpdates();
+    await flushUpdates();
+
     app.unmount();
     app.cleanup();
   });
@@ -298,14 +303,10 @@ describe('App guidance blocks', () => {
       lastInterruptionReason: '被更高优先级任务抢占：插入紧急任务',
     });
 
+    const deferred = createDeferredResult();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockResolvedValue({
-        success: true,
-        output: '已恢复主线任务',
-        exitCode: 0,
-        durationMs: 450,
-      }),
+      execute: vi.fn().mockImplementationOnce(() => deferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -337,6 +338,15 @@ describe('App guidance blocks', () => {
       expect(app.lastFrame()).toContain(parkedTask.id);
       expect(app.lastFrame()).toContain('刚被高优任务打断');
     });
+
+    deferred.resolve({
+      success: true,
+      output: '已恢复主线任务',
+      exitCode: 0,
+      durationMs: 450,
+    });
+    await flushUpdates();
+    await flushUpdates();
 
     app.unmount();
     app.cleanup();

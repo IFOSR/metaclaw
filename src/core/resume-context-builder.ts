@@ -1,7 +1,9 @@
+import type { ConversationTurn } from '../executor/adapter.js';
 import type { ContextRecaller } from './context-recaller.js';
 import type { MemoryEngine } from './memory-engine.js';
+import type { TaskMemoryDocument } from './task-embedding-service.js';
 import type { TaskEngine } from './task-engine.js';
-import type { ExecutionContextBundle, ResolvedPreference, WorkspaceContext } from './types.js';
+import type { ExecutionContextBundle, ResolvedPreference, Task, TaskSnapshot, WorkspaceContext } from './types.js';
 import { buildMaterialSummary, extractMaterialTextSnippets } from './material-utils.js';
 import { resolve } from 'path';
 
@@ -12,6 +14,62 @@ interface BuildContextInput {
   sessionId: string;
   schedulingReason?: string;
   newlyProvidedResources?: string[];
+  resolvedPreferencesOverride?: ResolvedPreference[];
+  relatedTaskIdsOverride?: string[];
+  acceptedMemoryResources?: string[];
+}
+
+interface TaskMemoryDocumentBuildInput {
+  latestSnapshot?: TaskSnapshot | null;
+  materialSummary?: string | null;
+}
+
+export function buildTaskMemoryDocuments(
+  task: Pick<Task, 'id' | 'title' | 'goal' | 'summary'> & { snapshots?: TaskSnapshot[] },
+  input: TaskMemoryDocumentBuildInput = {},
+): TaskMemoryDocument[] {
+  const documents: TaskMemoryDocument[] = [];
+  const latestSnapshot = input.latestSnapshot ?? task.snapshots?.[task.snapshots.length - 1] ?? null;
+
+  documents.push({
+    taskId: task.id,
+    memoryKind: 'task_summary',
+    sourceId: task.id,
+    text: [
+      `任务标题：${task.title}`,
+      `任务目标：${task.goal}`,
+      `最新总结：${task.summary || '暂无总结'}`,
+    ].join('\n'),
+  });
+
+  if (latestSnapshot) {
+    documents.push({
+      taskId: task.id,
+      memoryKind: 'snapshot_summary',
+      sourceId: `${task.id}:latest_snapshot`,
+      text: [
+        `任务标题：${task.title}`,
+        `已完成：${latestSnapshot.done.join('；') || '暂无'}`,
+        `待处理：${latestSnapshot.pending.join('；') || '暂无'}`,
+        `下一步：${latestSnapshot.nextStep || '暂无'}`,
+        `暂停原因：${latestSnapshot.pauseReason || '暂无'}`,
+      ].join('\n'),
+    });
+  }
+
+  if (input.materialSummary) {
+    documents.push({
+      taskId: task.id,
+      memoryKind: 'material_summary',
+      sourceId: `${task.id}:material_summary`,
+      text: [
+        `任务标题：${task.title}`,
+        `材料摘要：${input.materialSummary}`,
+      ].join('\n'),
+    });
+  }
+
+  return documents;
 }
 
 export class ResumeContextBuilder {
@@ -33,31 +91,36 @@ export class ResumeContextBuilder {
       sessionId: input.sessionId,
       userInput: input.userInput,
     });
+    const relatedTaskTurns = input.relatedTaskIdsOverride
+      ? this.contextRecaller.recallForTaskIds(input.relatedTaskIdsOverride)
+      : [];
     const latestSnapshot = this.taskEngine.getLatestSnapshot(task.id);
     const keywords = this.extractKeywords(input.userInput);
-    const resolvedPreferences = this.memoryEngine.recall({
-      taskId: task.id,
-      keywords,
-      userInput: input.userInput,
-    }).map<ResolvedPreference>((preference) => ({
-      id: preference.id,
-      content: preference.content,
-      scope: preference.scope,
-      confidence: preference.confidence,
-      reason: preference.scope === 'task-local' && (
-        preference.subject === task.id || preference.sourceTasks.includes(task.id)
-      )
-        ? '命中当前任务局部偏好'
-        : preference.sourceTasks.includes(task.id)
-        ? '当前任务历史中已使用'
-        : preference.subject
-          ? `命中主体：${preference.subject}`
-          : '命中当前输入关键词',
-    }));
+    const resolvedPreferences = input.resolvedPreferencesOverride
+      ?? this.memoryEngine.recall({
+        taskId: task.id,
+        keywords,
+        userInput: input.userInput,
+      }).map<ResolvedPreference>((preference) => ({
+        id: preference.id,
+        content: preference.content,
+        scope: preference.scope,
+        confidence: preference.confidence,
+        reason: preference.scope === 'task-local' && (
+          preference.subject === task.id || preference.sourceTasks.includes(task.id)
+        )
+          ? '命中当前任务局部偏好'
+          : preference.sourceTasks.includes(task.id)
+          ? '当前任务历史中已使用'
+          : preference.subject
+            ? `命中主体：${preference.subject}`
+            : '命中当前输入关键词',
+      }));
 
     const resources = Array.from(new Set([
       ...task.resources,
       ...(input.newlyProvidedResources ?? []),
+      ...(input.acceptedMemoryResources ?? []),
     ]));
     const textSnippets = await extractMaterialTextSnippets(resources, {
       fetchImpl: this.fetchImpl,
@@ -66,7 +129,7 @@ export class ResumeContextBuilder {
 
     const blockedReason = task.dependencies.find(dependency => dependency.status === 'waiting')?.description
       ?? task.dependencies[task.dependencies.length - 1]?.description;
-    const workspaceContext = this.buildWorkspaceContext(input.userInput);
+    const workspaceContext = this.buildWorkspaceContext(task, input.userInput);
     const executionInstructions = this.buildExecutionInstructions(
       input.mode,
       input.newlyProvidedResources,
@@ -103,7 +166,10 @@ export class ResumeContextBuilder {
       historyContext: {
         taskTurns: conversationHistory.filter(turn => turn.source === 'task'),
         sessionTurns: conversationHistory.filter(turn => turn.source === 'session'),
-        relatedTurns: conversationHistory.filter(turn => turn.source === 'keyword' || turn.source === 'llm'),
+        relatedTurns: this.mergeRelatedTurns(
+          conversationHistory.filter(turn => turn.source === 'keyword' || turn.source === 'llm'),
+          relatedTaskTurns,
+        ),
       },
       materialContext: {
         resources,
@@ -129,9 +195,11 @@ export class ResumeContextBuilder {
     const fileInstructions = workspaceContext?.allowFilesystem
       ? [
           '必须把结果写入本地文件系统，不要只在回复中描述结果',
+          '所有本次任务生成的文件都必须放在任务专属输出目录中，不要写到其他位置',
           `工作目录：${workspaceContext.workingDirectory}`,
           ...workspaceContext.targetPaths.map(path => `目标目录：${path}`),
           '如果目标目录不存在，请先创建目录，再写入一个合适命名的 Markdown 文件',
+          '不要在回复中粘贴或打印完整文件内容，只返回简短摘要和最终文件路径',
           '完成后明确返回保存路径和文件名，优先返回绝对路径',
         ]
       : [];
@@ -163,27 +231,23 @@ export class ResumeContextBuilder {
     ];
   }
 
-  private buildWorkspaceContext(userInput: string): WorkspaceContext | undefined {
-    if (!/(存档|归档|保存|写入)/.test(userInput)) {
-      return undefined;
-    }
-
-    const currentProjectDirMatch = userInput.match(/当前项目的([A-Za-z0-9._-]+)目录/);
-    const explicitDirMatch = userInput.match(/(?:存档|归档|保存|写入)到([A-Za-z0-9_./-]+)目录/);
-    const directoryName = currentProjectDirMatch?.[1] ?? explicitDirMatch?.[1];
-
-    if (!directoryName) {
+  private buildWorkspaceContext(task: Task, userInput: string): WorkspaceContext | undefined {
+    if (!this.isFileGenerationRequest(userInput)) {
       return undefined;
     }
 
     const workingDirectory = process.cwd();
-    const targetDirectory = resolve(workingDirectory, directoryName);
+    const targetDirectory = resolve(workingDirectory, 'metaclaw-tasks', task.id);
 
     return {
       allowFilesystem: true,
       workingDirectory,
       targetPaths: [targetDirectory],
     };
+  }
+
+  private isFileGenerationRequest(userInput: string): boolean {
+    return /(存档|归档|保存|写入|落盘|导出)|((生成|创建|输出|产出|制作).*(html|HTML|markdown|md|json|csv|txt|yaml|yml|文件))/u.test(userInput);
   }
 
   private extractKeywords(input: string): string[] {
@@ -217,5 +281,21 @@ export class ResumeContextBuilder {
     }
 
     return keywords.slice(0, 20);
+  }
+
+  private mergeRelatedTurns(
+    primary: ConversationTurn[],
+    additional: ConversationTurn[],
+  ): ConversationTurn[] {
+    const merged = new Map<string, ConversationTurn>();
+
+    for (const turn of [...primary, ...additional]) {
+      const key = `${turn.taskId}:${turn.createdAt}:${turn.userInput}`;
+      if (!merged.has(key)) {
+        merged.set(key, turn);
+      }
+    }
+
+    return Array.from(merged.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 }

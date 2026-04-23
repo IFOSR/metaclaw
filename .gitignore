@@ -4,3 +4,5 @@ dist/
 .DS_Store
 coverage/
 projects/
+.tmp/
+metaclaw-tasks/

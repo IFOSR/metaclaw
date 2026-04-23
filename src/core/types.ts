@@ -261,12 +261,126 @@ export interface ExecutionContextBundle {
   executionInstructions: string[];
 }
 
+// ─── V2 主动提案 ───
+export const GuidanceActionType = {
+  RESUME_TASK: 'resume_task',
+  UNBLOCK_AND_RESUME: 'unblock_and_resume',
+  CONTINUE_FOLLOWUP: 'continue_followup',
+  PRIORITIZE_TASK: 'prioritize_task',
+  RESUME_SIMILAR_TASK: 'resume_similar_task',
+  REVIEW_GENERATED_ARTIFACT: 'review_generated_artifact',
+} as const;
+
+export type GuidanceActionType = (typeof GuidanceActionType)[keyof typeof GuidanceActionType];
+
+export interface GuidanceProposal {
+  id: string;
+  trigger: string;
+  taskId: string | null;
+  actionType: GuidanceActionType;
+  recommendedAction: string;
+  reasons: string[];
+  confidence: number;
+  requiresConfirmation: boolean;
+  proposalPayload: Record<string, unknown>;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+// ─── V2 记忆召回 ───
+export const RecallCandidateSource = {
+  RULE: 'rule',
+  SEMANTIC: 'semantic',
+  CONTINUITY: 'continuity',
+} as const;
+
+export type RecallCandidateSource = (typeof RecallCandidateSource)[keyof typeof RecallCandidateSource];
+
+export const TaskMemoryKind = {
+  TASK_SUMMARY: 'task_summary',
+  SNAPSHOT_SUMMARY: 'snapshot_summary',
+  MATERIAL_SUMMARY: 'material_summary',
+  ARTIFACT_SUMMARY: 'artifact_summary',
+} as const;
+
+export type TaskMemoryKind = (typeof TaskMemoryKind)[keyof typeof TaskMemoryKind];
+
+export interface TaskMemoryCandidate {
+  id: string;
+  taskId: string;
+  sourceTaskId: string;
+  memoryKind: TaskMemoryKind;
+  title: string;
+  summary: string;
+  reason: string;
+  source: RecallCandidateSource;
+  score: number;
+  artifactPaths: string[];
+}
+
+export interface PreferenceMemoryCandidate {
+  id: string;
+  preferenceId: string;
+  scope: PreferenceScope;
+  subject: string | null;
+  summary: string;
+  reason: string;
+  source: RecallCandidateSource;
+  score: number;
+}
+
+export const RecallReviewOption = {
+  ACCEPT_ALL: 'accept_all',
+  REJECT_ALL: 'reject_all',
+  EDIT: 'edit',
+  SELECT_PARTIAL: 'select_partial',
+  AUTO_APPLY_FUTURE: 'auto_apply_future',
+} as const;
+
+export type RecallReviewOption = (typeof RecallReviewOption)[keyof typeof RecallReviewOption];
+
+export interface RecallReviewCard {
+  taskMemorySummary: Array<{
+    label: string;
+    summary: string;
+    reason: string;
+  }>;
+  preferenceMemorySummary: Array<{
+    scope: PreferenceScope;
+    summary: string;
+    reason: string;
+  }>;
+  options: RecallReviewOption[];
+}
+
+export const RecallReviewPolicyType = {
+  TASK_MEMORY: 'task_memory',
+  PROJECT_PREFERENCE: 'project_preference',
+  CONTACT_PREFERENCE: 'contact_preference',
+  PROPOSAL_TYPE: 'proposal_type',
+} as const;
+
+export type RecallReviewPolicyType =
+  (typeof RecallReviewPolicyType)[keyof typeof RecallReviewPolicyType];
+
+export interface RecallReviewPolicy {
+  id: string;
+  policyType: RecallReviewPolicyType;
+  scope: string | null;
+  subject: string | null;
+  proposalType: GuidanceActionType | null;
+  autoApply: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── 配置 ───
 export interface Config {
   version: number;
   executor: {
     command: string;
     timeout: number;
+    max_duration?: number;
   };
   orchestration: {
     reminder_enabled: boolean;

@@ -98,7 +98,13 @@ describe('Round 1 memory acceptance', () => {
     expect(session.getSnapshot().output.join('\n')).toContain('检测到重复模式');
 
     await session.submit(`/memory confirm ${candidates[0].id} --scope contact --subject 张总`, { awaitAsyncWork: true });
-    await session.submit('给张总再起草一封邮件，内容是提醒确认预算', { awaitAsyncWork: true });
+    await session.submit('给张总再起草一封邮件，内容是提醒确认预算');
+
+    const reviewOutput = session.getSnapshot().output.join('\n');
+    expect(reviewOutput).toContain('记忆召回确认');
+    expect(reviewOutput).toContain('[contact] 用正式语气');
+
+    await session.submit('y', { awaitAsyncWork: true });
 
     const output = session.getSnapshot().output.join('\n');
     expect(output).toContain('已确认偏好');
@@ -159,7 +165,15 @@ describe('Round 1 memory acceptance', () => {
     });
 
     session.initialize();
-    await session.submit('给张总整理一份 Phoenix 项目周报，今天明确要求先保留表格格式', { awaitAsyncWork: true });
+    await session.submit('给张总整理一份 Phoenix 项目周报，今天明确要求先保留表格格式');
+
+    const reviewOutput = session.getSnapshot().output.join('\n');
+    expect(reviewOutput).toContain('记忆召回确认');
+    expect(reviewOutput).toContain('Phoenix 项目材料统一使用 Phoenix 术语');
+    expect(reviewOutput).toContain('给张总的邮件使用正式语气');
+    expect(reviewOutput).toContain('输出尽量简洁');
+
+    await session.submit('y', { awaitAsyncWork: true });
 
     const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvedPreferences = executionInput.executionContextBundle.memoryContext.resolvedPreferences;

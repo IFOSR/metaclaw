@@ -168,6 +168,20 @@ describe('Round 1 memory resume acceptance', () => {
     await flushUpdates();
     await flushUpdates();
 
+    await inputCapture.handler?.('y', {});
+    await flushUpdates();
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('记忆召回确认');
+
+    await inputCapture.handler?.('y', {});
+    await flushUpdates();
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+    await flushUpdates();
+
     const resumedInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0];
     const resolvedPreferences = resumedInput.executionContextBundle.memoryContext.resolvedPreferences;
 

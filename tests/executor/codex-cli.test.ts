@@ -36,19 +36,19 @@ describe('CodexCliAdapter', () => {
       expect(prompt).toContain('不要读取或访问本地文件系统和工作目录');
     });
 
-    it('file archive tasks should allow writing to the workspace target directory', () => {
+    it('file-generation tasks should force file output and ban full content echoing', () => {
       const prompt = getPrompt(adapter, makeInput({
         executionContextBundle: {
           mode: 'fresh',
           taskBrief: {
             id: 'task_1',
-            title: '归档 harness 分析',
-            goal: '保存文章到 projects 目录',
+            title: '生成活动页',
+            goal: '生成 HTML 文件并存入任务目录',
             status: 'ready',
             summary: '',
           },
           memoryContext: {
-            explicitUserInstruction: '存档到当前项目的projects目录下',
+            explicitUserInstruction: '生成一个 html 文件',
             resolvedPreferences: [],
           },
           historyContext: {
@@ -62,17 +62,19 @@ describe('CodexCliAdapter', () => {
           workspaceContext: {
             allowFilesystem: true,
             workingDirectory: '/repo',
-            targetPaths: ['/repo/projects'],
+            targetPaths: ['/repo/metaclaw-tasks/task_1'],
           },
           executionInstructions: [
             '必须把结果写入本地文件系统，不要只在回复中描述结果',
-            '目标目录：/repo/projects',
+            '不要在回复中粘贴或打印完整文件内容，只返回简短摘要和最终文件路径',
+            '目标目录：/repo/metaclaw-tasks/task_1',
           ],
         },
       }));
 
       expect(prompt).toContain('可以访问当前项目工作目录');
-      expect(prompt).toContain('/repo/projects');
+      expect(prompt).toContain('/repo/metaclaw-tasks/task_1');
+      expect(prompt).toContain('不要在回复中粘贴或打印完整文件内容');
       expect(prompt).not.toContain('不要读取或访问本地文件系统和工作目录');
     });
 

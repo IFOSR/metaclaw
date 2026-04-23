@@ -220,13 +220,12 @@ describe('scripted session', () => {
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
-    const artifactDir = resolve(tmpdir(), 'metaclaw-artifact-tests');
-    const artifactPath = resolve(artifactDir, 'artifact-note.md');
-
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockImplementation(async () => {
-        mkdirSync(artifactDir, { recursive: true });
+      execute: vi.fn().mockImplementation(async (input) => {
+        const artifactDir = input.executionContextBundle?.workspaceContext?.targetPaths[0];
+        const artifactPath = resolve(artifactDir!, 'artifact-note.md');
+        mkdirSync(artifactDir!, { recursive: true });
         writeFileSync(artifactPath, '# Artifact\nsaved by test\n', 'utf-8');
         return {
           success: true,
@@ -246,7 +245,7 @@ describe('scripted session', () => {
 
     await runScriptedSession({
       inputs: [
-        `写一段测试内容，保存到${artifactDir}目录下`,
+        '写一段测试内容，保存成 markdown 文件',
       ],
       taskEngine,
       memoryEngine,
@@ -260,6 +259,59 @@ describe('scripted session', () => {
     });
 
     const doneTask = taskEngine.list().find(task => task.status === 'done');
-    expect((doneTask as any)?.artifacts).toEqual([artifactPath]);
+    expect((doneTask as any)?.artifacts).toHaveLength(1);
+    expect((doneTask as any)?.artifacts[0]).toBe(resolve(process.cwd(), 'metaclaw-tasks', doneTask!.id, 'artifact-note.md'));
+  });
+
+  it('shows artifact summaries instead of raw html output for file-generation tasks', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockImplementation(async (input) => {
+        const targetDir = input.executionContextBundle?.workspaceContext?.targetPaths[0];
+        const artifactPath = resolve(targetDir!, 'landing-page.html');
+        mkdirSync(targetDir!, { recursive: true });
+        writeFileSync(artifactPath, '<!DOCTYPE html><html><body><h1>报名页</h1></body></html>', 'utf-8');
+        return {
+          success: true,
+          output: `已生成 HTML 文件：${artifactPath}\n<!DOCTYPE html><html><body><h1>报名页</h1></body></html>`,
+          exitCode: 0,
+          durationMs: 200,
+        };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '明确工作任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const result = await runScriptedSession({
+      inputs: [
+        '生成一个报名落地页 html 文件',
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_html_artifact',
+      contextRecaller,
+      llmBridge,
+    });
+
+    expect(result.output.join('\n')).toContain('✓ 任务完成');
+    expect(result.output.join('\n')).toContain('已记录 1 个任务产物');
+    expect(result.output.join('\n')).not.toContain('<!DOCTYPE html>');
+    expect(result.output.join('\n')).not.toContain('<html><body>');
   });
 });

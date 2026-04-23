@@ -124,6 +124,74 @@ describe('App conversation routing', () => {
     app.cleanup();
   });
 
+  it('renders a visible paragraph break before a new user turn after prior transcript output', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn()
+        .mockResolvedValueOnce({
+          success: true,
+          output: '第一轮回复',
+          exitCode: 0,
+          durationMs: 50,
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          output: '第二轮回复',
+          exitCode: 0,
+          durationMs: 50,
+        }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: '普通对话',
+      }),
+      resolveIntent: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_visible_user_turn_break',
+        contextRecaller,
+        llmBridge,
+      }),
+    );
+
+    for (const char of '你在忙啥') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+    await flushUpdates();
+
+    for (const char of '状态是 running 吗') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+
+    expect(app.lastFrame()).toContain('当前输入');
+    expect(app.lastFrame()).toMatch(/第一轮回复[\s\S]*当前输入[\s\S]*> 状态是 running 吗/);
+
+    app.unmount();
+    app.cleanup();
+  });
+
   it('prefers the current conversation focus for short continuation prompts instead of resuming an old parked task', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);

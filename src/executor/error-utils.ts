@@ -37,6 +37,14 @@ export function formatExecutorError(raw?: string): string | undefined {
     return '执行器网络连接失败，请检查网络或代理配置';
   }
 
+  if (/executor idle timeout/i.test(normalized)) {
+    return '执行器空闲超时，长时间无输出或状态变化，请检查执行器是否卡住';
+  }
+
+  if (/executor max duration exceeded/i.test(normalized)) {
+    return '执行器运行总时长超限，请检查是否出现异常阻塞';
+  }
+
   if (/(timed out|timeout)/i.test(normalized)) {
     return '执行器调用超时';
   }
@@ -67,7 +75,9 @@ export function formatExecutorError(raw?: string): string | undefined {
 
 export function isRecoverableExecutorFailure(raw?: string): boolean {
   if (!raw) return false;
-  return isNetworkFailure(raw) || /(timed out|timeout|执行器调用超时)/i.test(raw) || isPermissionFailure(raw);
+  return isNetworkFailure(raw)
+    || /(executor idle timeout|executor max duration exceeded|timed out|timeout|执行器调用超时|执行器空闲超时|执行器运行总时长超限)/i.test(raw)
+    || isPermissionFailure(raw);
 }
 
 export function formatExecutorProgress(raw?: string): string | undefined {

@@ -97,6 +97,103 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN artifacts_json TEXT DEFAULT '[]';
     `,
   },
+  {
+    version: 5,
+    up: `
+      CREATE TABLE IF NOT EXISTS guidance_events (
+        id TEXT PRIMARY KEY,
+        trigger TEXT NOT NULL,
+        task_id TEXT,
+        action_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        reasons_json TEXT NOT NULL DEFAULT '[]',
+        confidence REAL DEFAULT 0,
+        requires_confirmation INTEGER DEFAULT 1,
+        accepted_at TEXT,
+        dismissed_at TEXT,
+        executed_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS task_relations (
+        id TEXT PRIMARY KEY,
+        source_task_id TEXT NOT NULL,
+        target_task_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS task_memory_embeddings (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        memory_kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimension INTEGER NOT NULL,
+        vector_json TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS preference_embeddings (
+        id TEXT PRIMARY KEY,
+        preference_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimension INTEGER NOT NULL,
+        vector_json TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_recall_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        query_text TEXT NOT NULL,
+        query_hash TEXT NOT NULL,
+        task_candidates_json TEXT NOT NULL DEFAULT '[]',
+        preference_candidates_json TEXT NOT NULL DEFAULT '[]',
+        review_summary_json TEXT NOT NULL DEFAULT '{}',
+        accepted_candidates_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS recall_review_policies (
+        id TEXT PRIMARY KEY,
+        policy_type TEXT NOT NULL,
+        scope TEXT,
+        subject TEXT,
+        proposal_type TEXT,
+        auto_apply INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX idx_guidance_events_task ON guidance_events(task_id, created_at);
+      CREATE INDEX idx_task_relations_source ON task_relations(source_task_id, relation_type);
+      CREATE INDEX idx_task_relations_target ON task_relations(target_task_id, relation_type);
+      CREATE INDEX idx_task_memory_embeddings_task ON task_memory_embeddings(task_id, memory_kind);
+      CREATE INDEX idx_preference_embeddings_preference ON preference_embeddings(preference_id);
+      CREATE INDEX idx_memory_recall_events_task ON memory_recall_events(task_id, created_at);
+      CREATE INDEX idx_recall_review_policies_lookup
+        ON recall_review_policies(policy_type, scope, subject, proposal_type);
+    `,
+  },
+  {
+    version: 6,
+    up: `
+      CREATE TABLE IF NOT EXISTS session_state (
+        id TEXT PRIMARY KEY,
+        last_focused_task_id TEXT,
+        last_completed_task_id TEXT,
+        last_session_id TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 /**

@@ -123,4 +123,63 @@ describe('App network failure blocking', () => {
     app.unmount();
     app.cleanup();
   });
+
+  it('moves a task into blocked with an idle-timeout-specific hint after executor inactivity', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: false,
+        output: '',
+        error: '执行器空闲超时，长时间无输出或状态变化，请检查执行器是否卡住',
+        exitCode: 1,
+        durationMs: 1800,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_idle_timeout_block',
+        contextRecaller,
+        llmBridge,
+      }),
+    );
+
+    for (const char of '生成 HTML 幻灯片') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+
+    const blockedTask = taskRepo.findByStatus('blocked')[0];
+    expect(blockedTask).toBeTruthy();
+    expect(blockedTask.dependencies[0]?.description).toBe('执行器空闲超时，长时间无输出或状态变化，请检查执行器是否卡住');
+    expect(app.lastFrame()).toContain('执行器长时间没有输出或状态变化');
+    expect(app.lastFrame()).toContain(`/task ${blockedTask.id} unblock`);
+
+    app.unmount();
+    app.cleanup();
+  });
 });

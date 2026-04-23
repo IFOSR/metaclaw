@@ -46,6 +46,7 @@ async function main() {
   const executor = createExecutor({
     command: config.executor.command,
     timeout: config.executor.timeout,
+    maxDuration: config.executor.max_duration,
     workspaceRoot: process.cwd(),
   });
 

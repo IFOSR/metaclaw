@@ -8,6 +8,12 @@ Metaclaw 是一个面向知识工作者的 TUI 应用，专注解决三个核心
 2. **Memory（记忆）** — 自动沉淀用户偏好，减少重复说明
 3. **Guidance（引导）** — 主动告诉你现在该做什么、哪里卡住了
 
+当前版本已经进入 V2 交互流：
+
+- 主动建议升级为需要用户确认的 `操作提案`
+- memory 命中后不再默认静默注入，而是先进入 `记忆召回确认`
+- 用户可按场景授权后续同类 recall 自动采用
+
 ## 快速开始
 
 ### 安装
@@ -159,7 +165,7 @@ status: running codex-cli
 # - 材料状态
 
 # 如果任务要求把结果写到目录
-> 把刚才的分析存档到当前项目的projects目录下
+> 把刚才的分析保存成 markdown 文件
 
 # 执行成功后，Metaclaw 会记录任务产物路径
 > /task <id>
@@ -177,6 +183,34 @@ status: running codex-cli
 → 已确认高风险动作，继续执行原请求
 ```
 
+### V2 提案与记忆召回确认
+
+```text
+┌─ 操作提案 ───────────────────────────────────────┐
+│ 场景：启动建议
+│ 动作：建议恢复任务 #task_123: Phoenix 周报整理
+│ 理由：已完成 80%，继续成本更低
+│ 请输入 [y] 接受并继续恢复 / [n] 暂不处理 / [r] 重新查看
+└──────────────────────────────────────────────────┘
+
+> y
+
+┌─ 记忆召回确认 ───────────────────────────────────┐
+│ 当前任务：#task_123 Phoenix 周报整理
+│ 1. [project] Phoenix 周报统一保留风险栏目和经营数据栏目
+│    判断依据：与当前输入语义相近
+│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [a] 后续同类自动采用 / [r] 重新查看
+└──────────────────────────────────────────────────┘
+
+> y
+→ 派发给 codex-cli...
+```
+
+相关命令：
+
+- `/memory review-policy`
+- `/memory review-policy revoke <id>`
+
 ### 任务盘面
 
 ```bash
@@ -191,13 +225,15 @@ status: running codex-cli
 
 1. **用户输入自然语言** → 创建任务对象
 2. **任务状态迁移** → CREATED → READY → RUNNING
-3. **偏好召回** → 根据关键词匹配相关偏好
-4. **上下文注入** → 将任务目标、已完成进度、偏好注入执行器
-5. **调用默认执行器（Codex CLI）** → 通过 CLI 子进程执行
-6. **结果回流** → 更新任务摘要、标记完成
-7. **模式观察** → 提取重复模式，达到 3 次进入候选偏好确认
-8. **主动建议** → 推荐下一个优先任务
-9. **结果回流** → 文件产物会登记回任务对象并展示在任务视图中
+3. **偏好召回** → 根据规则与 embedding 命中相关记忆
+4. **Recall Review** → 把拟采用内容整理成可判断摘要卡
+5. **用户确认** → `y / n / s / a / r`
+6. **上下文注入** → 只把确认通过的记忆注入执行器
+7. **调用默认执行器（Codex CLI）** → 通过 CLI 子进程执行
+8. **结果回流** → 更新任务摘要、标记完成
+9. **模式观察** → 提取重复模式，达到 3 次进入候选偏好确认
+10. **主动提案** → 启动时、完成后或恢复场景生成下一步 proposal
+11. **结果回流** → 文件产物会登记回任务对象并展示在任务视图中
 
 ### 偏好生命周期
 
@@ -212,7 +248,7 @@ observations 表记录（第 1 次）
   ↓
 用户通过 `y` / `e <新内容>` / `/memory confirm` 确认 → preferences 表（status=confirmed）
   ↓
-后续任务自动召回并注入执行器
+后续任务命中后，先进入 recall review，再把确认通过的内容注入执行器
 ```
 
 ### 任务连续性
@@ -235,13 +271,19 @@ src/
 │   ├── types.ts           # 类型定义
 │   ├── task-engine.ts     # 任务状态机、快照、恢复
 │   ├── memory-engine.ts   # 偏好观察、确认、召回
-│   └── orchestration.ts   # 优先级评分、盘面生成
+│   ├── hybrid-memory-recaller.ts # 规则+语义混合召回
+│   ├── recall-review-builder.ts  # recall review 决策摘要
+│   ├── recall-policy-service.ts  # recall 自动采用策略判定
+│   └── orchestration.ts   # 优先级评分、盘面生成 / proposal 输出
 ├── storage/        # 数据层
 │   ├── database.ts        # SQLite 初始化
 │   ├── migrations.ts      # Schema 迁移
 │   ├── task-repo.ts       # 任务数据访问
 │   ├── preference-repo.ts # 偏好数据访问
-│   └── observation-repo.ts # 观察记录
+│   ├── observation-repo.ts # 观察记录
+│   ├── task-memory-embedding-repo.ts # 任务 memory 向量
+│   ├── preference-embedding-repo.ts  # 偏好向量
+│   └── recall-review-policy-repo.ts  # recall 免确认策略
 ├── executor/       # 执行器适配
 │   ├── adapter.ts         # 抽象接口
 │   ├── codex-cli.ts       # Codex CLI 适配器（默认）
@@ -268,7 +310,8 @@ version: 1
 
 executor:
   command: codex           # 默认执行器；可改为 claude
-  timeout: 300             # 执行超时（秒）
+  timeout: 300             # 空闲超时（秒）：长时间无 stdout/stderr 活动才视为异常
+  max_duration: 3600       # 总时长上限（秒）：宽松兜底，避免任务无限挂住
 
 orchestration:
   reminder_enabled: true   # 是否启用主动提醒

@@ -230,20 +230,20 @@ describe('ResumeContextBuilder', () => {
     ]);
   });
 
-  it('builds a workspace write context for archive-to-project-directory requests', async () => {
-    const task = taskEngine.create({ title: 'harness 分析归档', goal: '将 harness 分析存档到项目目录' });
+  it('builds a task-scoped workspace write context for file-generation requests', async () => {
+    const task = taskEngine.create({ title: '落地活动页', goal: '生成一个可交付的 HTML 文件' });
 
     const bundle = await builder.build({
       taskId: task.id,
       mode: 'fresh',
-      userInput: '刚才我让你做了harness的一个分析，文章写的很好，存档到当前项目的projects目录下',
+      userInput: '生成一个宣传活动页的 html 文件，包含标题和报名按钮',
       sessionId: 'sess_4',
     });
 
     expect(bundle.workspaceContext?.allowFilesystem).toBe(true);
-    expect(bundle.workspaceContext?.targetPaths[0]).toMatch(/\/projects$/);
+    expect(bundle.workspaceContext?.targetPaths[0]).toBe(resolve(process.cwd(), 'metaclaw-tasks', task.id));
     expect(bundle.executionInstructions.some(line => line.includes('必须把结果写入本地文件系统'))).toBe(true);
-    expect(bundle.executionInstructions.some(line => line.includes('projects'))).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('不要在回复中粘贴或打印完整文件内容'))).toBe(true);
   });
 
   it('extracts readable text material excerpts into the execution bundle', async () => {

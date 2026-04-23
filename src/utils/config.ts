@@ -10,6 +10,7 @@ const DEFAULT_CONFIG: Config = {
   executor: {
     command: 'codex',
     timeout: 300,
+    max_duration: 3600,
   },
   orchestration: {
     reminder_enabled: true,

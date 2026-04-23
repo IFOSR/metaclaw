@@ -229,4 +229,23 @@ describe('ContextRecaller', () => {
     const keywordTurns = result.filter(t => t.source === 'keyword');
     expect(keywordTurns).toHaveLength(1);
   });
+
+  it('can recall only the interactions of accepted related tasks', () => {
+    insertInteraction(db, {
+      id: 'int_task_a_1', taskId: 'task_A', sessionId: 'sess_1',
+      userInput: '整理 Phoenix 周报结构', systemOutput: '已生成结构草案',
+      createdAt: '2026-04-12T10:00:00Z',
+    });
+    insertInteraction(db, {
+      id: 'int_task_b_1', taskId: 'task_B', sessionId: 'sess_1',
+      userInput: '补齐经营数据', systemOutput: '经营数据已补充',
+      createdAt: '2026-04-12T10:01:00Z',
+    });
+
+    const result = recaller.recallForTaskIds(['task_B']);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].taskId).toBe('task_B');
+    expect(result[0].userInput).toContain('经营数据');
+  });
 });

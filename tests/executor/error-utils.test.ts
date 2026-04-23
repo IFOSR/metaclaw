@@ -46,4 +46,14 @@ describe('formatExecutorError', () => {
 
     expect(formatExecutorError(raw)).toBe('执行器网络连接失败，请检查网络或代理配置');
   });
+
+  it('maps executor idle timeout to a distinct user-facing message', () => {
+    expect(formatExecutorError('executor idle timeout')).toBe('执行器空闲超时，长时间无输出或状态变化，请检查执行器是否卡住');
+    expect(isRecoverableExecutorFailure('executor idle timeout')).toBe(true);
+  });
+
+  it('maps executor max duration timeout to a distinct user-facing message', () => {
+    expect(formatExecutorError('executor max duration exceeded')).toBe('执行器运行总时长超限，请检查是否出现异常阻塞');
+    expect(isRecoverableExecutorFailure('executor max duration exceeded')).toBe(true);
+  });
 });

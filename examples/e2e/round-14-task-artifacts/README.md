@@ -4,13 +4,11 @@
 
 ## 真实验收
 
-1. 先准备目录：
-   `mkdir -p /tmp/metaclaw-e2e-artifacts`
-2. 用真实 `codex-cli` 运行：
+1. 用真实 `codex-cli` 运行：
    `METACLAW_HOME=/tmp/metaclaw-e2e-round14 node dist/index.js --script examples/e2e/round-14-task-artifacts/scripts/00-task-artifacts-smoke.txt`
-3. 预期结果：
+2. 预期结果：
    执行完成后出现 `已记录 1 个任务产物`
-4. 预期结果：
+3. 预期结果：
    `/task {{last_task_id}}` 详情页中出现 `任务产物`
-5. 预期结果：
-   任务产物路径位于 `/tmp/metaclaw-e2e-artifacts`
+4. 预期结果：
+   任务产物路径位于当前运行目录下的 `metaclaw-tasks/<task_id>/`

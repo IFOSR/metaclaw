@@ -10,6 +10,7 @@ PID_FILE="$HOME/.metaclaw/metaclaw.pid"
 LOG_FILE="$HOME/.metaclaw/metaclaw.log"
 NODE_BIN="node"
 APP_ENTRY="$SCRIPT_DIR/dist/index.js"
+BUILD_STAMP="$SCRIPT_DIR/dist/index.js"
 
 # 确保目录存在
 mkdir -p "$HOME/.metaclaw"
@@ -32,6 +33,35 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+needs_rebuild() {
+    if [ ! -f "$BUILD_STAMP" ]; then
+        return 0
+    fi
+
+    local newer_file
+    newer_file=$(find \
+        "$SCRIPT_DIR/src" \
+        "$SCRIPT_DIR/package.json" \
+        "$SCRIPT_DIR/package-lock.json" \
+        "$SCRIPT_DIR/tsconfig.json" \
+        "$SCRIPT_DIR/tsup.config.ts" \
+        -type f -newer "$BUILD_STAMP" 2>/dev/null | head -n 1 || true)
+
+    [ -n "$newer_file" ]
+}
+
+ensure_built() {
+    if [ ! -f "$APP_ENTRY" ]; then
+        log_warn "未找到构建产物，正在自动构建..."
+    elif needs_rebuild; then
+        log_info "检测到源码更新，正在自动构建..."
+    else
+        return 0
+    fi
+
+    (cd "$SCRIPT_DIR" && npm run build)
+}
+
 # 检查进程是否运行
 is_running() {
     if [ -f "$PID_FILE" ]; then
@@ -52,11 +82,7 @@ start() {
 
     log_info "启动 Metaclaw..."
 
-    # 检查构建产物
-    if [ ! -f "$APP_ENTRY" ]; then
-        log_error "未找到构建产物，请先运行: npm run build"
-        exit 1
-    fi
+    ensure_built
 
     # 前台启动（TUI 需要 TTY）
     echo "$$" > "$PID_FILE"

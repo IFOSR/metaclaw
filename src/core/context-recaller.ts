@@ -127,6 +127,23 @@ export class ContextRecaller {
     return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  recallForTaskIds(taskIds: string[], limitPerTask = 3): ConversationTurn[] {
+    const uniqueTaskIds = Array.from(new Set(taskIds.filter(Boolean)));
+    if (uniqueTaskIds.length === 0) {
+      return [];
+    }
+
+    const turns: ConversationTurn[] = [];
+    for (const taskId of uniqueTaskIds) {
+      const rows = this.db.prepare(
+        'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE task_id = ? ORDER BY created_at DESC LIMIT ?'
+      ).all(taskId, limitPerTask) as InteractionRow[];
+      turns.push(...rows.map(row => toTurn(row, 'task')));
+    }
+
+    return turns.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
   private async recallByLlm(userInput: string, excludeIds: Set<string>): Promise<ConversationTurn[]> {
     try {
       const candidates = this.db.prepare(

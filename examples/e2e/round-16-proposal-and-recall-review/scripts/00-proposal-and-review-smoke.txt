@@ -1,0 +1,13 @@
+# Round 16 smoke
+# 预先添加一条会命中的项目偏好
+/memory add --scope project --type domain --subject Phoenix Phoenix 周报统一保留风险栏目和经营数据栏目
+
+# 这里假设当前数据库里已经存在可触发 proposal 的任务。
+# 如果启动后已经出现“操作提案”，先接受提案。
+y
+
+# 接着接受 recall review
+y
+
+# 查看当前 auto-apply policy
+/memory review-policy

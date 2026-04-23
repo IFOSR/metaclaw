@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
@@ -149,5 +149,97 @@ describe('MemoryEngine', () => {
     expect(results).toHaveLength(1);
     expect(results[0].scope).toBe('global');
     expect(results[0].content).toBe('输出尽量简洁');
+  });
+
+  it('does not apply personality-tone global preferences to structured deliverable scenes like PPT', () => {
+    engine.addManual({
+      content: '用活泼的语气',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      keywords: ['整理成ppt'],
+      userInput: '直接把刚才我们讨论的内容整理成ppt',
+    });
+
+    expect(results).toHaveLength(0);
+  });
+
+  it('still applies general global expression preferences in structured tasks when they are not personality-tone cues', () => {
+    engine.addManual({
+      content: '输出尽量简洁',
+      scope: 'global',
+      type: 'style',
+    });
+    engine.addManual({
+      content: '用活泼的语气',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      keywords: ['项目', '周报'],
+      userInput: '整理 Phoenix 项目周报，输出尽量简洁',
+    });
+
+    expect(results.map(result => result.content)).toContain('输出尽量简洁');
+    expect(results.map(result => result.content)).not.toContain('用活泼的语气');
+  });
+
+  it('builds review candidates and delegates semantic merge to hybrid recaller', async () => {
+    const db = createTestDb();
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    prefRepo.insert({
+      id: 'pref_project',
+      type: 'domain',
+      scope: 'project',
+      subject: 'Phoenix',
+      content: 'Phoenix 周报统一保留风险栏目',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 2,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-04-20T00:00:00Z',
+      createdAt: '2026-04-20T00:00:00Z',
+      updatedAt: '2026-04-20T00:00:00Z',
+    });
+    const hybridRecaller = {
+      recall: vi.fn().mockResolvedValue({
+        preferenceCandidates: [{
+          id: 'pref_project',
+          preferenceId: 'pref_project',
+          scope: 'project',
+          subject: 'Phoenix',
+          summary: 'Phoenix 周报统一保留风险栏目',
+          reason: '命中主体：Phoenix',
+          source: 'rule',
+          score: 100,
+        }],
+        taskCandidates: [],
+        auditId: 'recall_1',
+      }),
+    };
+    const reviewEngine = new MemoryEngine(prefRepo, obsRepo, undefined, hybridRecaller as any);
+
+    const result = await reviewEngine.recallForReview({
+      keywords: ['Phoenix', '周报'],
+      subject: 'Phoenix',
+      userInput: '继续整理 Phoenix 周报',
+    });
+
+    expect(hybridRecaller.recall).toHaveBeenCalledTimes(1);
+    expect(hybridRecaller.recall).toHaveBeenCalledWith(expect.objectContaining({
+      queryText: '继续整理 Phoenix 周报',
+      rulePreferenceCandidates: [
+        expect.objectContaining({
+          id: 'pref_project',
+          source: 'rule',
+        }),
+      ],
+    }));
+    expect(result.auditId).toBe('recall_1');
   });
 });

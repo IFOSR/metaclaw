@@ -1,3 +1,4 @@
+import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 import type { PreferenceScope } from '../core/types.js';
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
 
@@ -57,6 +58,24 @@ function formatPreferenceLine(preference: {
 }): string {
   const subjectText = preference.subject ? ` (${preference.subject})` : '';
   return `  #${preference.id} [${preference.scope}]${subjectText} ${preference.content}`;
+}
+
+function formatReviewPolicyLine(policy: {
+  id: string;
+  policyType: string;
+  scope: string | null;
+  subject: string | null;
+  proposalType: string | null;
+  autoApply: boolean;
+}): string {
+  const fragments = [
+    policy.policyType,
+    policy.scope ? `scope=${policy.scope}` : null,
+    policy.subject ? `subject=${policy.subject}` : null,
+    policy.proposalType ? `proposal=${policy.proposalType}` : null,
+    `autoApply=${policy.autoApply ? 'yes' : 'no'}`,
+  ].filter(Boolean);
+  return `  #${policy.id} ${fragments.join(' | ')}`;
 }
 
 export const memoryCommand: CommandHandler = {
@@ -171,6 +190,29 @@ export const memoryCommand: CommandHandler = {
         return {
           type: 'text',
           content: `偏好统计：\n  已确认: ${confirmed}\n  待确认: ${candidates}\n  总计: ${all.length}`,
+        };
+      }
+
+      case 'review-policy': {
+        const repo = new RecallReviewPolicyRepo(context.db);
+
+        if (args[1] === 'revoke') {
+          const policyId = args[2];
+          if (!policyId) {
+            return { type: 'text', content: '用法: /memory review-policy revoke <id>' };
+          }
+          repo.delete(policyId);
+          return { type: 'text', content: `已撤销 recall review policy #${policyId}` };
+        }
+
+        const policies = repo.findAll();
+        if (policies.length === 0) {
+          return { type: 'text', content: '暂无 recall review policy' };
+        }
+
+        return {
+          type: 'text',
+          content: `Recall Review Policies:\n${policies.map(formatReviewPolicyLine).join('\n')}`,
         };
       }
 
