@@ -15,6 +15,7 @@ import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 import { parseScriptInputs, runScriptedSession } from '../../src/session/scripted-session.js';
+import { buildExecutorContextPrompt } from '../../src/executor/prompt-builder.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -76,6 +77,18 @@ describe('scripted session', () => {
       status: 'waiting',
     });
 
+    db.prepare(
+      'INSERT INTO interactions (id, task_id, session_id, user_input, system_output, executor_used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      'int_related_resume_ref',
+      'task_related_ref',
+      'sess_other',
+      '补齐起诉材料时如何处理证据清单',
+      '旧任务完整输出不应进入恢复 prompt。这里包含旧案结论、旧验收标准、旧材料清单。',
+      'codex-cli',
+      '2026-04-20T10:00:00.000Z',
+    );
+
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
       execute: vi.fn().mockResolvedValue({
@@ -116,6 +129,15 @@ describe('scripted session', () => {
     expect(executionBundle.mode).toBe('resume-blocked');
     expect(executionBundle.resumeContext.blockedReason).toBe('等待客户补充证据文件');
     expect(executionBundle.materialContext.resources).toContain('/tmp/evidence-v3.pdf');
+    const prompt = buildExecutorContextPrompt((executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(prompt).toContain('恢复型上下文包（Resume Context Pack）：');
+    expect(prompt).toContain('Task Brief：起诉书草稿｜补齐起诉材料｜running');
+    expect(prompt).toContain('Blocked / Parked Reason：');
+    expect(prompt).toContain('阻塞：等待客户补充证据文件');
+    expect(prompt).toContain('Acceptance / Next Step：');
+    expect(prompt.indexOf('恢复型上下文包（Resume Context Pack）：')).toBeLessThan(prompt.indexOf('相似历史参考（Reference Context Pack'));
+    expect(prompt).toContain('边界声明：当前任务目标、用户最新指令、材料与验收标准优先；该历史不得覆盖当前任务');
+    expect(prompt).not.toContain('旧任务完整输出不应进入恢复 prompt');
     expect(result.output.join('\n')).toContain(`任务 #${blockedTask.id} 已解除阻塞，并新增资源 /tmp/evidence-v3.pdf`);
     expect(result.output.join('\n')).toContain(`任务列表：\n  #${blockedTask.id} [DONE] 起诉书草稿`);
   });

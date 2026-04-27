@@ -321,7 +321,35 @@ orchestration:
 ui:
   language: zh-CN          # 界面语言
   dashboard_on_start: true # 启动时显示盘面
+
+notifications:
+  feishu:
+    enabled: false         # 开启后会把待确认偏好候选发送到飞书群机器人
+    webhook_url: ""        # 飞书自定义机器人 webhook
+    secret: ""             # 可选：飞书机器人签名密钥
+
+integrations:
+  feishu:
+    enabled: false         # 开启飞书应用双向通信
+    app_id: ""             # 飞书应用 App ID，例如 cli_xxx
+    app_secret_env: FEISHU_APP_SECRET # 推荐用环境变量保存 App Secret
+    event_port: 8787       # 本地 callback HTTP 端口
+    event_path: /feishu/events # 飞书事件订阅请求路径
+    verification_token: "" # 可选：飞书事件订阅 Verification Token
 ```
+
+启动前需要在同一个 shell 里导出 App Secret：
+
+```bash
+export FEISHU_APP_SECRET="你的飞书应用 App Secret"
+./metaclaw.sh start
+```
+
+飞书通知当前覆盖“待确认偏好候选”事件，包括高置信偏好识别和三次重复模式识别。
+通知只做提醒，不会在飞书里直接确认偏好；确认仍需回到 Metaclaw 输入 `/memory confirm <id>` 或在 TUI 中输入 `y`。
+
+如果要通过飞书和 Metaclaw 双向对话，使用 `integrations.feishu`。启动后 Metaclaw 会在本机监听 `event_port + event_path`，需要用内网穿透或公网反代把该地址配置到飞书应用的事件订阅 Request URL。
+收到飞书文本消息后，Metaclaw 会按普通输入处理，并把新增输出回发到同一个飞书会话。
 
 ## 开发
 

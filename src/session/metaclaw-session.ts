@@ -15,6 +15,7 @@ import type { TaskEngine } from '../core/task-engine.js';
 import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
+import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
 import { SchedulerEngine } from '../core/scheduler.js';
@@ -26,11 +27,15 @@ import { RecallPolicyService } from '../core/recall-policy-service.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
+import { learningCommand } from '../commands/learning-commands.js';
 import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCommand, exitCommand } from '../commands/global-commands.js';
 import { generateInteractionId } from '../utils/id.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
+import { RecallFeedbackRepo, type RecallFeedbackAction } from '../storage/recall-feedback-repo.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
+import { SkillUsageEventRepo } from '../storage/skill-usage-event-repo.js';
+import { parseSkillUsageEventLine } from '../executor/skill-usage-event-parser.js';
 import {
   buildSchedulingReason,
   extractPatterns,
@@ -47,6 +52,7 @@ import {
   parsePriorityHint,
   planTaskExecution,
   extractInlineResourceMatches,
+  extractHighConfidencePreferenceCandidates,
   stripInlineResourceMatches,
   type QueuedExecutionRequest,
 } from './session-helpers.js';
@@ -61,6 +67,7 @@ export interface MetaclawSessionDeps {
   sessionId: string;
   contextRecaller: ContextRecaller;
   llmBridge: LlmBridge;
+  notifier?: NotificationService;
 }
 
 export interface SessionSnapshot {
@@ -157,8 +164,10 @@ export class MetaclawSession {
   private readonly router: CommandRouter;
   private readonly scheduler: SchedulerEngine;
   private readonly sessionStateRepo: SessionStateRepo;
+  private readonly notifier: NotificationService;
 
   constructor(private deps: MetaclawSessionDeps) {
+    this.notifier = deps.notifier ?? new NoopNotificationService();
     this.sessionStateRepo = new SessionStateRepo(deps.db);
     this.resumeContextBuilder = new ResumeContextBuilder(
       deps.taskEngine,
@@ -304,6 +313,10 @@ export class MetaclawSession {
     }
   }
 
+  appendSystemMessage(...lines: string[]): void {
+    this.appendOutput(...lines);
+  }
+
   maybeEmitIdleGuidance(nowMs = Date.now()): boolean {
     if (!this.deps.config.orchestration.reminder_enabled) {
       return false;
@@ -430,7 +443,7 @@ export class MetaclawSession {
     }
 
     lines.push(
-      '│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [a] 后续同类自动采用 / [r] 重新查看',
+      '│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [i 编号...] 标记不相关 / [h 编号...] 隐藏 / [m] 查看更多 / [a] 后续同类自动采用 / [r] 重新查看',
       '└──────────────────────────────────────────────────┘',
     );
 
@@ -573,12 +586,39 @@ export class MetaclawSession {
   }
 
   private parseRecallSelectionInput(input: string, maxIndex: number): number[] | null {
-    const match = input.trim().match(/^s(?:\s+(.+))$/iu);
+    const trimmed = input.trim();
+    const selectMatch = trimmed.match(/^s(?:\s+(.+))$/iu);
+    if (selectMatch) {
+      return this.parseRecallIndexes(selectMatch[1] ?? '', maxIndex);
+    }
+
+    const quickPickMatch = trimmed.match(/^x\s*(\d+)$/iu);
+    if (quickPickMatch) {
+      return this.parseRecallIndexes(quickPickMatch[1] ?? '', maxIndex);
+    }
+
+    return null;
+  }
+
+  private parseRecallFeedbackInput(
+    input: string,
+    maxIndex: number,
+  ): { action: 'irrelevant' | 'hide'; indexes: number[] } | null {
+    const match = input.trim().match(/^(?:i|irrelevant|h|hide)(?:\s+(.+))$/iu);
     if (!match) {
       return null;
     }
 
-    const indexes = (match[1] ?? '')
+    const command = input.trim().split(/\s+/u)[0]?.toLowerCase();
+    const action = command === 'h' || command === 'hide' ? 'hide' : 'irrelevant';
+    return {
+      action,
+      indexes: this.parseRecallIndexes(match[1] ?? '', maxIndex),
+    };
+  }
+
+  private parseRecallIndexes(raw: string, maxIndex: number): number[] {
+    const indexes = raw
       .split(/[\s,，]+/)
       .map(token => Number.parseInt(token, 10))
       .filter(index => Number.isInteger(index) && index >= 1 && index <= maxIndex);
@@ -777,6 +817,7 @@ export class MetaclawSession {
     }
 
     if (/^n$/iu.test(trimmed)) {
+      this.recordRecallFeedback(pending, 'reject', pending.selectionItems.map((_, index) => index + 1));
       this.pendingRecallReview = null;
       this.approvedRecallSelections.set(pending.taskId, {
         authoritative: true,
@@ -785,6 +826,27 @@ export class MetaclawSession {
         acceptedMemoryResources: [],
       });
       void this.submitScheduledTask(pending.taskId, pending.request);
+      return true;
+    }
+
+    if (/^(?:m|more)$/iu.test(trimmed)) {
+      this.recordMoreRecallFeedback(pending);
+      this.appendOutput('→ 已记录“需要更多候选”的召回反馈；当前确认项保持不变。');
+      this.appendRecallReviewBlock(pending);
+      return true;
+    }
+
+    const feedbackInput = this.parseRecallFeedbackInput(trimmed, pending.selectionItems.length);
+    if (feedbackInput) {
+      if (feedbackInput.indexes.length === 0) {
+        this.appendOutput('→ 未识别有效编号，请输入如 `i 1` 或 `h 2`。');
+        return true;
+      }
+
+      this.recordRecallFeedback(pending, feedbackInput.action, feedbackInput.indexes);
+      this.appendOutput(feedbackInput.action === 'hide'
+        ? '→ 已记录隐藏反馈；后续召回将过滤这些记忆项。'
+        : '→ 已记录不相关反馈；后续召回将降低这些记忆项权重。');
       return true;
     }
 
@@ -820,6 +882,7 @@ export class MetaclawSession {
       }
 
       this.pendingRecallReview = null;
+      this.recordRecallFeedback(pending, 'select', indexes);
       this.approvedRecallSelections.set(
         pending.taskId,
         this.buildAcceptedRecallSelection(selectedPreferences, selectedTasks),
@@ -830,6 +893,51 @@ export class MetaclawSession {
 
     this.appendOutput('→ 当前有待确认的记忆召回，可输入 `y` / `n` / `s 编号...` / `a` / `r`。');
     return true;
+  }
+
+  private recordRecallFeedback(
+    pending: PendingRecallReview,
+    action: RecallFeedbackAction,
+    indexes: number[],
+  ): void {
+    if (indexes.length === 0) {
+      return;
+    }
+
+    const repo = new RecallFeedbackRepo(this.deps.db);
+    const now = new Date().toISOString();
+
+    for (const index of indexes) {
+      const item = pending.selectionItems[index - 1];
+      if (!item) {
+        continue;
+      }
+
+      repo.insert({
+        id: `recall_feedback_${generateInteractionId()}`,
+        auditId: pending.auditId,
+        queryTaskId: pending.taskId,
+        targetKind: item.kind,
+        targetId: item.kind === 'preference' ? item.candidate.preferenceId : item.candidate.taskId,
+        action,
+        note: `recall-review:${action}`,
+        createdAt: now,
+      });
+    }
+  }
+
+  private recordMoreRecallFeedback(pending: PendingRecallReview): void {
+    const repo = new RecallFeedbackRepo(this.deps.db);
+    repo.insert({
+      id: `recall_feedback_${generateInteractionId()}`,
+      auditId: pending.auditId,
+      queryTaskId: pending.taskId,
+      targetKind: 'task',
+      targetId: pending.taskId,
+      action: 'more',
+      note: 'recall-review:more',
+      createdAt: new Date().toISOString(),
+    });
   }
 
   private persistAutoApplyPolicies(pending: PendingRecallReview): void {
@@ -1177,6 +1285,23 @@ export class MetaclawSession {
       return;
     }
 
+    const highConfidencePreferenceCandidates = extractHighConfidencePreferenceCandidates(userInput);
+    if (highConfidencePreferenceCandidates.length > 0) {
+      const lines: string[] = [];
+      this.appendHighConfidencePreferenceCandidateBlocks(
+        highConfidencePreferenceCandidates,
+        `session:${this.deps.sessionId}`,
+        lines,
+      );
+
+      if (lines.length > 0) {
+        this.appendOutput(...lines);
+      } else {
+        this.appendOutput('→ 这条偏好已在候选或已确认记忆中，无需重复记录');
+      }
+      return;
+    }
+
     if (!options.skipRiskConfirmation && isRiskyExternalActionInstruction(userInput)) {
       this.pendingRiskConfirmation = { prompt: userInput };
       this.appendOutput(
@@ -1424,6 +1549,49 @@ export class MetaclawSession {
     return false;
   }
 
+  private appendHighConfidencePreferenceCandidateBlocks(
+    candidates: string[],
+    sourceId: string,
+    outputLines: string[],
+  ): void {
+    for (const candidate of candidates) {
+      const { observation, shouldPromptConfirm } = this.deps.memoryEngine.observeCandidate(candidate, sourceId);
+      if (!shouldPromptConfirm) {
+        continue;
+      }
+
+      if (!this.pendingPreferenceConfirmation) {
+        this.pendingPreferenceConfirmation = {
+          observationId: observation.id,
+          pattern: candidate,
+        };
+      }
+
+      outputLines.push(
+        '',
+        `💡 检测到可能的长期偏好："${candidate}"`,
+        '   要把它记为长期偏好吗？',
+        '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
+        `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
+      );
+      this.notifyMemoryCandidate(observation.id, candidate, 'high-confidence');
+    }
+  }
+
+  private notifyMemoryCandidate(
+    observationId: string,
+    pattern: string,
+    source: 'high-confidence' | 'repeated-pattern',
+  ): void {
+    void this.notifier.notifyMemoryCandidate({
+      observationId,
+      pattern,
+      source,
+    }).catch(() => {
+      // Notification failures must not block memory capture or task execution.
+    });
+  }
+
   private async handleConversationInput(userInput: string): Promise<void> {
     const conversationHistory = await this.deps.contextRecaller.recallAsync({
       taskId: '',
@@ -1655,6 +1823,9 @@ export class MetaclawSession {
 
       this.ensureWorkspaceTargets(executionContextBundle.workspaceContext?.targetPaths ?? []);
 
+      const executionId = `exec_${generateInteractionId()}`;
+      const skillUsageEventRepo = new SkillUsageEventRepo(this.deps.db);
+
       const result = await this.deps.executor.execute({
         task: this.deps.taskEngine['taskRepo'].findById(taskId)!,
         preferences,
@@ -1662,7 +1833,25 @@ export class MetaclawSession {
         conversationHistory,
         executionContextBundle,
         onProgress: (event) => {
-          const progressLine = `· #${taskId} ${event.text}`;
+          const parsedSkillEvent = event.skillEvent ?? parseSkillUsageEventLine(event.text);
+          const progressText = parsedSkillEvent
+            ? `Skill ${parsedSkillEvent.skillName}: ${parsedSkillEvent.message}`
+            : event.text;
+          const progressLine = `${parsedSkillEvent ? '🛠️' : '·'} #${taskId} ${progressText}`;
+          if (parsedSkillEvent) {
+            skillUsageEventRepo.insert({
+              id: `sue_${generateInteractionId()}`,
+              taskId,
+              executionId,
+              executorName: this.deps.executor.name,
+              skillName: parsedSkillEvent.skillName,
+              skillVersion: parsedSkillEvent.skillVersion,
+              eventType: parsedSkillEvent.eventType,
+              message: parsedSkillEvent.message,
+              payload: parsedSkillEvent.payload,
+              createdAt: new Date().toISOString(),
+            });
+          }
           if (this.lastProgressLineByTask.get(taskId) === progressLine) {
             return;
           }
@@ -1719,8 +1908,14 @@ export class MetaclawSession {
               '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
               `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
             );
+            this.notifyMemoryCandidate(observation.id, pattern, 'repeated-pattern');
           }
         }
+        this.appendHighConfidencePreferenceCandidateBlocks(
+          extractHighConfidencePreferenceCandidates(result.output),
+          taskId,
+          completionLines,
+        );
 
         this.deps.taskEngine.transition(taskId, 'done');
         this.persistSessionState({
@@ -2084,6 +2279,7 @@ function createDefaultCommandRouter(): CommandRouter {
   router.register(tasksCommand);
   router.register(taskCommand);
   router.register(memoryCommand);
+  router.register(learningCommand);
   router.register(dashboardCommand);
   router.register(attachCommand);
   router.register(historyCommand);

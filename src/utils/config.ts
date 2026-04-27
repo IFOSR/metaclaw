@@ -21,6 +21,20 @@ const DEFAULT_CONFIG: Config = {
     language: 'zh-CN',
     dashboard_on_start: true,
   },
+  notifications: {
+    feishu: {
+      enabled: false,
+    },
+  },
+  integrations: {
+    feishu: {
+      enabled: false,
+      mode: 'websocket',
+      app_secret_env: 'FEISHU_APP_SECRET',
+      event_port: 8787,
+      event_path: '/feishu/events',
+    },
+  },
 };
 
 /**
@@ -34,6 +48,14 @@ export function loadConfig(configPath: string): Config {
   try {
     const content = readFileSync(configPath, 'utf-8');
     const userConfig = load(content) as Partial<Config>;
+    const defaultFeishuConfig = DEFAULT_CONFIG.notifications?.feishu ?? { enabled: false };
+    const defaultFeishuAppConfig = DEFAULT_CONFIG.integrations?.feishu ?? {
+      enabled: false,
+      mode: 'websocket',
+      app_secret_env: 'FEISHU_APP_SECRET',
+      event_port: 8787,
+      event_path: '/feishu/events',
+    };
 
     // 深度合并配置
     return {
@@ -42,6 +64,22 @@ export function loadConfig(configPath: string): Config {
       executor: { ...DEFAULT_CONFIG.executor, ...userConfig.executor },
       orchestration: { ...DEFAULT_CONFIG.orchestration, ...userConfig.orchestration },
       ui: { ...DEFAULT_CONFIG.ui, ...userConfig.ui },
+      notifications: {
+        ...DEFAULT_CONFIG.notifications,
+        ...userConfig.notifications,
+        feishu: {
+          ...defaultFeishuConfig,
+          ...userConfig.notifications?.feishu,
+        },
+      },
+      integrations: {
+        ...DEFAULT_CONFIG.integrations,
+        ...userConfig.integrations,
+        feishu: {
+          ...defaultFeishuAppConfig,
+          ...userConfig.integrations?.feishu,
+        },
+      },
     };
   } catch (error) {
     console.error(`配置文件加载失败: ${configPath}`, error);

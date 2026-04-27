@@ -4,7 +4,7 @@ import type { LlmBridge } from './llm-bridge.js';
 
 const TASK_HISTORY_LIMIT = 10;
 const SESSION_HISTORY_LIMIT = 5;
-const KEYWORD_HISTORY_LIMIT = 3;
+const KEYWORD_HISTORY_LIMIT = 1;
 const LLM_CANDIDATE_LIMIT = 20;
 const LLM_RESULT_LIMIT = 5;
 const OUTPUT_TRUNCATE_LENGTH = 150;

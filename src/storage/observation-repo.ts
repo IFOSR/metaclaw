@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { Observation } from '../core/types.js';
+import { generateObservationId } from '../utils/id.js';
 
 interface ObsRow {
   id: string;
@@ -45,7 +46,7 @@ export class ObservationRepo {
 
       return { ...existing, occurrenceCount: existing.occurrenceCount + 1, lastSeenAt: now, sourceTasks };
     } else {
-      const id = `obs_${Date.now()}`;
+      const id = generateObservationId();
       this.db.prepare(`
         INSERT INTO observations (id, pattern, occurrence_count, first_seen_at, last_seen_at, source_tasks)
         VALUES (?, ?, 1, ?, ?, ?)
@@ -61,6 +62,39 @@ export class ObservationRepo {
         promotedToPreferenceId: null,
       };
     }
+  }
+
+  upsertCandidate(pattern: string, taskId: string): Observation {
+    const existing = this.findByPattern(pattern);
+    const now = new Date().toISOString();
+
+    if (existing) {
+      const sourceTasks = Array.from(new Set([...existing.sourceTasks, taskId]));
+      const occurrenceCount = Math.max(existing.occurrenceCount, 3);
+      this.db.prepare(`
+        UPDATE observations
+        SET occurrence_count = ?, last_seen_at = ?, source_tasks = ?
+        WHERE pattern = ?
+      `).run(occurrenceCount, now, JSON.stringify(sourceTasks), pattern);
+
+      return { ...existing, occurrenceCount, lastSeenAt: now, sourceTasks };
+    }
+
+    const id = generateObservationId();
+    this.db.prepare(`
+      INSERT INTO observations (id, pattern, occurrence_count, first_seen_at, last_seen_at, source_tasks)
+      VALUES (?, ?, 3, ?, ?, ?)
+    `).run(id, pattern, now, now, JSON.stringify([taskId]));
+
+    return {
+      id,
+      pattern,
+      occurrenceCount: 3,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sourceTasks: [taskId],
+      promotedToPreferenceId: null,
+    };
   }
 
   findCandidates(): Observation[] {

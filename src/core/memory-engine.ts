@@ -1,6 +1,7 @@
-import type { Preference, PreferenceScope, PreferenceStatus, Observation } from './types.js';
+import type { Preference, PreferenceScope, PreferenceStatus, Observation, TaskMemoryCandidate } from './types.js';
 import type { PreferenceRepo } from '../storage/preference-repo.js';
 import type { ObservationRepo } from '../storage/observation-repo.js';
+import type { TaskMemoryCardRepo } from '../storage/task-memory-card-repo.js';
 import type { PreferenceEmbeddingService } from './preference-embedding-service.js';
 import type { HybridMemoryRecaller, HybridMemoryRecallResult } from './hybrid-memory-recaller.js';
 import { generatePreferenceId } from '../utils/id.js';
@@ -20,6 +21,8 @@ interface ScoredPreference {
   score: number;
 }
 
+type PersonalityTone = 'playful' | 'casual' | 'warm' | 'formal' | 'sharp' | 'generic';
+
 const SCOPE_PRIORITY: Record<string, number> = {
   'task-local': 40,
   contact: 30,
@@ -33,6 +36,7 @@ export class MemoryEngine {
     private obsRepo: ObservationRepo,
     private preferenceEmbeddingService?: PreferenceEmbeddingService,
     private hybridMemoryRecaller?: Pick<HybridMemoryRecaller, 'recall'>,
+    private taskMemoryCardRepo?: Pick<TaskMemoryCardRepo, 'searchRelevant'>,
   ) {}
 
   /**
@@ -47,6 +51,17 @@ export class MemoryEngine {
       observation,
       shouldPromptConfirm: observation.occurrenceCount >= CONFIRM_THRESHOLD
         && !observation.promotedToPreferenceId,
+    };
+  }
+
+  observeCandidate(pattern: string, taskId: string): {
+    observation: Observation;
+    shouldPromptConfirm: boolean;
+  } {
+    const observation = this.obsRepo.upsertCandidate(pattern, taskId);
+    return {
+      observation,
+      shouldPromptConfirm: !observation.promotedToPreferenceId,
     };
   }
 
@@ -255,22 +270,43 @@ export class MemoryEngine {
       score: Math.round(preference.confidence * 100),
     }));
 
+    const queryText = context.userInput ?? [context.subject, ...context.keywords].filter(Boolean).join(' ');
+    const taskMemoryCardCandidates: TaskMemoryCandidate[] = this.taskMemoryCardRepo && context.taskId
+      ? this.taskMemoryCardRepo.searchRelevant({
+        queryText,
+        currentTaskId: context.taskId,
+        keywords: context.keywords,
+        topK: context.topK,
+      }).map(card => ({
+        id: card.id,
+        taskId: card.taskId,
+        sourceTaskId: card.taskId,
+        memoryKind: 'task_summary' as const,
+        title: card.title,
+        summary: card.summary,
+        reason: card.reason,
+        source: 'continuity' as const,
+        score: card.score,
+        artifactPaths: card.artifacts,
+      }))
+      : [];
+
     if (!this.hybridMemoryRecaller) {
       return {
         preferenceCandidates: rulePreferenceCandidates,
-        taskCandidates: [],
+        taskCandidates: taskMemoryCardCandidates,
         auditId: null,
       };
     }
 
     return this.hybridMemoryRecaller.recall({
       taskId: context.taskId,
-      queryText: context.userInput ?? [context.subject, ...context.keywords].filter(Boolean).join(' '),
+      queryText,
       keywords: context.keywords,
       subject: context.subject,
       topK: context.topK,
       rulePreferenceCandidates,
-      ruleTaskCandidates: [],
+      ruleTaskCandidates: taskMemoryCardCandidates,
     });
   }
 
@@ -328,40 +364,78 @@ export class MemoryEngine {
       return true;
     }
 
-    if (!this.isPersonalityTonePreference(preference.content)) {
+    const preferenceTone = this.classifyPersonalityTonePreference(preference.content);
+    if (!preferenceTone) {
       return true;
     }
 
-    return this.isPersonalityToneSceneCompatible(userInput);
+    return this.isPersonalityToneSceneCompatible(preferenceTone, userInput);
   }
 
   private isPersonalityTonePreference(content: string): boolean {
-    return /(活泼|幽默|俏皮|轻松|亲切|热情|温暖|严肃|正式|口语化|随意|克制|文艺|犀利|毒舌)/.test(content)
-      || /(语气|风格|口吻|语调)/.test(content);
+    return this.classifyPersonalityTonePreference(content) !== null;
   }
 
-  private isPersonalityToneSceneCompatible(userInput: string): boolean {
+  private classifyPersonalityTonePreference(content: string): PersonalityTone | null {
+    const normalized = content.replace(/\s+/g, '');
+    if (/(活泼|欢快|幽默|俏皮)/.test(normalized)) {
+      return 'playful';
+    }
+    if (/(轻松|口语化|随意|聊天感|像搭子)/.test(normalized)) {
+      return 'casual';
+    }
+    if (/(亲切|热情|温暖|鼓励|陪伴感)/.test(normalized)) {
+      return 'warm';
+    }
+    if (/(严肃|正式|严谨|克制|专业|稳重)/.test(normalized)) {
+      return 'formal';
+    }
+    if (/(犀利|毒舌|尖锐|锐利)/.test(normalized)) {
+      return 'sharp';
+    }
+    if (/(语气|风格|口吻|语调)/.test(normalized)) {
+      return 'generic';
+    }
+    return null;
+  }
+
+  private isPersonalityToneSceneCompatible(preferenceTone: PersonalityTone, userInput: string): boolean {
     const normalized = userInput.replace(/\s+/g, '');
     if (!normalized) {
       return false;
     }
 
-    if (/(活泼|幽默|俏皮|轻松|亲切|热情|温暖|严肃|正式|口语化|随意|克制|文艺|犀利|毒舌|语气|风格|口吻|语调)/.test(normalized)) {
-      return true;
+    const requestedTones = this.detectRequestedPersonalityTones(normalized);
+    if (requestedTones.size > 0) {
+      return requestedTones.has(preferenceTone) || (preferenceTone === 'generic' && requestedTones.size > 0);
     }
 
-    if (/(文案|宣传|推文|帖子|小红书|朋友圈|口播|脚本|slogan|标题|开场白|欢迎词|广告|海报|宣传语|简介)/i.test(normalized)) {
-      return true;
+    if (this.isStructuredWorkScene(normalized)) {
+      return preferenceTone === 'formal';
     }
 
     if (/(邮件|发信|发给|回复|消息|沟通|通知)/.test(normalized)) {
-      return true;
+      return preferenceTone !== 'sharp';
     }
 
-    if (/(ppt|幻灯片|slides|报告|周报|纪要|总结|提纲|方案|一页|表格|文档|材料|复盘|汇报|调研|分析|研究|投资|估值|财务|市场|竞争|尽调)/i.test(normalized)) {
-      return false;
+    if (/(文案|宣传|推文|帖子|小红书|朋友圈|口播|脚本|slogan|标题|开场白|欢迎词|广告|海报|宣传语|简介)/i.test(normalized)) {
+      return ['playful', 'casual', 'warm', 'generic'].includes(preferenceTone);
     }
 
     return false;
+  }
+
+  private detectRequestedPersonalityTones(normalizedInput: string): Set<PersonalityTone> {
+    const tones = new Set<PersonalityTone>();
+    if (/(活泼|欢快|幽默|俏皮)/.test(normalizedInput)) tones.add('playful');
+    if (/(轻松|口语化|随意|聊天感|像搭子)/.test(normalizedInput)) tones.add('casual');
+    if (/(亲切|热情|温暖|鼓励|陪伴感)/.test(normalizedInput)) tones.add('warm');
+    if (/(严肃|正式|严谨|克制|专业|稳重)/.test(normalizedInput)) tones.add('formal');
+    if (/(犀利|毒舌|尖锐|锐利)/.test(normalizedInput)) tones.add('sharp');
+    return tones;
+  }
+
+  private isStructuredWorkScene(normalizedInput: string): boolean {
+    return /(ppt|幻灯片|slides|报告|周报|纪要|总结|提纲|方案|一页|表格|文档|材料|复盘|汇报|调研|分析|研究|投资|估值|财务|市场|竞争|尽调)/i.test(normalizedInput);
   }
 }

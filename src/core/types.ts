@@ -391,4 +391,23 @@ export interface Config {
     language: string;
     dashboard_on_start: boolean;
   };
+  notifications?: {
+    feishu?: {
+      enabled: boolean;
+      webhook_url?: string;
+      secret?: string;
+    };
+  };
+  integrations?: {
+    feishu?: {
+      enabled: boolean;
+      mode?: 'websocket' | 'webhook';
+      app_id?: string;
+      app_secret?: string;
+      app_secret_env?: string;
+      event_port: number;
+      event_path: string;
+      verification_token?: string;
+    };
+  };
 }

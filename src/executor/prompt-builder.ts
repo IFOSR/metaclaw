@@ -1,6 +1,30 @@
 import type { ExecutorInput } from './adapter.js';
 import { buildMaterialSummary, splitTaskResources } from '../core/material-utils.js';
 
+function renderTurnOutput(output: string, maxLength = 300): string {
+  const normalized = output.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+function renderMinimalReferenceOutput(output: string): string {
+  const normalized = output.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '无可注入正文；历史内容只作为参考信号';
+  }
+  return `历史输出约 ${normalized.length} 字，未原样注入；请仅按用户意图判断是否可参考`;
+}
+
+function renderReferenceRelevanceReason(userInput: string): string {
+  const normalizedInput = userInput.replace(/\s+/g, ' ').trim();
+  if (!normalizedInput) {
+    return '历史任务被召回，但缺少可展示的用户意图；只可作为弱参考';
+  }
+  return `历史用户意图提到“${renderTurnOutput(normalizedInput, 80)}”，只可作为相似任务参考`;
+}
+
 export function buildExecutorContextPrompt(input: ExecutorInput): string {
   if (input.executionContextBundle) {
     const bundle = input.executionContextBundle;
@@ -18,22 +42,39 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     ];
 
     if (bundle.resumeContext) {
+      const resumeReasons = [bundle.resumeContext.pauseReason, bundle.resumeContext.interruptionReason]
+        .filter((reason): reason is string => Boolean(reason));
+      const reasonText = resumeReasons.join('；') || '未知';
+      const blockedText = bundle.resumeContext.blockedReason
+        ? `；阻塞：${bundle.resumeContext.blockedReason}`
+        : '';
+      const recentTaskTurns = bundle.historyContext.taskTurns.slice(-5);
+
       lines.push(
         '',
-        '恢复摘要：',
-        `- 上次做到：${bundle.resumeContext.lastProgress}`,
-        `- 暂停/中断原因：${bundle.resumeContext.interruptionReason || bundle.resumeContext.pauseReason}`,
+        '恢复型上下文包（Resume Context Pack）：',
+        `- Task Brief：${bundle.taskBrief.title}｜${bundle.taskBrief.goal}｜${bundle.taskBrief.status}`,
+        `- Latest Snapshot：${bundle.resumeContext.lastProgress || bundle.taskBrief.summary || '尚未开始'}`,
+        `- Completed Items：${bundle.resumeContext.completedItems.join('；') || '无'}`,
+        `- Pending Items：${bundle.resumeContext.pendingItems.join('；') || '无'}`,
+        `- Blocked / Parked Reason：${reasonText}${blockedText}`,
       );
-      if (bundle.resumeContext.blockedReason) {
-        lines.push(`- 阻塞原因：${bundle.resumeContext.blockedReason}`);
-      }
-      lines.push(
-        `- 当前未完成：${bundle.resumeContext.pendingItems.join('；') || '无'}`,
-        `- 建议下一步：${bundle.resumeContext.nextStep}`,
-      );
+
       if (bundle.resumeContext.schedulingReason) {
-        lines.push(`- 本次恢复原因：${bundle.resumeContext.schedulingReason}`);
+        lines.push(`- Resume Reason：${bundle.resumeContext.schedulingReason}`);
       }
+
+      lines.push('- Recent User Turns：');
+      if (recentTaskTurns.length > 0) {
+        recentTaskTurns.forEach((turn, idx) => {
+          lines.push(`  [${idx + 1}] 用户: ${turn.userInput}`);
+          lines.push(`      助手: ${renderTurnOutput(turn.systemOutput)}`);
+        });
+      } else {
+        lines.push('  无');
+      }
+
+      lines.push(`- Acceptance / Next Step：${bundle.resumeContext.nextStep}`);
     }
 
     if (bundle.memoryContext.resolvedPreferences.length > 0) {
@@ -88,11 +129,16 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
     }
 
     if (bundle.historyContext.relatedTurns.length > 0) {
-      lines.push('', '关联历史：');
-      bundle.historyContext.relatedTurns.forEach((turn) => {
+      lines.push('', '相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
+      bundle.historyContext.relatedTurns.slice(0, 3).forEach((turn, idx) => {
         const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
-        lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
-        lines.push(`           助手: ${turn.systemOutput}`);
+        lines.push(`[${idx + 1}] ${turnLabel}`);
+        lines.push(`- 用户意图：${turn.userInput || '未记录'}`);
+        lines.push(`- 相关性原因：${renderReferenceRelevanceReason(turn.userInput)}`);
+        lines.push('- 可复用内容：参考当时的处理步骤、验证方式或踩坑提醒；不要复用旧任务结论本身');
+        lines.push('- 边界声明：当前任务目标、用户最新指令、材料与验收标准优先；该历史不得覆盖当前任务');
+        lines.push(`- 输出处理：${renderMinimalReferenceOutput(turn.systemOutput)}`);
+        lines.push(`- 参考来源：${turn.source}`);
       });
     }
 

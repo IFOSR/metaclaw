@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
+import { TaskRelevanceRanker } from './task-relevance-ranker.js';
 import type { EmbeddingProvider } from './embedding-provider.js';
 import {
   PreferenceScope,
@@ -11,6 +12,7 @@ import {
 } from './types.js';
 import type { PreferenceEmbeddingRecord } from '../storage/preference-embedding-repo.js';
 import type { TaskMemoryEmbeddingRecord } from '../storage/task-memory-embedding-repo.js';
+import type { RecallFeedbackAction, RecallFeedbackRecord } from '../storage/recall-feedback-repo.js';
 import type { MemoryRecallEventRecord } from '../storage/memory-recall-event-repo.js';
 
 interface PreferenceRepoLike {
@@ -33,6 +35,14 @@ interface MemoryRecallEventRepoLike {
   insert(record: MemoryRecallEventRecord): void;
 }
 
+interface RecallFeedbackRepoLike {
+  findActiveForCandidates(input: {
+    targetKind: 'task' | 'preference';
+    targetIds: string[];
+    queryTaskId?: string | null;
+  }): RecallFeedbackRecord[];
+}
+
 interface HybridMemoryRecallerDeps {
   embeddingProvider?: EmbeddingProvider;
   preferenceRepo?: PreferenceRepoLike;
@@ -40,6 +50,7 @@ interface HybridMemoryRecallerDeps {
   preferenceEmbeddingRepo?: PreferenceEmbeddingRepoLike;
   taskMemoryEmbeddingRepo?: TaskMemoryEmbeddingRepoLike;
   memoryRecallEventRepo?: MemoryRecallEventRepoLike;
+  recallFeedbackRepo?: RecallFeedbackRepoLike;
 }
 
 export interface HybridMemoryRecallInput {
@@ -68,7 +79,7 @@ export interface HybridMemoryRecallResult {
 
 const DEFAULT_TOP_K = 5;
 const SEMANTIC_SCORE_MULTIPLIER = 100;
-const MIN_SEMANTIC_SCORE = 0.35;
+const MIN_SEMANTIC_SCORE = 0.55;
 
 const SCOPE_BONUS: Record<PreferenceScope, number> = {
   'task-local': 40,
@@ -201,8 +212,21 @@ export class HybridMemoryRecaller {
     }
 
     const candidates: TaskMemoryCandidate[] = [];
+    const taskEmbeddingRecords = this.deps.taskMemoryEmbeddingRepo.findAll();
+    const taskFeedback = this.loadTaskFeedback(taskEmbeddingRecords.map(record => record.taskId));
+    const currentTask = input.taskId ? this.deps.taskRepo.findById(input.taskId) : null;
+    const relevanceScores = new Map(
+      new TaskRelevanceRanker().rank({
+        currentTask: currentTask && currentTask.id === input.taskId ? currentTask : this.createQueryTask(input),
+        userInput: input.queryText,
+        keywords: input.keywords,
+        candidates: taskEmbeddingRecords
+          .map(record => this.deps.taskRepo!.findById(record.taskId))
+          .filter((task): task is Task => Boolean(task)),
+      }).map(score => [score.taskId, score]),
+    );
 
-    for (const record of this.deps.taskMemoryEmbeddingRepo.findAll()) {
+    for (const record of taskEmbeddingRecords) {
       if (record.taskId === input.taskId) {
         continue;
       }
@@ -217,6 +241,16 @@ export class HybridMemoryRecaller {
         continue;
       }
 
+      const relevance = relevanceScores.get(task.id);
+      if (!relevance) {
+        continue;
+      }
+
+      const feedbackAdjustment = this.getTaskFeedbackAdjustment(task.id, taskFeedback);
+      if (feedbackAdjustment.hidden) {
+        continue;
+      }
+
       candidates.push({
         id: `${task.id}:${record.memoryKind}`,
         taskId: task.id,
@@ -224,9 +258,9 @@ export class HybridMemoryRecaller {
         memoryKind: record.memoryKind,
         title: task.title,
         summary: this.buildTaskSummary(task, record.memoryKind),
-        reason: this.buildTaskReason(task, input, semanticScore),
+        reason: `${this.buildTaskReason(task, input, semanticScore)}；TaskRelevanceRanker ${relevance.recommendation} score=${relevance.finalScore}：${relevance.reason}${feedbackAdjustment.reasonSuffix}`,
         source: 'semantic',
-        score: Math.round(semanticScore * SEMANTIC_SCORE_MULTIPLIER) + this.getTaskContinuityBonus(task, input),
+        score: Math.round(semanticScore * SEMANTIC_SCORE_MULTIPLIER) + this.getTaskContinuityBonus(task, input) + Math.round(relevance.finalScore / 10) + feedbackAdjustment.scoreDelta,
         artifactPaths: [...task.artifacts],
       });
     }
@@ -234,6 +268,61 @@ export class HybridMemoryRecaller {
     return candidates
       .sort((left, right) => right.score - left.score)
       .slice(0, input.topK ?? DEFAULT_TOP_K);
+  }
+
+  private loadTaskFeedback(taskIds: string[]): Map<string, RecallFeedbackAction[]> {
+    if (!this.deps.recallFeedbackRepo) {
+      return new Map();
+    }
+
+    const uniqueTaskIds = Array.from(new Set(taskIds));
+    const feedbackRows = this.deps.recallFeedbackRepo.findActiveForCandidates({
+      targetKind: 'task',
+      targetIds: uniqueTaskIds,
+    });
+    const feedbackByTaskId = new Map<string, RecallFeedbackAction[]>();
+
+    for (const feedback of feedbackRows) {
+      const actions = feedbackByTaskId.get(feedback.targetId) ?? [];
+      actions.push(feedback.action);
+      feedbackByTaskId.set(feedback.targetId, actions);
+    }
+
+    return feedbackByTaskId;
+  }
+
+  private getTaskFeedbackAdjustment(
+    taskId: string,
+    feedbackByTaskId: Map<string, RecallFeedbackAction[]>,
+  ): { hidden: boolean; scoreDelta: number; reasonSuffix: string } {
+    const actions = feedbackByTaskId.get(taskId) ?? [];
+    if (actions.includes('hide')) {
+      return { hidden: true, scoreDelta: 0, reasonSuffix: '' };
+    }
+
+    let scoreDelta = 0;
+    const reasons: string[] = [];
+
+    if (actions.includes('irrelevant')) {
+      scoreDelta -= 40;
+      reasons.push('用户曾标记为不相关，已降权');
+    }
+
+    if (actions.includes('reject')) {
+      scoreDelta -= 25;
+      reasons.push('用户曾拒绝采用，已降权');
+    }
+
+    if (actions.includes('select')) {
+      scoreDelta += 20;
+      reasons.push('用户曾选择采用，已加权');
+    }
+
+    return {
+      hidden: false,
+      scoreDelta,
+      reasonSuffix: reasons.length > 0 ? `；RecallFeedback：${reasons.join('；')}` : '',
+    };
   }
 
   private mergePreferenceCandidates(input: HybridMemoryMergeInput): PreferenceMemoryCandidate[] {
@@ -338,6 +427,34 @@ export class HybridMemoryRecaller {
     }
 
     return task.title.includes(input.subject) || task.goal.includes(input.subject) ? 20 : 0;
+  }
+
+  private createQueryTask(input: HybridMemoryRecallInput): Task {
+    const now = new Date().toISOString();
+    return {
+      id: input.taskId ?? '__query_task__',
+      title: input.subject ? `${input.subject} 当前任务` : '当前任务',
+      goal: input.queryText,
+      status: 'running',
+      summary: input.queryText,
+      snapshots: [],
+      resources: [],
+      artifacts: [],
+      dependencies: [],
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0,
+        blocksOthers: false,
+        idleHours: 0,
+      },
+      injectedPreferences: [],
+      lastSchedulingReason: '',
+      lastInterruptionReason: '',
+      interruptionCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   private persistAudit(

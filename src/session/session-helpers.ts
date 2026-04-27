@@ -46,6 +46,65 @@ export function extractPatterns(input: string): string[] {
   return patterns;
 }
 
+export function extractHighConfidencePreferenceCandidates(input: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (candidate: string | undefined) => {
+    const cleaned = cleanPreferenceCandidate(candidate);
+    if (!cleaned || seen.has(cleaned)) {
+      return;
+    }
+    seen.add(cleaned);
+    candidates.push(cleaned);
+  };
+
+  for (const rawLine of input.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    const explicitBoldPreference = line.match(/(?:你|我)?明确偏好[：:]\s*\*\*(.+?)\*\*/);
+    pushCandidate(explicitBoldPreference?.[1]);
+
+    const reusableBoldRule = line.match(/(?:可复用的工作规则|固定成一条可复用的工作规则|工作规则)[：:]\s*\*\*(.+?)\*\*/);
+    pushCandidate(reusableBoldRule?.[1]);
+
+    const explicitPreference = line.match(/^(?:我)?(?:明确)?偏好[：:]\s*(.+)$/);
+    pushCandidate(explicitPreference?.[1]);
+
+    const futureRule = line.match(/^(?:以后|之后|后续|接下来)[，,。.\s]*(凡是.+)$/);
+    pushCandidate(futureRule?.[1]);
+
+    const defaultRule = line.match(/^(凡是.+(?:默认|应该|需要|必须).+)$/);
+    pushCandidate(defaultRule?.[1]);
+
+    const preferenceRule = line.match(/^(我(?:更喜欢|比较喜欢|希望|倾向于).+)$/);
+    pushCandidate(preferenceRule?.[1]);
+  }
+
+  return candidates;
+}
+
+function cleanPreferenceCandidate(candidate: string | undefined): string | null {
+  if (!candidate) {
+    return null;
+  }
+
+  const cleaned = candidate
+    .replace(/\*\*/g, '')
+    .replace(/^["“”'「」]+|["“”'「」]+$/g, '')
+    .replace(/[。；;，,]+$/g, '')
+    .trim();
+
+  if (cleaned.length < 8) {
+    return null;
+  }
+
+  return cleaned;
+}
+
 export function parseExplicitRemember(input: string): string | null {
   const rememberMatch = input.match(/记住[：:]\s*(.+)/);
   return rememberMatch ? rememberMatch[1].trim() : null;

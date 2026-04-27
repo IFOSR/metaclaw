@@ -172,7 +172,65 @@ describe('HybridMemoryRecaller', () => {
     expect(result.preferenceCandidates[0]?.source).toBe('semantic');
     expect(result.taskCandidates[0]?.id).toBe('task_sem:task_summary');
     expect(result.taskCandidates[0]?.artifactPaths).toEqual(['/tmp/phoenix-weekly-last-output.md']);
+    expect(result.taskCandidates[0]?.reason).toContain('TaskRelevanceRanker');
+    expect(result.taskCandidates[0]?.reason).toContain('inject');
     expect(result.auditId).toMatch(/^recall_/);
     expect(auditRepo.insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters semantic preference and task candidates below the high-confidence threshold', async () => {
+    const recaller = new HybridMemoryRecaller({
+      embeddingProvider: {
+        provider: 'test-provider',
+        model: 'test-model',
+        embed: vi.fn().mockResolvedValue([[1, 0]]),
+      },
+      preferenceEmbeddingRepo: {
+        findAll: vi.fn().mockReturnValue([{
+          id: 'prefemb_low',
+          preferenceId: 'pref_sem',
+          provider: 'test-provider',
+          model: 'test-model',
+          dimension: 2,
+          vector: [0.5, Math.sqrt(0.75)],
+          contentHash: 'hash_pref_low',
+          createdAt: '2026-04-20T00:00:00Z',
+          updatedAt: '2026-04-20T00:00:00Z',
+        }]),
+      },
+      taskMemoryEmbeddingRepo: {
+        findAll: vi.fn().mockReturnValue([{
+          id: 'taskemb_low',
+          taskId: 'task_sem',
+          memoryKind: 'task_summary',
+          sourceId: 'task_sem',
+          provider: 'test-provider',
+          model: 'test-model',
+          dimension: 2,
+          vector: [0.5, Math.sqrt(0.75)],
+          contentHash: 'hash_task_low',
+          createdAt: '2026-04-20T00:00:00Z',
+          updatedAt: '2026-04-20T00:00:00Z',
+        }]),
+      },
+      preferenceRepo: {
+        findById: vi.fn().mockReturnValue(createPreference()),
+      },
+      taskRepo: {
+        findById: vi.fn().mockReturnValue(createTask()),
+      },
+    });
+
+    const result = await recaller.recall({
+      taskId: 'task_current',
+      queryText: '继续整理 Phoenix 周报，保留风险栏目和经营数据栏目',
+      keywords: ['Phoenix', '周报'],
+      subject: 'Phoenix',
+      rulePreferenceCandidates: [],
+      ruleTaskCandidates: [],
+    });
+
+    expect(result.preferenceCandidates).toHaveLength(0);
+    expect(result.taskCandidates).toHaveLength(0);
   });
 });

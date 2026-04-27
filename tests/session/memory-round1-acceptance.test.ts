@@ -12,6 +12,7 @@ import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
+import type { NotificationService } from '../../src/notifications/types.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -288,5 +289,101 @@ describe('Round 1 memory acceptance', () => {
     expect(prefs).toHaveLength(1);
     expect(prefs[0]?.content).toBe('给张总的邮件使用非常正式语气');
     expect(session.getSnapshot().output.join('\n')).toContain('已编辑并确认偏好');
+  });
+
+  it('creates a pending memory candidate from a single high-confidence user preference statement', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const notifier: NotificationService = {
+      notifyMemoryCandidate: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '已记录偏好候选',
+        exitCode: 0,
+        durationMs: 120,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_memory_high_confidence_user_statement',
+      contextRecaller,
+      llmBridge: createDurableRouteBridge(),
+      notifier,
+    });
+
+    session.initialize();
+    await session.submit('以后凡是长篇调研、人物研究、竞品分析，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径', { awaitAsyncWork: true });
+
+    const candidates = memoryEngine.getCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.pattern).toBe('凡是长篇调研、人物研究、竞品分析，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径');
+    expect(session.getSnapshot().output.join('\n')).toContain('检测到可能的长期偏好');
+    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
+    expect(notifier.notifyMemoryCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      observationId: candidates[0]?.id,
+      pattern: candidates[0]?.pattern,
+      source: 'high-confidence',
+    }));
+  });
+
+  it('creates a pending memory candidate when executor output identifies an explicit reusable work rule', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: [
+          '基于当前注入的近期上下文，我能提炼出几条“可沿用的工作记忆”：',
+          '你明确偏好：**长篇调研型输出应该保存成本地 Markdown 文件**，不要只放在聊天里。',
+          '凡是长篇调研、人物研究、竞品分析、资料汇总，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径。',
+        ].join('\n'),
+        exitCode: 0,
+        durationMs: 120,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_memory_high_confidence_executor_statement',
+      contextRecaller,
+      llmBridge: createDurableRouteBridge(),
+    });
+
+    session.initialize();
+    await session.submit('刚才基于上下文你能提炼出什么工作记忆？', { awaitAsyncWork: true });
+
+    const candidates = memoryEngine.getCandidates();
+    expect(candidates.map(candidate => candidate.pattern)).toContain('长篇调研型输出应该保存成本地 Markdown 文件');
+    expect(session.getSnapshot().output.join('\n')).toContain('检测到可能的长期偏好');
+    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
   });
 });

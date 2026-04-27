@@ -182,6 +182,43 @@ describe('ContextRecaller', () => {
     expect(keywordTurns).toHaveLength(1);
   });
 
+  it('召回止血：泛化短语不应通过中文 bigram 污染相似历史', () => {
+    insertInteraction(db, {
+      id: 'int_noise', taskId: 'task_noise', sessionId: 'sess_old',
+      userInput: '帮我做个咖啡机选购调研，目前预算三千以内',
+      systemOutput: '咖啡机历史输出不应进入 MetaClaw 优化任务',
+      createdAt: '2026-04-12T10:00:00Z',
+    });
+
+    const result = recaller.recall({
+      taskId: 'task_metaclaw', sessionId: 'sess_new',
+      userInput: '刚才让你做了一个 MetaClaw 上下文召回优化，还记得不',
+    });
+
+    const keywordTurns = result.filter(t => t.source === 'keyword');
+    expect(keywordTurns).toHaveLength(0);
+  });
+
+  it('召回止血：关键词相似历史默认最多只返回一条高相关参考', () => {
+    for (let index = 0; index < 3; index += 1) {
+      insertInteraction(db, {
+        id: `int_meta_${index}`, taskId: `task_meta_${index}`, sessionId: 'sess_old',
+        userInput: `MetaClaw 上下文召回优化方案第 ${index} 轮`,
+        systemOutput: `MetaClaw 召回优化输出 ${index}`,
+        createdAt: `2026-04-12T10:0${index}:00Z`,
+      });
+    }
+
+    const result = recaller.recall({
+      taskId: 'task_new', sessionId: 'sess_new',
+      userInput: '继续 MetaClaw 上下文召回优化',
+    });
+
+    const keywordTurns = result.filter(t => t.source === 'keyword');
+    expect(keywordTurns).toHaveLength(1);
+    expect(keywordTurns[0].userInput).toContain('MetaClaw');
+  });
+
   it('LLM 排序：当 bigram 匹配不到时，用 LLM 召回', async () => {
     insertInteraction(db, {
       id: 'int_1', taskId: 'task_X', sessionId: 'sess_old',

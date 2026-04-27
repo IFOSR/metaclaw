@@ -93,11 +93,18 @@ export class RecallReviewBuilder {
 
   private buildTaskSummary(candidate: TaskMemoryCandidate): string {
     const summary = this.cleanText(candidate.summary);
+    const reason = this.cleanText(candidate.reason);
+    const prefix = reason.includes('恢复型召回')
+      ? '恢复型召回：'
+      : reason.includes('参考型召回')
+        ? '参考型召回：'
+        : '';
+    const base = `${prefix}${summary}`;
     if (candidate.artifactPaths.length === 0) {
-      return summary;
+      return base;
     }
 
-    return `${summary}可复用附件 ${candidate.artifactPaths.length} 份。`;
+    return `${base}可复用附件 ${candidate.artifactPaths.length} 份。`;
   }
 
   private cleanText(value: string): string {

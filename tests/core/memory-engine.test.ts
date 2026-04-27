@@ -166,6 +166,42 @@ describe('MemoryEngine', () => {
     expect(results).toHaveLength(0);
   });
 
+  it('does not apply playful personality-tone preferences to formal research deliverables', () => {
+    engine.addManual({
+      content: '用活泼欢快的语气',
+      scope: 'global',
+      type: 'style',
+    });
+    engine.addManual({
+      content: '使用正式严谨的表达',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      keywords: ['正式', '调研', '报告'],
+      userInput: '帮我写一份正式的行业调研报告',
+    });
+
+    expect(results.map(result => result.content)).not.toContain('用活泼欢快的语气');
+    expect(results.map(result => result.content)).toContain('使用正式严谨的表达');
+  });
+
+  it('still applies playful personality-tone preferences when the user explicitly asks for playful creative copy', () => {
+    engine.addManual({
+      content: '用活泼欢快的语气',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const results = engine.recall({
+      keywords: ['活泼', '小红书', '文案'],
+      userInput: '帮我写一条活泼欢快的小红书文案',
+    });
+
+    expect(results.map(result => result.content)).toContain('用活泼欢快的语气');
+  });
+
   it('still applies general global expression preferences in structured tasks when they are not personality-tone cues', () => {
     engine.addManual({
       content: '输出尽量简洁',

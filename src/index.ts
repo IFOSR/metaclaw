@@ -4,6 +4,7 @@ import { createDatabase } from './storage/database.js';
 import { TaskRepo } from './storage/task-repo.js';
 import { PreferenceRepo } from './storage/preference-repo.js';
 import { ObservationRepo } from './storage/observation-repo.js';
+import { TaskMemoryCardRepo } from './storage/task-memory-card-repo.js';
 import { TaskEngine } from './core/task-engine.js';
 import { MemoryEngine } from './core/memory-engine.js';
 import { OrchestrationEngine } from './core/orchestration.js';
@@ -15,6 +16,7 @@ import { resolveMetaclawDir } from './utils/paths.js';
 import { renderApp } from './tui/app.js';
 import { parseCliArgs } from './cli/args.js';
 import { runScriptedSessionFile } from './session/scripted-session.js';
+import { createNotificationService } from './notifications/feishu.js';
 import { nanoid } from 'nanoid';
 
 async function main() {
@@ -37,9 +39,11 @@ async function main() {
   const prefRepo = new PreferenceRepo(db);
   const obsRepo = new ObservationRepo(db);
 
+  const taskMemoryCardRepo = new TaskMemoryCardRepo(db);
+
   // 5. 初始化引擎
   const taskEngine = new TaskEngine(taskRepo, snapshotDir);
-  const memoryEngine = new MemoryEngine(prefRepo, obsRepo);
+  const memoryEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, taskMemoryCardRepo);
   const orchestration = new OrchestrationEngine(taskEngine);
 
   // 6. 初始化执行器
@@ -60,6 +64,7 @@ async function main() {
   const sessionId = `sess_${nanoid(10)}`;
   const llmBridge = new LlmBridge(config.executor.command);
   const contextRecaller = new ContextRecaller(db, llmBridge);
+  const notifier = createNotificationService(config);
 
   if (cliArgs.scriptPath) {
     const result = await runScriptedSessionFile(cliArgs.scriptPath, {
@@ -72,6 +77,7 @@ async function main() {
       sessionId,
       contextRecaller,
       llmBridge,
+      notifier,
     });
     if (result.output.length > 0) {
       process.stdout.write(`${result.output.join('\n')}\n`);
@@ -80,7 +86,7 @@ async function main() {
   }
 
   // 9. 启动 TUI
-  renderApp({ taskEngine, memoryEngine, orchestration, executor, db, config, sessionId, contextRecaller, llmBridge });
+  renderApp({ taskEngine, memoryEngine, orchestration, executor, db, config, sessionId, contextRecaller, llmBridge, notifier });
 }
 
 main().catch((error) => {

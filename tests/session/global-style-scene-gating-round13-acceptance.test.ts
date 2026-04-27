@@ -101,4 +101,57 @@ describe('global style scene gating', () => {
     expect(output).not.toContain('用活泼的语气');
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
+
+  it('filters playful global tone from formal research recall review while keeping formal tone', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    memoryEngine.addManual({
+      content: '用活泼欢快的语气',
+      scope: 'global',
+      type: 'style',
+    });
+    memoryEngine.addManual({
+      content: '使用正式严谨的表达',
+      scope: 'global',
+      type: 'style',
+    });
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '调研报告已完成',
+        exitCode: 0,
+        durationMs: 120,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_round13_formal_research_style_gate',
+      contextRecaller,
+      llmBridge: createDurableRouteBridge(),
+    });
+
+    session.initialize();
+    await session.submit('帮我写一份正式的行业调研报告', { awaitAsyncWork: true });
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('记忆召回确认');
+    expect(output).toContain('使用正式严谨的表达');
+    expect(output).not.toContain('用活泼欢快的语气');
+    expect(executor.execute).not.toHaveBeenCalled();
+  });
 });

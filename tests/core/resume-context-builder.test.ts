@@ -246,6 +246,59 @@ describe('ResumeContextBuilder', () => {
     expect(bundle.executionInstructions.some(line => line.includes('不要在回复中粘贴或打印完整文件内容'))).toBe(true);
   });
 
+  it('resume bundle keeps current task context and limits unrelated keyword history to one minimal reference', async () => {
+    const task = taskEngine.create({ title: 'MetaClaw 召回优化', goal: '修复历史召回污染 prompt 的问题' });
+    taskEngine.transition(task.id, 'ready');
+    taskEngine.transition(task.id, 'running');
+    taskEngine.park(task.id, '等待继续做召回止血', {
+      done: ['已完成 Prompt 分层'],
+      pending: ['继续实现 Phase A 召回止血'],
+      nextStep: '补充集成验证并运行测试',
+      pauseReason: '等待继续做召回止血',
+    });
+
+    insertInteraction({
+      id: 'int_task_current',
+      taskId: task.id,
+      sessionId: 'sess_resume',
+      userInput: '先完成 MetaClaw Prompt 分层',
+      systemOutput: 'Prompt 分层已完成，Resume Context Pack 已注入',
+      createdAt: '2026-04-16T00:00:00Z',
+    });
+    insertInteraction({
+      id: 'int_noise',
+      taskId: 'task_noise',
+      sessionId: 'sess_old',
+      userInput: '帮我做个咖啡机选购调研，目前预算三千以内',
+      systemOutput: '咖啡机历史输出不应污染恢复任务',
+      createdAt: '2026-04-16T00:01:00Z',
+    });
+    for (let index = 0; index < 3; index += 1) {
+      insertInteraction({
+        id: `int_meta_ref_${index}`,
+        taskId: `task_meta_ref_${index}`,
+        sessionId: 'sess_old',
+        userInput: `MetaClaw 上下文召回优化参考第 ${index} 轮`,
+        systemOutput: `MetaClaw 参考输出 ${index}`,
+        createdAt: `2026-04-16T00:0${index + 2}:00Z`,
+      });
+    }
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'resume-parked',
+      userInput: '继续 MetaClaw 上下文召回优化',
+      sessionId: 'sess_resume',
+      schedulingReason: '用户要求继续',
+    });
+
+    expect(bundle.resumeContext?.lastProgress).toContain('已完成 Prompt 分层');
+    expect(bundle.historyContext.taskTurns.map(turn => turn.userInput)).toContain('先完成 MetaClaw Prompt 分层');
+    expect(bundle.historyContext.relatedTurns).toHaveLength(1);
+    expect(bundle.historyContext.relatedTurns[0].userInput).toContain('MetaClaw');
+    expect(bundle.historyContext.relatedTurns.some(turn => turn.userInput.includes('咖啡机'))).toBe(false);
+  });
+
   it('extracts readable text material excerpts into the execution bundle', async () => {
     const fixturesDir = resolve(tmpdir(), 'metaclaw-material-fixtures');
     mkdirSync(fixturesDir, { recursive: true });
