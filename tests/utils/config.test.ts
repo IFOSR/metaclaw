@@ -73,6 +73,33 @@ describe('loadConfig defaults', () => {
     });
   });
 
+  it('falls back to config.json in the same directory when config.yaml is missing', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'metaclaw-config-'));
+    const configPath = resolve(dir, 'config.yaml');
+    writeFileSync(resolve(dir, 'config.json'), JSON.stringify({
+      integrations: {
+        feishu: {
+          enabled: true,
+          app_id: 'cli_json',
+          app_secret_env: 'TEST_FEISHU_SECRET',
+          event_port: 9898,
+          event_path: '/feishu/json',
+        },
+      },
+    }));
+
+    const config = loadConfig(configPath);
+
+    expect(config.integrations?.feishu).toEqual({
+      enabled: true,
+      mode: 'websocket',
+      app_id: 'cli_json',
+      app_secret_env: 'TEST_FEISHU_SECRET',
+      event_port: 9898,
+      event_path: '/feishu/json',
+    });
+  });
+
   it('defaults Feishu app integration to websocket mode for local message receiving', () => {
     const config = loadConfig('/path/that/does/not/exist.yaml');
 

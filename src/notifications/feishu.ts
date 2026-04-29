@@ -1,6 +1,6 @@
 import { createHmac } from 'crypto';
 import type { Config } from '../core/types.js';
-import { createFeishuWebhookMarkdownPost } from '../integrations/feishu-app.js';
+import { createFeishuWebhookMarkdownCard } from '../integrations/feishu-app.js';
 import { NoopNotificationService, type MemoryCandidateNotification, type NotificationService } from './types.js';
 
 export interface FeishuNotificationConfig {
@@ -43,8 +43,8 @@ export class FeishuNotifier implements NotificationService {
     }
 
     const body: Record<string, unknown> = {
-      msg_type: 'post',
-      content: createFeishuWebhookMarkdownPost(this.formatMemoryCandidateText(input)),
+      msg_type: 'interactive',
+      ...createFeishuWebhookMarkdownCard(this.formatMemoryCandidateText(input)),
     };
 
     if (this.config.secret) {

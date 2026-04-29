@@ -51,9 +51,20 @@ interface FeishuWebhookPostContent {
   post: FeishuPostContent;
 }
 
+interface FeishuWebhookCardContent {
+  card: FeishuMarkdownCard;
+}
+
 interface FeishuMarkdownCard {
   config: {
     wide_screen_mode: boolean;
+  };
+  header?: {
+    template: 'blue';
+    title: {
+      tag: 'plain_text';
+      content: string;
+    };
   };
   elements: Array<
     {
@@ -125,8 +136,8 @@ export class FeishuAppClient {
       'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
       {
         receive_id: chatId,
-        msg_type: 'post',
-        content: JSON.stringify(createFeishuMarkdownPostContent(markdown)),
+        msg_type: 'interactive',
+        content: JSON.stringify(createFeishuMarkdownCard(markdown)),
       },
       {
         authorization: `Bearer ${token}`,
@@ -476,20 +487,61 @@ export function createFeishuWebhookMarkdownPost(markdown: string, title = 'Metac
   };
 }
 
+export function createFeishuWebhookMarkdownCard(markdown: string): FeishuWebhookCardContent {
+  return {
+    card: createFeishuMarkdownCard(markdown),
+  };
+}
+
 export function createFeishuMarkdownCard(markdown: string): FeishuMarkdownCard {
+  const { title, content } = extractFeishuCardTitle(markdown);
   return {
     config: {
       wide_screen_mode: true,
     },
+    ...(title
+      ? {
+          header: {
+            template: 'blue' as const,
+            title: {
+              tag: 'plain_text' as const,
+              content: title,
+            },
+          },
+        }
+      : {}),
     elements: [
       {
         tag: 'div',
         text: {
           tag: 'lark_md',
-          content: markdown,
+          content,
         },
       },
     ],
+  };
+}
+
+function extractFeishuCardTitle(markdown: string): { title: string | null; content: string } {
+  const lines = markdown.split('\n');
+  const firstContentIndex = lines.findIndex(line => line.trim().length > 0);
+  if (firstContentIndex === -1) {
+    return { title: null, content: markdown };
+  }
+
+  const headingMatch = lines[firstContentIndex]?.match(/^#\s+(.+?)\s*$/);
+  if (!headingMatch) {
+    return { title: null, content: markdown };
+  }
+
+  const contentLines = [
+    ...lines.slice(0, firstContentIndex),
+    ...lines.slice(firstContentIndex + 1),
+  ];
+
+  return {
+    title: headingMatch[1]?.trim() ?? null,
+    content: contentLines.join('\n').replace(/^\n+/, ''),
   };
 }
 

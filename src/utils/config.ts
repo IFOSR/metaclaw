@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { load } from 'js-yaml';
+import { dirname, extname, join } from 'path';
 import type { Config } from '../core/types.js';
 
 /**
@@ -41,12 +42,13 @@ const DEFAULT_CONFIG: Config = {
  * 加载配置文件
  */
 export function loadConfig(configPath: string): Config {
-  if (!existsSync(configPath)) {
+  const resolvedConfigPath = resolveExistingConfigPath(configPath);
+  if (!resolvedConfigPath) {
     return DEFAULT_CONFIG;
   }
 
   try {
-    const content = readFileSync(configPath, 'utf-8');
+    const content = readFileSync(resolvedConfigPath, 'utf-8');
     const userConfig = load(content) as Partial<Config>;
     const defaultFeishuConfig = DEFAULT_CONFIG.notifications?.feishu ?? { enabled: false };
     const defaultFeishuAppConfig = DEFAULT_CONFIG.integrations?.feishu ?? {
@@ -82,7 +84,28 @@ export function loadConfig(configPath: string): Config {
       },
     };
   } catch (error) {
-    console.error(`配置文件加载失败: ${configPath}`, error);
+    console.error(`配置文件加载失败: ${resolvedConfigPath}`, error);
     return DEFAULT_CONFIG;
   }
+}
+
+function resolveExistingConfigPath(configPath: string): string | null {
+  if (existsSync(configPath)) {
+    return configPath;
+  }
+
+  const configDir = dirname(configPath);
+  const requestedExt = extname(configPath);
+  const fallbackNames = requestedExt === '.yaml'
+    ? ['config.yml', 'config.json']
+    : ['config.yaml', 'config.yml', 'config.json'];
+
+  for (const fallbackName of fallbackNames) {
+    const fallbackPath = join(configDir, fallbackName);
+    if (existsSync(fallbackPath)) {
+      return fallbackPath;
+    }
+  }
+
+  return null;
 }

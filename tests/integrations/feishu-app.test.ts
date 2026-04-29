@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createFeishuMarkdownCard,
   createFeishuMarkdownPostContent,
   createFeishuBridge,
   createFeishuWebSocketEventHandlers,
@@ -53,8 +54,8 @@ describe('FeishuAppClient', () => {
       'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
       {
         receive_id: 'oc_chat',
-        msg_type: 'post',
-        content: JSON.stringify(createFeishuMarkdownPostContent('### hello from metaclaw')),
+        msg_type: 'interactive',
+        content: JSON.stringify(createFeishuMarkdownCard('### hello from metaclaw')),
       },
       { authorization: 'Bearer tenant-token' },
     );
@@ -95,6 +96,34 @@ describe('Feishu app helpers', () => {
           [{ tag: 'md', text: '结论' }],
         ],
       },
+    });
+  });
+
+  it('builds Feishu card markdown with the first h1 promoted to the card header', () => {
+    expect(createFeishuMarkdownCard([
+      '# 关于启动 OPC 试点的公告',
+      '',
+      'OPC 不是一个人单打独斗，而是 **一个人对一个业务闭环负责**。',
+    ].join('\n'))).toEqual({
+      config: {
+        wide_screen_mode: true,
+      },
+      header: {
+        template: 'blue',
+        title: {
+          tag: 'plain_text',
+          content: '关于启动 OPC 试点的公告',
+        },
+      },
+      elements: [
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: 'OPC 不是一个人单打独斗，而是 **一个人对一个业务闭环负责**。',
+          },
+        },
+      ],
     });
   });
 
