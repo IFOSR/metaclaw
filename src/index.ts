@@ -18,6 +18,9 @@ import { parseCliArgs } from './cli/args.js';
 import { runScriptedSessionFile } from './session/scripted-session.js';
 import { createNotificationService } from './notifications/feishu.js';
 import { nanoid } from 'nanoid';
+import { MetaclawGatewayServer } from './gateway/server.js';
+import { runGatewayClientUi } from './gateway/client-ui.js';
+import { resolveGatewaySocketPath } from './gateway/gateway-paths.js';
 
 async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
@@ -25,8 +28,14 @@ async function main() {
   // 1. 初始化目录
   const metaclawDir = resolveMetaclawDir();
   const snapshotDir = resolve(metaclawDir, 'snapshots');
+  const gatewaySocketPath = resolveGatewaySocketPath(metaclawDir);
   if (!existsSync(metaclawDir)) mkdirSync(metaclawDir, { recursive: true });
   if (!existsSync(snapshotDir)) mkdirSync(snapshotDir, { recursive: true });
+
+  if (cliArgs.connect) {
+    await runGatewayClientUi(gatewaySocketPath);
+    return;
+  }
 
   // 2. 加载配置
   const config = loadConfig(resolve(metaclawDir, 'config.yaml'));
@@ -82,6 +91,36 @@ async function main() {
     if (result.output.length > 0) {
       process.stdout.write(`${result.output.join('\n')}\n`);
     }
+    return;
+  }
+
+  const gatewayServer = new MetaclawGatewayServer({
+    socketPath: gatewaySocketPath,
+    taskEngine,
+    memoryEngine,
+    orchestration,
+    db,
+    config,
+    contextRecaller,
+    llmBridge,
+    notifier,
+    workspaceRoot: process.cwd(),
+  });
+
+  await gatewayServer.start();
+  process.once('exit', () => {
+    void gatewayServer.stop();
+  });
+  process.once('SIGINT', () => {
+    void gatewayServer.stop().finally(() => process.exit(0));
+  });
+  process.once('SIGTERM', () => {
+    void gatewayServer.stop().finally(() => process.exit(0));
+  });
+
+  if (cliArgs.gateway) {
+    console.log(`Metaclaw Gateway listening: ${gatewaySocketPath}`);
+    await new Promise(() => undefined);
     return;
   }
 

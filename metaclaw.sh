@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Metaclaw 生产启动脚本
-# 用法: ./metaclaw.sh [start|stop|restart|status]
+# 用法: ./metaclaw.sh [start|connect|stop|restart|status]
 
 set -e
 
@@ -77,6 +77,10 @@ find_running_pids() {
             *) continue ;;
         esac
 
+        case "$args" in
+            *"--connect"*) continue ;;
+        esac
+
         local cwd
         cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
         if [ "$cwd" = "$SCRIPT_DIR" ]; then
@@ -114,6 +118,17 @@ start() {
     echo "$$" > "$PID_FILE"
     trap 'rm -f "$PID_FILE"' EXIT
     exec "$NODE_BIN" "$APP_ENTRY"
+}
+
+# 连接到已运行的 Metaclaw Gateway
+connect() {
+    if ! is_running; then
+        log_error "Metaclaw 未运行，请先执行 ./metaclaw.sh start"
+        return 1
+    fi
+
+    ensure_built
+    exec "$NODE_BIN" "$APP_ENTRY" --connect
 }
 
 # 停止
@@ -206,6 +221,9 @@ case "${1:-}" in
     start)
         start
         ;;
+    connect)
+        connect
+        ;;
     stop)
         stop
         ;;
@@ -219,10 +237,11 @@ case "${1:-}" in
         logs "${2:-}"
         ;;
     *)
-        echo "用法: $0 {start|stop|restart|status|logs [-f]}"
+        echo "用法: $0 {start|connect|stop|restart|status|logs [-f]}"
         echo ""
         echo "命令:"
         echo "  start    - 启动 Metaclaw"
+        echo "  connect  - 连接到当前运行的 Metaclaw Gateway"
         echo "  stop     - 停止 Metaclaw"
         echo "  restart  - 重启 Metaclaw"
         echo "  status   - 查看运行状态"

@@ -225,12 +225,14 @@ export class MetaclawSession {
     }
   }
 
-  initialize(): void {
+  initialize(options: { resumeStartupTasks?: boolean; showDashboard?: boolean } = {}): void {
     if (this.initialized) return;
 
-    const recoveredRunningTasks = this.recoverOrphanedRunningTasks();
+    const resumeStartupTasks = options.resumeStartupTasks ?? true;
+    const showDashboard = options.showDashboard ?? true;
+    const recoveredRunningTasks = resumeStartupTasks ? this.recoverOrphanedRunningTasks() : [];
 
-    if (this.deps.config.ui.dashboard_on_start) {
+    if (showDashboard && this.deps.config.ui.dashboard_on_start) {
       const dashboard = this.deps.orchestration.getDashboard();
       this.output = [
         '┌─ Metaclaw v1.0 ─────────────────────────────────┐',
@@ -262,7 +264,7 @@ export class MetaclawSession {
       }
     }
 
-    const startupProposal = this.deps.orchestration.generateProposals('startup')[0];
+    const startupProposal = resumeStartupTasks ? this.deps.orchestration.generateProposals('startup')[0] : null;
     if (startupProposal) {
       this.queueProposal('启动建议', startupProposal);
     }
@@ -270,7 +272,9 @@ export class MetaclawSession {
     this.initialized = true;
     this.refreshRuntimeState();
     this.notify();
-    this.resumeUnfinishedTasksOnStartup(recoveredRunningTasks);
+    if (resumeStartupTasks) {
+      this.resumeUnfinishedTasksOnStartup(recoveredRunningTasks);
+    }
   }
 
   async submit(

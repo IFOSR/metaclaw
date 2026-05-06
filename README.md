@@ -33,6 +33,18 @@ metaclaw
 首次启动会在 `~/.metaclaw/` 创建配置和数据库。
 默认执行器是 `codex`，仍保留 `claude` 兼容入口。
 
+### 连接已运行的 Metaclaw
+
+如果一个 terminal 已经启动了 Metaclaw，再开第二个 terminal 时不要重复 `start`。使用本地 Gateway 连接当前实例：
+
+```bash
+./metaclaw.sh connect
+```
+
+每个 `connect` 都会在主 Metaclaw 进程内创建独立 `session_id`，共享任务、记忆和执行器底座，但会话近期上下文按 session 隔离，不会把两个 terminal 的普通对话混在一起。
+
+`connect` 使用和主进程一致的 Ink TUI 外观，并在状态区显示 `模式 client` 和当前 gateway session；非 TTY 管道场景会自动降级为简化文本客户端。
+
 ### 脚本化烟测
 
 ```bash
