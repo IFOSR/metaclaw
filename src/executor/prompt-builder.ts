@@ -128,6 +128,16 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
       });
     }
 
+    if (bundle.historyContext.timelineTurns.length > 0) {
+      lines.push('', '时间范围任务记录（按 created_at 查询，优先用于回答时间限定的历史任务问题）：');
+      bundle.historyContext.timelineTurns.forEach((turn) => {
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 时间: ${turn.createdAt}`);
+        lines.push(`           用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+
     if (bundle.historyContext.relatedTurns.length > 0) {
       lines.push('', '相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
       bundle.historyContext.relatedTurns.slice(0, 3).forEach((turn, idx) => {
@@ -184,6 +194,7 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
 
   const taskTurns = input.conversationHistory.filter((t) => t.source === 'task');
   const sessionTurns = input.conversationHistory.filter((t) => t.source === 'session');
+  const timelineTurns = input.conversationHistory.filter((t) => t.source === 'timeline');
   const keywordTurns = input.conversationHistory.filter((t) => t.source === 'keyword' || t.source === 'llm');
 
   if (input.conversationHistory.length === 0) {
@@ -202,6 +213,16 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
       sessionTurns.forEach((turn) => {
         const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
         lines.push(`[${turnLabel}] 用户: ${turn.userInput}`);
+        lines.push(`           助手: ${turn.systemOutput}`);
+      });
+    }
+
+    if (timelineTurns.length > 0) {
+      lines.push('', '时间范围任务记录（按 created_at 查询，优先用于回答时间限定的历史任务问题）：');
+      timelineTurns.forEach((turn) => {
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${turnLabel}] 时间: ${turn.createdAt}`);
+        lines.push(`           用户: ${turn.userInput}`);
         lines.push(`           助手: ${turn.systemOutput}`);
       });
     }

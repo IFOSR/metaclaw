@@ -206,21 +206,28 @@ export interface HistoryContext {
     userInput: string;
     systemOutput: string;
     createdAt: string;
-    source: 'task' | 'session' | 'keyword' | 'llm';
+    source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
   }>;
   sessionTurns: Array<{
     taskId: string;
     userInput: string;
     systemOutput: string;
     createdAt: string;
-    source: 'task' | 'session' | 'keyword' | 'llm';
+    source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
+  }>;
+  timelineTurns: Array<{
+    taskId: string;
+    userInput: string;
+    systemOutput: string;
+    createdAt: string;
+    source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
   }>;
   relatedTurns: Array<{
     taskId: string;
     userInput: string;
     systemOutput: string;
     createdAt: string;
-    source: 'task' | 'session' | 'keyword' | 'llm';
+    source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
   }>;
 }
 

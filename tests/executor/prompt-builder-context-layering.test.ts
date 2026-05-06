@@ -67,6 +67,7 @@ function baseBundle(overrides: Partial<ExecutionContextBundle> = {}): ExecutionC
         },
       ],
       sessionTurns: [],
+      timelineTurns: [],
       relatedTurns: [],
     },
     materialContext: {
@@ -115,6 +116,7 @@ describe('buildExecutorContextPrompt context layering', () => {
       historyContext: {
         taskTurns: [],
         sessionTurns: [],
+        timelineTurns: [],
         relatedTurns: [1, 2, 3, 4].map((idx) => ({
           taskId: `task_ref_${idx}`,
           userInput: idx === 1 ? '继续优化 MetaClaw 召回分层' : `历史参考任务 ${idx}`,
@@ -139,5 +141,35 @@ describe('buildExecutorContextPrompt context layering', () => {
     expect(prompt).not.toContain('任务#task_ref_4');
     expect(prompt).not.toContain('完整历史输出第一段');
     expect(prompt).not.toContain('完整历史输出第二段');
+  });
+
+  it('renders timeline turns as authoritative time-range records, not weak similar references', () => {
+    const bundle = baseBundle({
+      mode: 'fresh',
+      resumeContext: undefined,
+      historyContext: {
+        taskTurns: [],
+        sessionTurns: [],
+        timelineTurns: [
+          {
+            taskId: 'task_dIaOBuCeIC',
+            userInput: 'Palantir这家美股上市企业已经发布了财报了。做一个深度调研',
+            systemOutput: 'Palantir 财报分析完成',
+            createdAt: '2026-05-05T23:31:37.701Z',
+            source: 'timeline',
+          },
+        ],
+        relatedTurns: [],
+      },
+      executionInstructions: ['使用与用户相同的语言回复'],
+    });
+
+    const prompt = buildExecutorContextPrompt(buildInput(bundle));
+
+    expect(prompt).toContain('时间范围任务记录（按 created_at 查询，优先用于回答时间限定的历史任务问题）：');
+    expect(prompt).toContain('[任务#task_dIaOBuCeIC] 时间: 2026-05-05T23:31:37.701Z');
+    expect(prompt).toContain('用户: Palantir这家美股上市企业已经发布了财报了。做一个深度调研');
+    expect(prompt).not.toContain('相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
+    expect(prompt).not.toContain('只可作为相似任务参考');
   });
 });

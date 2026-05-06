@@ -11,7 +11,7 @@ export interface ConversationTurn {
   userInput: string;
   systemOutput: string;
   createdAt: string;
-  source: 'task' | 'session' | 'keyword' | 'llm';
+  source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
 }
 
 export interface ExecutorInput {

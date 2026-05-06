@@ -7,7 +7,9 @@ const SESSION_HISTORY_LIMIT = 5;
 const KEYWORD_HISTORY_LIMIT = 1;
 const LLM_CANDIDATE_LIMIT = 20;
 const LLM_RESULT_LIMIT = 5;
+const TIMELINE_HISTORY_LIMIT = 20;
 const OUTPUT_TRUNCATE_LENGTH = 150;
+const CHINA_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 interface RecallInput {
   taskId: string;
@@ -23,6 +25,11 @@ interface InteractionRow {
   created_at: string;
 }
 
+interface TimelineRange {
+  startIso: string;
+  endIso: string;
+}
+
 function truncateOutput(output: string): string {
   if (output.length <= OUTPUT_TRUNCATE_LENGTH) return output;
   return output.slice(0, OUTPUT_TRUNCATE_LENGTH) + '...';
@@ -35,6 +42,36 @@ function toTurn(row: InteractionRow, source: ConversationTurn['source']): Conver
     systemOutput: truncateOutput(row.system_output),
     createdAt: row.created_at,
     source,
+  };
+}
+
+function toChinaDateParts(date: Date): { year: number; month: number; day: number } {
+  const chinaTime = new Date(date.getTime() + CHINA_TIMEZONE_OFFSET_MS);
+  return {
+    year: chinaTime.getUTCFullYear(),
+    month: chinaTime.getUTCMonth(),
+    day: chinaTime.getUTCDate(),
+  };
+}
+
+function fromChinaLocalTimeToUtcIso(
+  parts: { year: number; month: number; day: number },
+  hour: number,
+): string {
+  const utcTime = Date.UTC(parts.year, parts.month, parts.day, hour) - CHINA_TIMEZONE_OFFSET_MS;
+  return new Date(utcTime).toISOString();
+}
+
+function shiftChinaDate(
+  parts: { year: number; month: number; day: number },
+  dayOffset: number,
+): { year: number; month: number; day: number } {
+  const shiftedUtc = Date.UTC(parts.year, parts.month, parts.day + dayOffset);
+  const shifted = new Date(shiftedUtc);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
   };
 }
 
@@ -58,7 +95,17 @@ export class ContextRecaller {
       result.push(toTurn(row, 'task'));
     }
 
-    // 第二层：会话近期历史（排除当前任务）
+    // 第二层：时间限定记忆查询。必须优先于近期会话，避免权威时间记录被降级为 session。
+    const timelineRange = this.detectTimelineRange(input.userInput);
+    if (timelineRange) {
+      const timelineHistory = this.recallByTimeline(timelineRange, input.taskId, seenIds);
+      for (const row of timelineHistory) {
+        seenIds.add(row.id);
+        result.push(toTurn(row, 'timeline'));
+      }
+    }
+
+    // 第三层：会话近期历史（排除当前任务）
     const sessionHistory = this.recallForSession(input.sessionId, input.taskId);
     for (const row of sessionHistory) {
       if (!seenIds.has(row.id)) {
@@ -67,7 +114,7 @@ export class ContextRecaller {
       }
     }
 
-    // 第三层：关键词关联历史
+    // 第四层：关键词关联历史
     const keywords = this.extractKeywords(input.userInput);
     if (keywords.length > 0) {
       const keywordHistory = this.recallByKeywords(keywords, seenIds);
@@ -94,7 +141,17 @@ export class ContextRecaller {
       result.push(toTurn(row, 'task'));
     }
 
-    // 第二层：会话近期历史
+    // 第二层：时间限定记忆查询。必须优先于近期会话，避免权威时间记录被降级为 session。
+    const timelineRange = this.detectTimelineRange(input.userInput);
+    if (timelineRange) {
+      const timelineHistory = this.recallByTimeline(timelineRange, input.taskId, seenIds);
+      for (const row of timelineHistory) {
+        seenIds.add(row.id);
+        result.push(toTurn(row, 'timeline'));
+      }
+    }
+
+    // 第三层：会话近期历史
     const sessionHistory = this.recallForSession(input.sessionId, input.taskId);
     for (const row of sessionHistory) {
       if (!seenIds.has(row.id)) {
@@ -103,7 +160,7 @@ export class ContextRecaller {
       }
     }
 
-    // 第三层：LLM 排序 → fallback bigram
+    // 第四层：LLM 排序 → fallback bigram
     if (this.llmBridge) {
       const llmTurns = await this.recallByLlm(input.userInput, seenIds);
       if (llmTurns.length > 0) {
@@ -184,6 +241,39 @@ export class ContextRecaller {
     return this.db.prepare(
       'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? AND (task_id IS NULL OR task_id != ?) ORDER BY created_at DESC LIMIT ?'
     ).all(sessionId, excludeTaskId, SESSION_HISTORY_LIMIT) as InteractionRow[];
+  }
+
+  private recallByTimeline(
+    range: TimelineRange,
+    excludeTaskId: string,
+    excludeIds: Set<string>,
+  ): InteractionRow[] {
+    const rows = this.db.prepare(
+      'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE created_at >= ? AND created_at < ? AND (task_id IS NULL OR task_id != ?) ORDER BY created_at ASC LIMIT ?'
+    ).all(range.startIso, range.endIso, excludeTaskId, TIMELINE_HISTORY_LIMIT) as InteractionRow[];
+
+    return rows.filter(row => !excludeIds.has(row.id));
+  }
+
+  private detectTimelineRange(input: string, now = new Date()): TimelineRange | null {
+    if (!this.isTimelineRecallRequest(input)) {
+      return null;
+    }
+
+    const today = toChinaDateParts(now);
+    const targetDay = /昨天/u.test(input) ? shiftChinaDate(today, -1) : today;
+    const isMorning = /(早上|上午)/u.test(input);
+
+    return {
+      startIso: fromChinaLocalTimeToUtcIso(targetDay, 0),
+      endIso: fromChinaLocalTimeToUtcIso(targetDay, isMorning ? 12 : 24),
+    };
+  }
+
+  private isTimelineRecallRequest(input: string): boolean {
+    const hasTimeSignal = /(今天早上|今天上午|今天|昨天|早上|上午)/u.test(input);
+    const hasRecallIntent = /(执行了什么|做了什么|让我执行|让我做|任务清单|列出来|列出|清单|今天.*任务|昨天.*任务)/u.test(input);
+    return hasTimeSignal && hasRecallIntent;
   }
 
   private recallByKeywords(keywords: string[], excludeIds: Set<string>): InteractionRow[] {

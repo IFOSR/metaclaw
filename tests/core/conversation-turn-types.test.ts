@@ -13,4 +13,16 @@ describe('ConversationTurn typing', () => {
 
     expect(turn.source).toBe('llm');
   });
+
+  it('accepts timeline as a valid recall source', () => {
+    const turn: ConversationTurn = {
+      taskId: 'task_1',
+      userInput: '今天早上我让你执行了什么任务',
+      systemOutput: '时间范围记录已召回',
+      createdAt: '2026-05-06T02:45:00.000Z',
+      source: 'timeline',
+    };
+
+    expect(turn.source).toBe('timeline');
+  });
 });

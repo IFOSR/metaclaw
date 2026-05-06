@@ -166,6 +166,7 @@ export class ResumeContextBuilder {
       historyContext: {
         taskTurns: conversationHistory.filter(turn => turn.source === 'task'),
         sessionTurns: conversationHistory.filter(turn => turn.source === 'session'),
+        timelineTurns: conversationHistory.filter(turn => turn.source === 'timeline'),
         relatedTurns: this.mergeRelatedTurns(
           conversationHistory.filter(turn => turn.source === 'keyword' || turn.source === 'llm'),
           relatedTaskTurns,

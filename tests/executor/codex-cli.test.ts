@@ -54,6 +54,7 @@ describe('CodexCliAdapter', () => {
           historyContext: {
             taskTurns: [],
             sessionTurns: [],
+            timelineTurns: [],
             relatedTurns: [],
           },
           materialContext: {
@@ -96,6 +97,7 @@ describe('CodexCliAdapter', () => {
           historyContext: {
             taskTurns: [],
             sessionTurns: [],
+            timelineTurns: [],
             relatedTurns: [],
           },
           materialContext: {
@@ -134,6 +136,7 @@ describe('CodexCliAdapter', () => {
           historyContext: {
             taskTurns: [],
             sessionTurns: [],
+            timelineTurns: [],
             relatedTurns: [],
           },
           materialContext: {

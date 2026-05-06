@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { ContextRecaller } from '../../src/core/context-recaller.js';
@@ -31,6 +31,10 @@ describe('ContextRecaller', () => {
   beforeEach(() => {
     db = createTestDb();
     recaller = new ContextRecaller(db);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('第一层：召回当前任务历史', () => {
@@ -217,6 +221,46 @@ describe('ContextRecaller', () => {
     const keywordTurns = result.filter(t => t.source === 'keyword');
     expect(keywordTurns).toHaveLength(1);
     expect(keywordTurns[0].userInput).toContain('MetaClaw');
+  });
+
+  it('时间范围召回：今天早上的任务清单应按北京时间 created_at 查询', () => {
+    insertInteraction(db, {
+      id: 'int_yesterday_night', taskId: 'task_old', sessionId: 'sess_old',
+      userInput: '昨天晚上帮我整理别的材料',
+      systemOutput: '旧任务不应进入今天早上清单',
+      createdAt: '2026-05-05T15:59:59.999Z',
+    });
+    insertInteraction(db, {
+      id: 'int_palantir', taskId: 'task_dIaOBuCeIC', sessionId: 'sess_old',
+      userInput: 'Palantir这家美股上市企业已经发布了财报了。根据最新的财报，做一个深度调研',
+      systemOutput: 'Palantir 财报分析完成',
+      createdAt: '2026-05-05T23:31:37.701Z',
+    });
+    insertInteraction(db, {
+      id: 'int_yixunpan', taskId: 'task_WJVB367avd', sessionId: 'sess_1',
+      userInput: '今天早上我让你做了一个公司的调研，具体是哪个公司？',
+      systemOutput: '今天早上你让我调研的公司是：易寻盘',
+      createdAt: '2026-05-06T02:43:09.481Z',
+    });
+    insertInteraction(db, {
+      id: 'int_afternoon', taskId: 'task_late', sessionId: 'sess_old',
+      userInput: '今天下午继续做渠道分析',
+      systemOutput: '下午任务不应进入早上清单',
+      createdAt: '2026-05-06T04:00:00.000Z',
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T03:00:00.000Z'));
+    const result = recaller.recall({
+      taskId: 'task_current',
+      sessionId: 'sess_1',
+      userInput: '今天早上我让你执行了什么任务，列出来今天早上执行的任务清单',
+    });
+
+    const timelineTurns = result.filter(t => t.source === 'timeline');
+    expect(timelineTurns.map(t => t.taskId)).toEqual(['task_dIaOBuCeIC', 'task_WJVB367avd']);
+    expect(timelineTurns[0].userInput).toContain('Palantir');
+    expect(timelineTurns[1].userInput).toContain('具体是哪个公司');
   });
 
   it('LLM 排序：当 bigram 匹配不到时，用 LLM 召回', async () => {
