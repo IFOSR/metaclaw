@@ -111,4 +111,54 @@ describe('Phase E8 TaskMemoryCard recall search', () => {
     expect(result.map(candidate => candidate.taskId)).not.toContain('task_phoenix_weekly_parked');
     expect(result.map(candidate => candidate.taskId)).not.toContain('task_phoenix_review_done');
   });
+
+  it('prioritizes explicit entity matches over generic research terms', () => {
+    const db = createTestDb();
+    const repo = new TaskMemoryCardRepo(db);
+
+    repo.insert({
+      id: 'tmc_palantir_financials',
+      taskId: 'task_palantir_analysis',
+      title: 'Palantir 财报与商业模式变化深度调研',
+      goal: '分析 Palantir 最新财报后的商业模式变化、前景和转型路径',
+      summary: '围绕 Palantir AIP、政府业务、商业客户增长和利润率变化形成深度分析。',
+      keyDecisions: ['重点区分政府业务和商业业务增长逻辑'],
+      changedFiles: ['docs/palantir-analysis.md'],
+      verificationCommands: [],
+      pitfalls: ['不要把历史估值结论当作最新财报事实'],
+      artifacts: ['docs/palantir-analysis.md'],
+      outcome: 'success',
+      sourceCandidateId: 'lc_palantir',
+      createdAt: '2026-05-06T00:00:00Z',
+      updatedAt: '2026-05-06T00:00:00Z',
+    });
+
+    repo.insert({
+      id: 'tmc_yixunpan_geo',
+      taskId: 'task_yixunpan_geo',
+      title: '易寻盘与海外 GEO 公司调研',
+      goal: '调研易寻盘以及中国做海外 GEO 的公司、产品和竞争力',
+      summary: '输出易寻盘公司情况、海外 GEO 产品对比和竞争力判断。',
+      keyDecisions: ['按公司、产品、竞争力三个维度组织'],
+      changedFiles: ['docs/yixunpan-geo.md'],
+      verificationCommands: [],
+      pitfalls: ['不要把 GEO 调研泛化成所有 AI 公司调研'],
+      artifacts: ['docs/yixunpan-geo.md'],
+      outcome: 'success',
+      sourceCandidateId: 'lc_yixunpan',
+      createdAt: '2026-05-06T01:00:00Z',
+      updatedAt: '2026-05-06T01:00:00Z',
+    });
+
+    const result = repo.searchRelevant({
+      queryText: '今天早上我是不是让你做过 Palantir 分析相关任务',
+      currentTaskId: 'task_current_recall',
+      keywords: ['今天', '早上', 'Palantir', '分析', '相关', '任务'],
+      topK: 5,
+    });
+
+    expect(result.map(candidate => candidate.taskId)).toEqual(['task_palantir_analysis']);
+    expect(result[0]?.score).toBeGreaterThanOrEqual(60);
+    expect(result[0]?.title).toContain('Palantir');
+  });
 });

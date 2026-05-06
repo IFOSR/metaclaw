@@ -3,7 +3,7 @@ import type { ContextRecaller } from './context-recaller.js';
 import type { MemoryEngine } from './memory-engine.js';
 import type { TaskMemoryDocument } from './task-embedding-service.js';
 import type { TaskEngine } from './task-engine.js';
-import type { ExecutionContextBundle, ResolvedPreference, Task, TaskSnapshot, WorkspaceContext } from './types.js';
+import type { ExecutionContextBundle, ResolvedPreference, Task, TaskMemoryCandidate, TaskSnapshot, WorkspaceContext } from './types.js';
 import { buildMaterialSummary, extractMaterialTextSnippets } from './material-utils.js';
 import { resolve } from 'path';
 
@@ -96,6 +96,13 @@ export class ResumeContextBuilder {
       : [];
     const latestSnapshot = this.taskEngine.getLatestSnapshot(task.id);
     const keywords = this.extractKeywords(input.userInput);
+    const taskMemoryRecall = await this.memoryEngine.recallForReview({
+      taskId: task.id,
+      keywords,
+      userInput: input.userInput,
+      topK: 3,
+    });
+    const taskMemoryCandidates = this.dedupeTaskMemoryCandidates(taskMemoryRecall.taskCandidates);
     const resolvedPreferences = input.resolvedPreferencesOverride
       ?? this.memoryEngine.recall({
         taskId: task.id,
@@ -163,6 +170,9 @@ export class ResumeContextBuilder {
         explicitUserInstruction: input.userInput,
         resolvedPreferences,
       },
+      taskMemoryContext: {
+        taskCandidates: taskMemoryCandidates,
+      },
       historyContext: {
         taskTurns: conversationHistory.filter(turn => turn.source === 'task'),
         sessionTurns: conversationHistory.filter(turn => turn.source === 'session'),
@@ -180,6 +190,19 @@ export class ResumeContextBuilder {
       workspaceContext,
       executionInstructions,
     };
+  }
+
+  private dedupeTaskMemoryCandidates(candidates: TaskMemoryCandidate[]): TaskMemoryCandidate[] {
+    const deduped = new Map<string, TaskMemoryCandidate>();
+
+    for (const candidate of candidates) {
+      const existing = deduped.get(candidate.taskId);
+      if (!existing || candidate.score > existing.score) {
+        deduped.set(candidate.taskId, candidate);
+      }
+    }
+
+    return Array.from(deduped.values()).sort((left, right) => right.score - left.score);
   }
 
   private buildExecutionInstructions(

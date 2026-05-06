@@ -56,6 +56,9 @@ function baseBundle(overrides: Partial<ExecutionContextBundle> = {}): ExecutionC
       explicitUserInstruction: '继续优化 MetaClaw',
       resolvedPreferences: [],
     },
+    taskMemoryContext: {
+      taskCandidates: [],
+    },
     historyContext: {
       taskTurns: [
         {
@@ -171,5 +174,52 @@ describe('buildExecutorContextPrompt context layering', () => {
     expect(prompt).toContain('用户: Palantir这家美股上市企业已经发布了财报了。做一个深度调研');
     expect(prompt).not.toContain('相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
     expect(prompt).not.toContain('只可作为相似任务参考');
+  });
+
+  it('renders task memory cards as structured evidence before weak similar references', () => {
+    const bundle = baseBundle({
+      mode: 'fresh',
+      resumeContext: undefined,
+      taskMemoryContext: {
+        taskCandidates: [
+          {
+            id: 'tmc_palantir_financials',
+            taskId: 'task_palantir_analysis',
+            sourceTaskId: 'task_palantir_analysis',
+            memoryKind: 'task_summary',
+            title: 'Palantir 财报与商业模式变化深度调研',
+            summary: '围绕 Palantir AIP、政府业务、商业客户增长和利润率变化形成深度分析。',
+            reason: '参考型召回：历史任务卡片 task_palantir_analysis 与当前输入高度相关，outcome=success',
+            source: 'continuity',
+            score: 92,
+            artifactPaths: ['docs/palantir-analysis.md'],
+          },
+        ],
+      },
+      historyContext: {
+        taskTurns: [],
+        sessionTurns: [],
+        timelineTurns: [],
+        relatedTurns: [
+          {
+            taskId: 'task_yixunpan_geo',
+            userInput: '调研易寻盘以及海外 GEO 公司',
+            systemOutput: '易寻盘调研完成',
+            createdAt: '2026-05-06T01:00:00.000Z',
+            source: 'llm',
+          },
+        ],
+      },
+      executionInstructions: ['使用与用户相同的语言回复'],
+    });
+
+    const prompt = buildExecutorContextPrompt(buildInput(bundle));
+
+    expect(prompt).toContain('任务记忆卡片（Task Memory Cards，结构化历史任务记录，证据强度高于相似历史参考）：');
+    expect(prompt).toContain('[1] 任务#task_palantir_analysis｜Palantir 财报与商业模式变化深度调研');
+    expect(prompt).toContain('- 关联产物：docs/palantir-analysis.md');
+    expect(prompt).toContain('相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
+    expect(prompt.indexOf('任务记忆卡片（Task Memory Cards')).toBeLessThan(prompt.indexOf('相似历史参考（Reference Context Pack'));
+    expect(prompt.indexOf('任务#task_palantir_analysis')).toBeLessThan(prompt.indexOf('任务#task_yixunpan_geo'));
   });
 });

@@ -7,6 +7,7 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
+import { TaskMemoryCardRepo } from '../../src/storage/task-memory-card-repo.js';
 import { TaskEngine } from '../../src/core/task-engine.js';
 import { MemoryEngine } from '../../src/core/memory-engine.js';
 import { ContextRecaller } from '../../src/core/context-recaller.js';
@@ -24,6 +25,7 @@ describe('ResumeContextBuilder', () => {
   let db: Database.Database;
   let taskRepo: TaskRepo;
   let prefRepo: PreferenceRepo;
+  let taskMemoryCardRepo: TaskMemoryCardRepo;
   let taskEngine: TaskEngine;
   let memoryEngine: MemoryEngine;
   let contextRecaller: ContextRecaller;
@@ -33,8 +35,9 @@ describe('ResumeContextBuilder', () => {
     db = createTestDb();
     taskRepo = new TaskRepo(db);
     prefRepo = new PreferenceRepo(db);
+    taskMemoryCardRepo = new TaskMemoryCardRepo(db);
     taskEngine = new TaskEngine(taskRepo, resolve(tmpdir(), 'metaclaw-test-snapshots'));
-    memoryEngine = new MemoryEngine(prefRepo, new ObservationRepo(db));
+    memoryEngine = new MemoryEngine(prefRepo, new ObservationRepo(db), undefined, undefined, taskMemoryCardRepo);
     contextRecaller = new ContextRecaller(db);
     builder = new ResumeContextBuilder(taskEngine, memoryEngine, contextRecaller);
   });
@@ -244,6 +247,40 @@ describe('ResumeContextBuilder', () => {
     expect(bundle.workspaceContext?.targetPaths[0]).toBe(resolve(process.cwd(), 'metaclaw-tasks', task.id));
     expect(bundle.executionInstructions.some(line => line.includes('必须把结果写入本地文件系统'))).toBe(true);
     expect(bundle.executionInstructions.some(line => line.includes('不要在回复中粘贴或打印完整文件内容'))).toBe(true);
+  });
+
+  it('injects task memory cards into the execution bundle before weak related history is rendered', async () => {
+    const task = taskEngine.create({ title: '历史任务核对', goal: '确认今天早上是否做过 Palantir 分析' });
+
+    taskMemoryCardRepo.insert({
+      id: 'tmc_palantir_financials',
+      taskId: 'task_palantir_analysis',
+      title: 'Palantir 财报与商业模式变化深度调研',
+      goal: '分析 Palantir 最新财报后的商业模式变化、前景和转型路径',
+      summary: '围绕 Palantir AIP、政府业务、商业客户增长和利润率变化形成深度分析。',
+      keyDecisions: ['重点区分政府业务和商业业务增长逻辑'],
+      changedFiles: ['docs/palantir-analysis.md'],
+      verificationCommands: [],
+      pitfalls: ['不要把历史估值结论当作最新财报事实'],
+      artifacts: ['docs/palantir-analysis.md'],
+      outcome: 'success',
+      sourceCandidateId: 'lc_palantir',
+      createdAt: '2026-05-06T00:00:00Z',
+      updatedAt: '2026-05-06T00:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '今天早上我是不是让你做过 Palantir 分析相关任务',
+      sessionId: 'sess_task_memory',
+    });
+
+    expect(bundle.taskMemoryContext.taskCandidates.map(candidate => candidate.taskId)).toEqual([
+      'task_palantir_analysis',
+    ]);
+    expect(bundle.taskMemoryContext.taskCandidates[0]?.summary).toContain('Palantir AIP');
+    expect(bundle.taskMemoryContext.taskCandidates[0]?.artifactPaths).toContain('docs/palantir-analysis.md');
   });
 
   it('resume bundle keeps current task context and limits unrelated keyword history to one minimal reference', async () => {

@@ -138,6 +138,20 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
       });
     }
 
+    const taskMemoryCandidates = bundle.taskMemoryContext?.taskCandidates ?? [];
+    if (taskMemoryCandidates.length > 0) {
+      lines.push('', '任务记忆卡片（Task Memory Cards，结构化历史任务记录，证据强度高于相似历史参考）：');
+      taskMemoryCandidates.slice(0, 3).forEach((candidate, idx) => {
+        lines.push(`[${idx + 1}] 任务#${candidate.taskId}｜${candidate.title}`);
+        lines.push(`- 记忆类型：${candidate.memoryKind}`);
+        lines.push(`- 摘要：${renderTurnOutput(candidate.summary, 220)}`);
+        lines.push(`- 召回原因：${candidate.reason}`);
+        lines.push(`- 相关分：${candidate.score}`);
+        lines.push(`- 来源：${candidate.source}`);
+        lines.push(`- 关联产物：${candidate.artifactPaths.join('；') || '无'}`);
+      });
+    }
+
     if (bundle.historyContext.relatedTurns.length > 0) {
       lines.push('', '相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考，不得覆盖当前任务）：');
       bundle.historyContext.relatedTurns.slice(0, 3).forEach((turn, idx) => {

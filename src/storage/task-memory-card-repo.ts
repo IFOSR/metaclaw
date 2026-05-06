@@ -75,6 +75,29 @@ export interface TaskMemoryCardSearchCandidate extends TaskMemoryCardRecord {
   score: number;
 }
 
+const GENERIC_RECALL_TERMS = new Set([
+  '任务',
+  '相关',
+  '历史',
+  '今天',
+  '早上',
+  '上午',
+  '刚才',
+  '执行',
+  '清单',
+  '列出',
+  '公司',
+  '产品',
+  '情况',
+  '分析',
+  '调研',
+  '方案',
+  '总结',
+  '深度',
+  '最新',
+  '继续',
+]);
+
 function tokenize(input: string): string[] {
   const asciiTokens = input
     .toLowerCase()
@@ -84,6 +107,24 @@ function tokenize(input: string): string[] {
     .map(token => token.trim())
     .filter(token => token.length >= 2);
   return Array.from(new Set([...asciiTokens, ...cjkTokens]));
+}
+
+function normalizeText(input: string): string {
+  return input.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function isGenericRecallTerm(token: string): boolean {
+  const normalized = token.toLowerCase().trim();
+  if (!normalized) {
+    return true;
+  }
+  if (GENERIC_RECALL_TERMS.has(normalized)) {
+    return true;
+  }
+  if (/^[a-z0-9_\-]+$/.test(normalized)) {
+    return normalized.length < 3 || GENERIC_RECALL_TERMS.has(normalized);
+  }
+  return normalized.length < 2;
 }
 
 function includesToken(text: string, token: string): boolean {
@@ -105,18 +146,39 @@ function buildSearchText(card: TaskMemoryCardRecord): string {
 
 function calculateRelevanceScore(card: TaskMemoryCardRecord, request: TaskMemoryCardSearchRequest): number {
   const searchText = buildSearchText(card);
-  const normalizedKeywords = Array.from(new Set(request.keywords.map(keyword => keyword.trim()).filter(Boolean)));
-  const queryTokens = tokenize(request.queryText);
+  const titleGoalSummaryText = [card.title, card.goal, card.summary].join('\n');
+  const normalizedQueryText = normalizeText(request.queryText);
+  const normalizedSearchText = normalizeText(searchText);
+  const normalizedTitleGoalSummaryText = normalizeText(titleGoalSummaryText);
+  const normalizedKeywords = Array.from(new Set(
+    request.keywords
+      .map(keyword => keyword.trim())
+      .filter(keyword => keyword && !isGenericRecallTerm(keyword)),
+  ));
+  const queryTokens = tokenize(request.queryText).filter(token => !isGenericRecallTerm(token));
   let score = 0;
 
+  if (normalizedQueryText.length >= 4 && normalizedSearchText.includes(normalizedQueryText)) {
+    score += 36;
+  }
+
   for (const keyword of normalizedKeywords) {
-    if (includesToken(searchText, keyword)) {
-      score += 24;
+    if (includesToken(titleGoalSummaryText, keyword)) {
+      score += 34;
+    } else if (includesToken(searchText, keyword)) {
+      score += 18;
     }
   }
 
   for (const token of queryTokens) {
-    if (token.length >= 2 && includesToken(searchText, token)) {
+    const normalizedToken = normalizeText(token);
+    if (!normalizedToken) {
+      continue;
+    }
+
+    if (normalizedTitleGoalSummaryText.includes(normalizedToken)) {
+      score += token.length >= 4 ? 16 : 10;
+    } else if (normalizedSearchText.includes(normalizedToken)) {
       score += token.length >= 4 ? 8 : 5;
     }
   }

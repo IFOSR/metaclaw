@@ -200,6 +200,10 @@ export interface MemoryContext {
   resolvedPreferences: ResolvedPreference[];
 }
 
+export interface TaskMemoryContext {
+  taskCandidates: TaskMemoryCandidate[];
+}
+
 export interface HistoryContext {
   taskTurns: Array<{
     taskId: string;
@@ -262,6 +266,7 @@ export interface ExecutionContextBundle {
   taskBrief: TaskBrief;
   resumeContext?: ResumeContext;
   memoryContext: MemoryContext;
+  taskMemoryContext: TaskMemoryContext;
   historyContext: HistoryContext;
   materialContext: MaterialContext;
   workspaceContext?: WorkspaceContext;
