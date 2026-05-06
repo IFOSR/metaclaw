@@ -186,6 +186,131 @@ describe('Feishu app helpers', () => {
     ].join('\n'));
   });
 
+  it('renders GitHub-style Markdown tables as structured Feishu-safe Markdown blocks', () => {
+    const card = createFeishuMarkdownCard([
+      '下面是对比：',
+      '',
+      '| 维度 | Metaclaw，也就是我 | DeepSeek-TUI |',
+      '|---|---|---|',
+      '| 核心定位 | 多任务调度与上下文治理层 | 终端原生 coding agent |',
+      '| 强项 | 管任务、管上下文、管历史、管偏好、管执行边界 | 直接在终端读写文件、跑命令、改代码、用 Git |',
+      '| 使用场景 | 长任务、跨会话任务、带状态的复杂协作 | 本地开发、代码修改、终端交互 |',
+      '',
+      '结论：两者定位不同。',
+    ].join('\n'));
+
+    expect(card).toEqual({
+      schema: '2.0',
+      config: {
+        wide_screen_mode: true,
+      },
+      body: {
+        elements: [
+          {
+            tag: 'markdown',
+            content: '下面是对比：',
+          },
+          {
+            tag: 'table',
+            page_size: 3,
+            row_height: 'low',
+            columns: [
+              {
+                name: 'col_0',
+                display_name: '维度',
+                data_type: 'text',
+                width: 'auto',
+              },
+              {
+                name: 'col_1',
+                display_name: 'Metaclaw，也就是我',
+                data_type: 'text',
+                width: 'auto',
+              },
+              {
+                name: 'col_2',
+                display_name: 'DeepSeek-TUI',
+                data_type: 'text',
+                width: 'auto',
+              },
+            ],
+            rows: [
+              {
+                col_0: '核心定位',
+                col_1: '多任务调度与上下文治理层',
+                col_2: '终端原生 coding agent',
+              },
+              {
+                col_0: '强项',
+                col_1: '管任务、管上下文、管历史、管偏好、管执行边界',
+                col_2: '直接在终端读写文件、跑命令、改代码、用 Git',
+              },
+              {
+                col_0: '使用场景',
+                col_1: '长任务、跨会话任务、带状态的复杂协作',
+                col_2: '本地开发、代码修改、终端交互',
+              },
+            ],
+          },
+          {
+            tag: 'markdown',
+            content: '结论：两者定位不同。',
+          },
+        ],
+      },
+    });
+  });
+
+  it('can render Markdown tables as Feishu-safe Markdown fallback blocks', () => {
+    const card = createFeishuMarkdownCard([
+      '下面是对比：',
+      '',
+      '| 维度 | Metaclaw，也就是我 | DeepSeek-TUI |',
+      '|---|---|---|',
+      '| 核心定位 | 多任务调度与上下文治理层 | 终端原生 coding agent |',
+      '| 强项 | 管任务、管上下文、管历史、管偏好、管执行边界 | 直接在终端读写文件、跑命令、改代码、用 Git |',
+      '',
+      '结论：两者定位不同。',
+    ].join('\n'), { tableMode: 'markdown' });
+
+    expect(card).toEqual({
+      config: {
+        wide_screen_mode: true,
+      },
+      elements: [
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: '下面是对比：',
+          },
+        },
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: [
+              '**维度：核心定位**',
+              '- **Metaclaw，也就是我**：多任务调度与上下文治理层',
+              '- **DeepSeek-TUI**：终端原生 coding agent',
+              '',
+              '**维度：强项**',
+              '- **Metaclaw，也就是我**：管任务、管上下文、管历史、管偏好、管执行边界',
+              '- **DeepSeek-TUI**：直接在终端读写文件、跑命令、改代码、用 Git',
+            ].join('\n'),
+          },
+        },
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: '结论：两者定位不同。',
+          },
+        },
+      ],
+    });
+  });
+
   it('resolves app secret from env when configured', () => {
     process.env.TEST_FEISHU_SECRET = 'from-env';
     expect(resolveAppSecret({

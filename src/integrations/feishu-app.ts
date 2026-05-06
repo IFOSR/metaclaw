@@ -55,7 +55,9 @@ interface FeishuWebhookCardContent {
   card: FeishuMarkdownCard;
 }
 
-interface FeishuMarkdownCard {
+type FeishuMarkdownCard = FeishuMarkdownCardV1 | FeishuMarkdownCardV2;
+
+interface FeishuMarkdownCardV1 {
   config: {
     wide_screen_mode: boolean;
   };
@@ -66,16 +68,46 @@ interface FeishuMarkdownCard {
       content: string;
     };
   };
-  elements: Array<
-    {
+  elements: FeishuMarkdownCardElement[];
+}
+
+interface FeishuMarkdownCardV2 {
+  schema: '2.0';
+  config: {
+    wide_screen_mode: boolean;
+  };
+  header?: FeishuMarkdownCardV1['header'];
+  body: {
+    elements: FeishuMarkdownCardV2Element[];
+  };
+}
+
+type FeishuMarkdownCardElement =
+  {
       tag: 'div';
       text: {
         tag: 'lark_md';
         content: string;
       };
+    };
+
+type FeishuMarkdownCardV2Element =
+  | {
+      tag: 'markdown';
+      content: string;
     }
-  >;
-}
+  | {
+      tag: 'table';
+      page_size: number;
+      row_height: 'low';
+      columns: Array<{
+        name: string;
+        display_name: string;
+        data_type: 'text';
+        width: 'auto';
+      }>;
+      rows: Array<Record<string, string>>;
+    };
 
 const MARKDOWN_FENCE_OPEN_RE = /^```([^\n`]*)\s*$/;
 const MARKDOWN_FENCE_CLOSE_RE = /^```\s*$/;
@@ -132,20 +164,32 @@ export class FeishuAppClient {
 
   async sendMarkdownCardToChat(chatId: string, markdown: string): Promise<void> {
     const token = await this.getTenantAccessToken();
-    const response = await this.postJson(
-      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
-      {
-        receive_id: chatId,
-        msg_type: 'interactive',
-        content: JSON.stringify(createFeishuMarkdownCard(markdown)),
-      },
-      {
-        authorization: `Bearer ${token}`,
-      },
-    );
-    const payload = await response.json() as { code?: number; msg?: string };
-    if (!response.ok || payload.code !== 0) {
-      throw new Error(`飞书消息发送失败: ${payload.msg ?? response.status}`);
+    const sendCard = async (card: FeishuMarkdownCard) => {
+      const response = await this.postJson(
+        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+        {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content: JSON.stringify(card),
+        },
+        {
+          authorization: `Bearer ${token}`,
+        },
+      );
+      const payload = await response.json() as { code?: number; msg?: string };
+      if (!response.ok || payload.code !== 0) {
+        throw new Error(`飞书消息发送失败: ${payload.msg ?? response.status}`);
+      }
+    };
+
+    const card = createFeishuMarkdownCard(markdown);
+    try {
+      await sendCard(card);
+    } catch (error) {
+      if (!isFeishuTableCard(card) || !isFeishuCardContentError(error)) {
+        throw error;
+      }
+      await sendCard(createFeishuMarkdownCard(markdown, { tableMode: 'markdown' }));
     }
   }
 
@@ -527,8 +571,35 @@ export function createFeishuWebhookMarkdownCard(markdown: string): FeishuWebhook
   };
 }
 
-export function createFeishuMarkdownCard(markdown: string): FeishuMarkdownCard {
+export function createFeishuMarkdownCard(
+  markdown: string,
+  options: { tableMode?: 'native' | 'markdown' } = {},
+): FeishuMarkdownCard {
   const { title, content } = extractFeishuCardTitle(markdown);
+  const tableMode = options.tableMode ?? 'native';
+  if (tableMode === 'native' && hasFeishuMarkdownTable(content)) {
+    return {
+      schema: '2.0',
+      config: {
+        wide_screen_mode: true,
+      },
+      ...(title
+        ? {
+            header: {
+              template: 'blue' as const,
+              title: {
+                tag: 'plain_text' as const,
+                content: title,
+              },
+            },
+          }
+        : {}),
+      body: {
+        elements: createFeishuMarkdownCardV2Elements(content),
+      },
+    };
+  }
+
   return {
     config: {
       wide_screen_mode: true,
@@ -544,7 +615,7 @@ export function createFeishuMarkdownCard(markdown: string): FeishuMarkdownCard {
           },
         }
       : {}),
-    elements: createFeishuMarkdownCardElements(content),
+    elements: createFeishuMarkdownCardElements(content, { tableMode }),
   };
 }
 
@@ -571,14 +642,233 @@ function extractFeishuCardTitle(markdown: string): { title: string | null; conte
   };
 }
 
-function createFeishuMarkdownCardElements(markdown: string): FeishuMarkdownCard['elements'] {
-  return [{
-    tag: 'div' as const,
-    text: {
-      tag: 'lark_md' as const,
-      content: normalizeFeishuMarkdownContent(markdown),
-    },
-  }];
+function createFeishuMarkdownCardElements(
+  markdown: string,
+  options: { tableMode?: 'native' | 'markdown' } = {},
+): FeishuMarkdownCardV1['elements'] {
+  const segments = splitFeishuMarkdownTableSegments(markdown);
+  const elements: FeishuMarkdownCardV1['elements'] = [];
+
+  for (const segment of segments) {
+    if (segment.kind === 'markdown') {
+      const content = normalizeFeishuMarkdownContent(segment.content).trim();
+      if (content) {
+        elements.push({
+          tag: 'div' as const,
+          text: {
+            tag: 'lark_md' as const,
+            content,
+          },
+        });
+      }
+      continue;
+    }
+
+    if ((options.tableMode ?? 'native') === 'native') {
+      elements.push({
+        tag: 'div' as const,
+        text: {
+          tag: 'lark_md' as const,
+          content: segmentToMarkdownTable(segment),
+        },
+      });
+      continue;
+    }
+
+    elements.push({
+      tag: 'div' as const,
+      text: {
+        tag: 'lark_md' as const,
+        content: formatMarkdownTableAsFeishuMarkdown(segment),
+      },
+    });
+  }
+
+  return elements.length > 0
+    ? elements
+    : [{
+        tag: 'div' as const,
+        text: {
+          tag: 'lark_md' as const,
+          content: '',
+        },
+      }];
+}
+
+function createFeishuMarkdownCardV2Elements(markdown: string): FeishuMarkdownCardV2Element[] {
+  const segments = splitFeishuMarkdownTableSegments(markdown);
+  const elements: FeishuMarkdownCardV2Element[] = [];
+
+  for (const segment of segments) {
+    if (segment.kind === 'markdown') {
+      const content = normalizeFeishuMarkdownContent(segment.content).trim();
+      if (content) {
+        elements.push({
+          tag: 'markdown' as const,
+          content,
+        });
+      }
+      continue;
+    }
+
+    elements.push(createFeishuNativeTableElement(segment));
+  }
+
+  return elements.length > 0
+    ? elements
+    : [{ tag: 'markdown' as const, content: '' }];
+}
+
+type FeishuMarkdownSegment =
+  | { kind: 'markdown'; content: string }
+  | { kind: 'table'; headers: string[]; rows: string[][] };
+
+function splitFeishuMarkdownTableSegments(markdown: string): FeishuMarkdownSegment[] {
+  const lines = markdown.split('\n');
+  const segments: FeishuMarkdownSegment[] = [];
+  let currentMarkdown: string[] = [];
+  let inFence = false;
+  let index = 0;
+
+  const flushMarkdown = () => {
+    if (currentMarkdown.length === 0) {
+      return;
+    }
+    segments.push({ kind: 'markdown', content: currentMarkdown.join('\n') });
+    currentMarkdown = [];
+  };
+
+  while (index < lines.length) {
+    const line = lines[index] ?? '';
+    if (MARKDOWN_FENCE_OPEN_RE.test(line) || MARKDOWN_FENCE_CLOSE_RE.test(line)) {
+      inFence = !inFence;
+      currentMarkdown.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (!inFence && isMarkdownTableHeaderAt(lines, index)) {
+      const table = parseMarkdownTableAt(lines, index);
+      if (table) {
+        flushMarkdown();
+        segments.push({
+          kind: 'table',
+          headers: table.headers,
+          rows: table.rows,
+        });
+        index = table.nextIndex;
+        continue;
+      }
+    }
+
+    currentMarkdown.push(line);
+    index += 1;
+  }
+
+  flushMarkdown();
+  return segments;
+}
+
+function isMarkdownTableHeaderAt(lines: string[], index: number): boolean {
+  const header = lines[index];
+  const separator = lines[index + 1];
+  if (!header || !separator) {
+    return false;
+  }
+  return isMarkdownTableRow(header) && isMarkdownTableSeparator(separator);
+}
+
+function parseMarkdownTableAt(
+  lines: string[],
+  startIndex: number,
+): { headers: string[]; rows: string[][]; nextIndex: number } | null {
+  const headers = parseMarkdownTableRow(lines[startIndex] ?? '');
+  if (headers.length === 0) {
+    return null;
+  }
+
+  const rows: string[][] = [];
+  let index = startIndex + 2;
+  while (index < lines.length && isMarkdownTableRow(lines[index] ?? '')) {
+    const row = parseMarkdownTableRow(lines[index] ?? '');
+    rows.push(headers.map((_, cellIndex) => row[cellIndex] ?? ''));
+    index += 1;
+  }
+
+  return rows.length > 0
+    ? { headers, rows, nextIndex: index }
+    : null;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes('|') && parseMarkdownTableRow(trimmed).length >= 2;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = parseMarkdownTableRow(line);
+  return cells.length >= 2 && cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  const withoutLeadingPipe = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+  const withoutTrailingPipe = withoutLeadingPipe.endsWith('|')
+    ? withoutLeadingPipe.slice(0, -1)
+    : withoutLeadingPipe;
+  return withoutTrailingPipe.split('|').map(cell => cell.trim());
+}
+
+function formatMarkdownTableAsFeishuMarkdown(segment: Extract<FeishuMarkdownSegment, { kind: 'table' }>): string {
+  const [primaryHeader = '项目', ...detailHeaders] = segment.headers;
+  return segment.rows.map((row) => {
+    const [primaryCell = '', ...detailCells] = row;
+    const lines = [`**${primaryHeader}：${primaryCell || '未命名'}**`];
+    detailHeaders.forEach((header, index) => {
+      lines.push(`- **${header || `列 ${index + 2}`}**：${detailCells[index] ?? ''}`);
+    });
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+function createFeishuNativeTableElement(segment: Extract<FeishuMarkdownSegment, { kind: 'table' }>): FeishuMarkdownCardV2Element {
+  const columns = segment.headers.map((header, index) => ({
+    name: `col_${index}`,
+    display_name: header || `列 ${index + 1}`,
+    data_type: 'text' as const,
+    width: 'auto' as const,
+  }));
+
+  return {
+    tag: 'table' as const,
+    page_size: Math.max(segment.rows.length, 1),
+    row_height: 'low' as const,
+    columns,
+    rows: segment.rows.map(row =>
+      Object.fromEntries(columns.map((column, index) => [column.name, row[index] ?? '']))
+    ),
+  };
+}
+
+function segmentToMarkdownTable(segment: Extract<FeishuMarkdownSegment, { kind: 'table' }>): string {
+  return [
+    `| ${segment.headers.join(' | ')} |`,
+    `| ${segment.headers.map(() => '---').join(' | ')} |`,
+    ...segment.rows.map(row => `| ${row.join(' | ')} |`),
+  ].join('\n');
+}
+
+function hasFeishuMarkdownTable(markdown: string): boolean {
+  return splitFeishuMarkdownTableSegments(markdown).some(segment => segment.kind === 'table');
+}
+
+function isFeishuTableCard(card: FeishuMarkdownCard): boolean {
+  return 'schema' in card && card.body.elements.some(element => element.tag === 'table');
+}
+
+function isFeishuCardContentError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Failed to create card content') || message.includes('200905');
 }
 
 function normalizeFeishuMarkdownContent(markdown: string): string {
