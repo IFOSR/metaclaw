@@ -206,6 +206,7 @@ interface FeishuIncomingMessageEvent {
 
 interface FeishuMessageSession {
   getSnapshot(): Pick<SessionSnapshot, 'output'>;
+  subscribe?: (listener: (snapshot: Pick<SessionSnapshot, 'output'>) => void) => () => void;
   submit(rawInput: string, options?: { awaitAsyncWork?: boolean }): Promise<{ exitRequested: boolean }>;
   appendSystemMessage(...lines: string[]): void;
 }
@@ -412,13 +413,43 @@ export async function handleFeishuMessageEvent(
 
   try {
     const before = deps.session.getSnapshot().output.length;
-    await deps.session.submit(text, { awaitAsyncWork: true });
+    let observedOutputLength = before;
+    let progressSendQueue = Promise.resolve();
+    const sentProgressSteps = new Set<string>();
+    const enqueueProgress = (progressOutput: string) => {
+      progressSendQueue = progressSendQueue.then(() =>
+        deps.client.sendMarkdownCardToChat(chatId, progressOutput)
+          .catch((error) => {
+            deps.session.appendSystemMessage(`⚠️ 飞书步骤消息回发失败: ${(error as Error).message}`);
+          })
+      );
+    };
+    let unsubscribe: (() => void) | undefined;
+    unsubscribe = deps.session.subscribe?.((snapshot) => {
+      const newLines = snapshot.output.slice(observedOutputLength);
+      observedOutputLength = snapshot.output.length;
+      for (const progressOutput of formatFeishuStreamingProgressReplies(newLines, sentProgressSteps)) {
+        enqueueProgress(progressOutput);
+      }
+    });
+    try {
+      await deps.session.submit(text, { awaitAsyncWork: true });
+    } finally {
+      unsubscribe?.();
+    }
     const outputLines = deps.session.getSnapshot().output.slice(before);
+    const progressOutput = deps.session.subscribe
+      ? ''
+      : formatFeishuProgressReply(outputLines);
     const output = formatFeishuReply(outputLines) || formatFeishuPendingReply(outputLines);
     if (!output) {
       return true;
     }
     try {
+      if (progressOutput) {
+        enqueueProgress(progressOutput);
+      }
+      await progressSendQueue;
       for (const chunk of splitForFeishu(output)) {
         await deps.client.sendMarkdownCardToChat(chatId, chunk);
       }
@@ -698,6 +729,91 @@ function cleanFeishuReplyLine(line: string): string | null {
   }
 
   return trimmed;
+}
+
+export function formatFeishuProgressReply(outputLines: string[]): string {
+  return extractFeishuProgressSummary(outputLines);
+}
+
+export function formatFeishuStreamingProgressReplies(
+  outputLines: string[],
+  sentSteps = new Set<string>(),
+): string[] {
+  const replies: string[] = [];
+  for (const rawLine of outputLines) {
+    const step = extractFeishuProgressStep(rawLine);
+    if (!step || sentSteps.has(step)) {
+      continue;
+    }
+    sentSteps.add(step);
+    replies.push(`**处理步骤**\n${step}`);
+  }
+  return replies;
+}
+
+function extractFeishuProgressSummary(outputLines: string[]): string {
+  const steps: string[] = [];
+  const seen = new Set<string>();
+  const addStep = (step: string) => {
+    if (!seen.has(step)) {
+      seen.add(step);
+      steps.push(step);
+    }
+  };
+
+  for (const rawLine of outputLines) {
+    const step = extractFeishuProgressStep(rawLine);
+    if (step) {
+      addStep(step);
+    }
+  }
+
+  return steps.length > 0
+    ? ['**处理步骤**', ...steps].join('\n')
+    : '';
+}
+
+function extractFeishuProgressStep(rawLine: string): string | null {
+  const line = rawLine.trim();
+  if (!line) {
+    return null;
+  }
+
+  const taskCreated = line.match(/^任务\s+(#task_[^\s]+)\s+已创建：(.+)$/);
+  if (taskCreated) {
+    return `→ 任务 ${taskCreated[1]} 已创建：${taskCreated[2]}`;
+  }
+
+  const contextStep = normalizeFeishuProgressContextStep(line);
+  if (contextStep) {
+    return contextStep;
+  }
+
+  if (/^→\s+派发给\s+[^.。]+[.。]{3}$/.test(line)) {
+    return line;
+  }
+
+  if (/^→\s+正在执行任务\s+#task_[^\s]+[.。]{3}$/.test(line)) {
+    return line;
+  }
+
+  if (/^✓\s+任务完成/.test(line)) {
+    return line;
+  }
+
+  return null;
+}
+
+function normalizeFeishuProgressContextStep(line: string): string | null {
+  const normalized = line.replace(/^\[/, '【').replace(/\]$/, '】');
+  if (
+    normalized === '【提取最近历史记录上下文】'
+    || normalized === '【构建执行上下文】'
+    || normalized === '【执行上下文准备完成】'
+  ) {
+    return normalized;
+  }
+  return null;
 }
 
 function extractLatestExecutorAnswer(outputLines: string[]): string | null {

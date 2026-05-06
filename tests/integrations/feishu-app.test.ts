@@ -5,6 +5,8 @@ import {
   createFeishuBridge,
   createFeishuWebSocketEventHandlers,
   FeishuAppClient,
+  formatFeishuProgressReply,
+  formatFeishuStreamingProgressReplies,
   formatFeishuReply,
   handleFeishuMessageEvent,
   parseFeishuTextContent,
@@ -339,7 +341,80 @@ describe('Feishu app helpers', () => {
       seenMessageIds: new Set<string>(),
     });
 
-    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', '能收到。');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', [
+      '**处理步骤**',
+      '→ 任务 #task_test 已创建：能收到消息吗?',
+      '【提取最近历史记录上下文】',
+      '→ 派发给 codex-cli...',
+      '【构建执行上下文】',
+      '【执行上下文准备完成】',
+      '→ 正在执行任务 #task_test...',
+      '✓ 任务完成 (12.4s)',
+    ].join('\n'));
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '能收到。');
+  });
+
+  it('streams core progress cards before the final Feishu answer when session subscription is available', async () => {
+    let output = ['before'];
+    let listener: ((snapshot: { output: string[] }) => void) | null = null;
+    const append = (...lines: string[]) => {
+      output = [...output, ...lines];
+      listener?.({ output: [...output] });
+    };
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((next: (snapshot: { output: string[] }) => void) => {
+        listener = next;
+        next({ output: [...output] });
+        return () => {
+          listener = null;
+        };
+      }),
+      submit: vi.fn().mockImplementation(async () => {
+        append('任务 #task_stream 已创建：流式展示步骤');
+        append('【提取最近历史记录上下文】');
+        append('→ 派发给 codex-cli...');
+        append('【构建执行上下文】');
+        append('【执行上下文准备完成】');
+        append('→ 正在执行任务 #task_stream...');
+        append('+ #task_stream 已启动 codex-cli 执行器');
+        append('+ #task_stream 最终答案');
+        append('+ #task_stream tokens used');
+        append('+ #task_stream 123');
+        append('+ #task_stream 最终答案');
+        append('✓ 任务完成 (3.2s)');
+        return { exitRequested: false };
+      }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_stream',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"流式展示步骤"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', '**处理步骤**\n→ 任务 #task_stream 已创建：流式展示步骤');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '**处理步骤**\n【提取最近历史记录上下文】');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 派发给 codex-cli...');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(4, 'oc_chat', '**处理步骤**\n【构建执行上下文】');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(5, 'oc_chat', '**处理步骤**\n【执行上下文准备完成】');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(6, 'oc_chat', '**处理步骤**\n→ 正在执行任务 #task_stream...');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(7, 'oc_chat', '**处理步骤**\n✓ 任务完成 (3.2s)');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(8, 'oc_chat', '最终答案');
+    expect(session.subscribe).toHaveBeenCalled();
   });
 
   it('replies with a multiline task summary and strips execution history logs', async () => {
@@ -391,7 +466,13 @@ describe('Feishu app helpers', () => {
       seenMessageIds: new Set<string>(),
     });
 
-    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', [
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', [
+      '**处理步骤**',
+      '【提取最近历史记录上下文】',
+      '【构建执行上下文】',
+      '【执行上下文准备完成】',
+    ].join('\n'));
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', [
       '我刚才根据注入的历史上下文，回答了你“之前都做过什么任务”的问题，概括了几件事：',
       '',
       '1. 调研 Zara Zhang / 张咋啦。',
@@ -451,7 +532,13 @@ describe('Feishu app helpers', () => {
       seenMessageIds: new Set<string>(),
     });
 
-    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', fullAnswer);
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', [
+      '**处理步骤**',
+      '→ 任务 #task_full 已创建：请详细解释一下这个问题',
+      '→ 正在执行任务 #task_full...',
+      '✓ 任务完成 (12.4s)',
+    ].join('\n'));
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', fullAnswer);
   });
 
   it('sends long Feishu replies in multiple ordered messages without dropping content', async () => {
@@ -502,7 +589,12 @@ describe('Feishu app helpers', () => {
     });
 
     const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
-    expect(sentTexts.join('')).toBe(longAnswer);
+    expect(sentTexts[0]).toBe([
+      '**处理步骤**',
+      '→ 任务 #task_long 已创建：请完整输出长内容',
+      '✓ 任务完成 (12.4s)',
+    ].join('\n'));
+    expect(sentTexts.slice(1).join('')).toBe(longAnswer);
     expect(sentTexts.every(text => text.length <= 3500)).toBe(true);
     expect(sentTexts.join('')).not.toContain('[已截断]');
   });
@@ -621,5 +713,46 @@ describe('Feishu app helpers', () => {
 
   it('can format plain conversation output without task result framing', () => {
     expect(formatFeishuReply(['> 你好', '你好，我在。'])).toBe('你好，我在。');
+  });
+
+  it('formats core progress steps separately from the final Feishu answer', () => {
+    expect(formatFeishuProgressReply([
+      '> 今天早上都执行了什么任务',
+      '任务 #task_OO0EG38SJo 已创建：今天早上都执行了什么任务',
+      '【提取最近历史记录上下文】',
+      '→ 派发给 codex-cli...',
+      '【构建执行上下文】',
+      '【执行上下文准备完成】',
+      '→ 正在执行任务 #task_OO0EG38SJo...',
+      '✓ 任务完成 (8.1s)',
+      '最终答案',
+    ])).toBe([
+      '**处理步骤**',
+      '→ 任务 #task_OO0EG38SJo 已创建：今天早上都执行了什么任务',
+      '【提取最近历史记录上下文】',
+      '→ 派发给 codex-cli...',
+      '【构建执行上下文】',
+      '【执行上下文准备完成】',
+      '→ 正在执行任务 #task_OO0EG38SJo...',
+      '✓ 任务完成 (8.1s)',
+    ].join('\n'));
+  });
+
+  it('formats streaming progress replies as one card per newly observed step', () => {
+    const sent = new Set<string>();
+    expect(formatFeishuStreamingProgressReplies([
+      '任务 #task_stream 已创建：测试',
+      '任务 #task_stream 已创建：测试',
+      '【提取最近历史记录上下文】',
+    ], sent)).toEqual([
+      '**处理步骤**\n→ 任务 #task_stream 已创建：测试',
+      '**处理步骤**\n【提取最近历史记录上下文】',
+    ]);
+    expect(formatFeishuStreamingProgressReplies([
+      '【提取最近历史记录上下文】',
+      '→ 派发给 codex-cli...',
+    ], sent)).toEqual([
+      '**处理步骤**\n→ 派发给 codex-cli...',
+    ]);
   });
 });
