@@ -414,7 +414,10 @@ export async function handleFeishuMessageEvent(
     const before = deps.session.getSnapshot().output.length;
     await deps.session.submit(text, { awaitAsyncWork: true });
     const outputLines = deps.session.getSnapshot().output.slice(before);
-    const output = formatFeishuReply(outputLines) || '已处理。';
+    const output = formatFeishuReply(outputLines) || formatFeishuPendingReply(outputLines);
+    if (!output) {
+      return true;
+    }
     try {
       for (const chunk of splitForFeishu(output)) {
         await deps.client.sendMarkdownCardToChat(chatId, chunk);
@@ -510,15 +513,7 @@ export function createFeishuMarkdownCard(markdown: string): FeishuMarkdownCard {
           },
         }
       : {}),
-    elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content,
-        },
-      },
-    ],
+    elements: createFeishuMarkdownCardElements(content),
   };
 }
 
@@ -543,6 +538,32 @@ function extractFeishuCardTitle(markdown: string): { title: string | null; conte
     title: headingMatch[1]?.trim() ?? null,
     content: contentLines.join('\n').replace(/^\n+/, ''),
   };
+}
+
+function createFeishuMarkdownCardElements(markdown: string): FeishuMarkdownCard['elements'] {
+  return [{
+    tag: 'div' as const,
+    text: {
+      tag: 'lark_md' as const,
+      content: normalizeFeishuMarkdownContent(markdown),
+    },
+  }];
+}
+
+function normalizeFeishuMarkdownContent(markdown: string): string {
+  let inFence = false;
+  return markdown.split('\n').map(line => {
+    if (MARKDOWN_FENCE_OPEN_RE.test(line) || MARKDOWN_FENCE_CLOSE_RE.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+
+    if (inFence) {
+      return line;
+    }
+
+    return line.replace(/^(\s*)#{2,6}\s+(.+?)\s*$/, '$1**$2**');
+  }).join('\n');
 }
 
 function createFeishuMarkdownPostRows(markdown: string): FeishuPostRow[] {
@@ -627,6 +648,20 @@ export function formatFeishuReply(outputLines: string[]): string {
     .filter((line): line is string => Boolean(line))
     .join('\n')
     .trim();
+}
+
+function formatFeishuPendingReply(outputLines: string[]): string {
+  const queuedLine = outputLines
+    .map(line => line.trim())
+    .find(line => /^→\s*任务\s+#task_[^\s]+\s+已进入待执行队列$/.test(line));
+  if (!queuedLine) {
+    return '';
+  }
+
+  const taskId = queuedLine.match(/#task_[^\s]+/)?.[0];
+  return taskId
+    ? `任务 ${taskId} 已进入待执行队列，等待当前任务完成后会继续执行。`
+    : '任务已进入待执行队列，等待当前任务完成后会继续执行。';
 }
 
 function cleanFeishuReplyLine(line: string): string | null {

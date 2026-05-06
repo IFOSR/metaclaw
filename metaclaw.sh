@@ -62,21 +62,47 @@ ensure_built() {
     (cd "$SCRIPT_DIR" && npm run build)
 }
 
+# 查找当前项目目录下运行的 Metaclaw 实例。只依赖 PID 文件会漏掉通过
+# `npm start` 或 `node dist/index.js` 手动启动的旧实例。
+find_running_pids() {
+    local pid
+    local args
+    ps -eo pid=,args= | while read -r pid args; do
+        if [ "$pid" = "$$" ]; then
+            continue
+        fi
+
+        case "$args" in
+            *node*"dist/index.js"*|*node*"$APP_ENTRY"*) ;;
+            *) continue ;;
+        esac
+
+        local cwd
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+        if [ "$cwd" = "$SCRIPT_DIR" ]; then
+            echo "$pid"
+            continue
+        fi
+
+        case "$args" in
+            *"$APP_ENTRY"*) echo "$pid" ;;
+        esac
+    done | sort -n | uniq
+}
+
 # 检查进程是否运行
 is_running() {
-    if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
-            return 0
-        fi
+    if [ -n "$(find_running_pids)" ]; then
+        return 0
     fi
+
     return 1
 }
 
 # 启动
 start() {
     if is_running; then
-        log_warn "Metaclaw 已在运行 (PID: $(cat "$PID_FILE"))"
+        log_warn "Metaclaw 已在运行 (PID: $(find_running_pids | tr '\n' ' '))"
         return 1
     fi
 
@@ -92,25 +118,31 @@ start() {
 
 # 停止
 stop() {
-    if ! is_running; then
+    local pids
+    pids=$(find_running_pids)
+    if [ -z "$pids" ]; then
         log_warn "Metaclaw 未运行"
+        rm -f "$PID_FILE"
         return 1
     fi
 
-    local pid=$(cat "$PID_FILE")
-    log_info "停止 Metaclaw (PID: $pid)..."
+    log_info "停止 Metaclaw (PID: $(echo "$pids" | tr '\n' ' '))..."
 
     # 发送 SIGTERM
-    kill "$pid" 2>/dev/null || true
+    for pid in $pids; do
+        kill "$pid" 2>/dev/null || true
+    done
 
     # 等待进程退出
     local count=0
-    while ps -p "$pid" > /dev/null 2>&1; do
+    while [ -n "$(find_running_pids)" ]; do
         sleep 1
         count=$((count + 1))
         if [ $count -ge 10 ]; then
             log_warn "进程未响应，强制终止..."
-            kill -9 "$pid" 2>/dev/null || true
+            for pid in $(find_running_pids); do
+                kill -9 "$pid" 2>/dev/null || true
+            done
             break
         fi
     done
@@ -134,11 +166,14 @@ restart() {
 # 状态
 status() {
     if is_running; then
-        local pid=$(cat "$PID_FILE")
-        log_info "Metaclaw 正在运行 (PID: $pid)"
+        local pids
+        pids=$(find_running_pids)
+        log_info "Metaclaw 正在运行 (PID: $(echo "$pids" | tr '\n' ' '))"
 
         # 显示进程信息
-        ps -p "$pid" -o pid,ppid,%cpu,%mem,etime,command | tail -n +2
+        for pid in $pids; do
+            ps -p "$pid" -o pid,ppid,%cpu,%mem,etime,command | tail -n +2
+        done
 
         # 显示最近日志
         if [ -f "$LOG_FILE" ]; then

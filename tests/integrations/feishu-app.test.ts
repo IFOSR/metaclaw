@@ -127,6 +127,63 @@ describe('Feishu app helpers', () => {
     });
   });
 
+  it('keeps structured Feishu card markdown in one element to avoid card truncation', () => {
+    expect(createFeishuMarkdownCard([
+      '元聚变作为平台，不能保证每一个 OPC 必然成功，但要用机制保证 **OPC 不是孤军创业，而是在平台确定性中创业**。',
+      '',
+      '核心做法是：',
+      '',
+      '1. **给方向**：平台提供明确业务场景、客户需求、产品边界，不让 OPC 从零盲目找机会。',
+      '2. **给资源**：提供品牌、客户、数据、算力、AI 工具、交付体系、财务法务等基础设施。',
+      '3. **给机制**：用 30 天验证、90 天收入、180 天规模化节奏推进。',
+    ].join('\n')).elements).toEqual([
+      {
+        tag: 'div',
+        text: {
+          tag: 'lark_md',
+          content: [
+            '元聚变作为平台，不能保证每一个 OPC 必然成功，但要用机制保证 **OPC 不是孤军创业，而是在平台确定性中创业**。',
+            '',
+            '核心做法是：',
+            '',
+            '1. **给方向**：平台提供明确业务场景、客户需求、产品边界，不让 OPC 从零盲目找机会。',
+            '2. **给资源**：提供品牌、客户、数据、算力、AI 工具、交付体系、财务法务等基础设施。',
+            '3. **给机制**：用 30 天验证、90 天收入、180 天规模化节奏推进。',
+          ].join('\n'),
+        },
+      },
+    ]);
+  });
+
+  it('normalizes headings in long Markdown outlines without splitting into many card elements', () => {
+    const card = createFeishuMarkdownCard([
+      '你说得对。如果只是“招募 OPC、提供资源、辅导创业、对接资本”，那和外面的 OPC 孵化平台没有本质区别。',
+      '元聚变的方案应该改成：不是做一个 OPC 孵化平台，而是把元聚变自身改造成 AI 时代的 OPC 母体组织。',
+      '## 一、定位不同：不是孵化别人，而是重构自己',
+      '其他 OPC 平台的逻辑是：',
+      '> 我有平台，你来创业，我给你资源。',
+      '所以重点不是“孵化”，而是：',
+      '- AI 产品经理',
+      '- AI 研发助手',
+      '### 1. AI 技术底座',
+      '由 CTO 牵头，建设统一的 AI 工具链、智能体框架、模型调用、知识库、自动化流程。',
+    ].join('\n'));
+
+    expect(card.elements).toHaveLength(1);
+    expect(card.elements[0]?.text.content).toBe([
+      '你说得对。如果只是“招募 OPC、提供资源、辅导创业、对接资本”，那和外面的 OPC 孵化平台没有本质区别。',
+      '元聚变的方案应该改成：不是做一个 OPC 孵化平台，而是把元聚变自身改造成 AI 时代的 OPC 母体组织。',
+      '**一、定位不同：不是孵化别人，而是重构自己**',
+      '其他 OPC 平台的逻辑是：',
+      '> 我有平台，你来创业，我给你资源。',
+      '所以重点不是“孵化”，而是：',
+      '- AI 产品经理',
+      '- AI 研发助手',
+      '**1. AI 技术底座**',
+      '由 CTO 牵头，建设统一的 AI 工具链、智能体框架、模型调用、知识库、自动化流程。',
+    ].join('\n'));
+  });
+
   it('resolves app secret from env when configured', () => {
     process.env.TEST_FEISHU_SECRET = 'from-env';
     expect(resolveAppSecret({
@@ -481,6 +538,85 @@ describe('Feishu app helpers', () => {
     expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: true });
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'metaclaw reply');
     expect(client.removeReactionFromMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not send a fallback reply when Metaclaw has no user-facing output yet', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 帮我分析 OPC 方案',
+            '任务 #task_empty 已创建：帮我分析 OPC 方案',
+            '→ 派发给 codex-cli...',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_empty',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"帮我分析 OPC 方案"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    expect(client.sendMarkdownCardToChat).not.toHaveBeenCalled();
+    expect(client.removeReactionFromMessage).toHaveBeenCalledWith('om_message_empty', 'reaction_typing');
+  });
+
+  it('replies with an explicit pending message when the task is queued', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 帮我分析 OPC 方案',
+            '任务 #task_queued 已创建：帮我分析 OPC 方案',
+            '→ 任务 #task_queued 已进入待执行队列',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_queued',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"帮我分析 OPC 方案"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith(
+      'oc_chat',
+      '任务 #task_queued 已进入待执行队列，等待当前任务完成后会继续执行。',
+    );
+    expect(client.sendMarkdownCardToChat).not.toHaveBeenCalledWith('oc_chat', '已处理。');
   });
 
   it('can format plain conversation output without task result framing', () => {
