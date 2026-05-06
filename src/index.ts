@@ -21,6 +21,7 @@ import { nanoid } from 'nanoid';
 import { MetaclawGatewayServer } from './gateway/server.js';
 import { runGatewayClientUi } from './gateway/client-ui.js';
 import { resolveGatewaySocketPath } from './gateway/gateway-paths.js';
+import { MarkdownPreviewServer } from './integrations/markdown-preview.js';
 
 async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
@@ -39,6 +40,22 @@ async function main() {
 
   // 2. 加载配置
   const config = loadConfig(resolve(metaclawDir, 'config.yaml'));
+  const markdownPreviewConfig = config.integrations?.markdown_preview;
+  const markdownPreviewServer = markdownPreviewConfig?.enabled
+    ? new MarkdownPreviewServer(markdownPreviewConfig, process.cwd())
+    : null;
+  if (markdownPreviewServer && markdownPreviewConfig) {
+    try {
+      await markdownPreviewServer.start();
+      const markdownPreviewBaseUrl = (markdownPreviewConfig.public_base_url
+        ?? `http://${markdownPreviewConfig.host}:${markdownPreviewConfig.port}`).replace(/\/+$/, '');
+      console.log(
+        `Markdown preview listening: ${markdownPreviewBaseUrl}`,
+      );
+    } catch (error) {
+      console.error(`Markdown preview start failed: ${(error as Error).message}`);
+    }
+  }
 
   // 3. 初始化数据库
   const db = createDatabase(resolve(metaclawDir, 'metaclaw.db'));
@@ -109,13 +126,20 @@ async function main() {
 
   await gatewayServer.start();
   process.once('exit', () => {
+    void markdownPreviewServer?.stop();
     void gatewayServer.stop();
   });
   process.once('SIGINT', () => {
-    void gatewayServer.stop().finally(() => process.exit(0));
+    void Promise.all([
+      gatewayServer.stop(),
+      markdownPreviewServer?.stop() ?? Promise.resolve(),
+    ]).finally(() => process.exit(0));
   });
   process.once('SIGTERM', () => {
-    void gatewayServer.stop().finally(() => process.exit(0));
+    void Promise.all([
+      gatewayServer.stop(),
+      markdownPreviewServer?.stop() ?? Promise.resolve(),
+    ]).finally(() => process.exit(0));
   });
 
   if (cliArgs.gateway) {

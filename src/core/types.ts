@@ -421,5 +421,11 @@ export interface Config {
       event_path: string;
       verification_token?: string;
     };
+    markdown_preview?: {
+      enabled: boolean;
+      host: string;
+      port: number;
+      public_base_url?: string;
+    };
   };
 }

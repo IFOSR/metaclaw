@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { resolve } from 'path';
 import {
+  appendMarkdownPreviewLinks,
   createFeishuMarkdownCard,
   createFeishuMarkdownPostContent,
   createFeishuBridge,
   createFeishuWebSocketEventHandlers,
+  extractArtifactPaths,
+  extractMarkdownArtifactPaths,
   FeishuAppClient,
   formatFeishuProgressReply,
   formatFeishuStreamingProgressReplies,
@@ -664,6 +670,163 @@ describe('Feishu app helpers', () => {
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', fullAnswer);
+  });
+
+  it('appends Markdown preview links for generated task artifacts', () => {
+    const outputLines = [
+      '✓ 任务完成 (3.1s)',
+      '→ 已记录 2 个任务产物',
+      '   - /repo/metaclaw-tasks/task_doc/report.md',
+      '   - /repo/metaclaw-tasks/task_doc/data.json',
+    ];
+
+    expect(extractMarkdownArtifactPaths(outputLines)).toEqual([
+      '/repo/metaclaw-tasks/task_doc/report.md',
+    ]);
+    expect(extractArtifactPaths(outputLines)).toEqual([
+      '/repo/metaclaw-tasks/task_doc/report.md',
+      '/repo/metaclaw-tasks/task_doc/data.json',
+    ]);
+    expect(appendMarkdownPreviewLinks('文档已生成。', outputLines, {
+      baseUrl: 'https://preview.example.com',
+      workspaceRoot: '/repo',
+    })).toBe([
+      '文档已生成。',
+      '',
+      '**Markdown 在线预览**',
+      '- [report.md](https://preview.example.com/preview/metaclaw-tasks%2Ftask_doc%2Freport.md)',
+    ].join('\n'));
+  });
+
+  it('includes Markdown preview links in the final Feishu answer when task artifacts are Markdown files', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 生成一份 Markdown 文档',
+            '任务 #task_doc 已创建：生成一份 Markdown 文档',
+            '→ 正在执行任务 #task_doc...',
+            '+ #task_doc 已启动 codex-cli 执行器',
+            '+ #task_doc 文档已生成。',
+            '+ #task_doc tokens used',
+            '+ #task_doc 123',
+            '✓ 任务完成 (3.1s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 文档已生成。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+            '→ 文件输出目录: /repo/metaclaw-tasks/task_doc',
+            '→ 已省略文件正文输出，请直接查看生成文件',
+            '→ 已记录 1 个任务产物',
+            '   - /repo/metaclaw-tasks/task_doc/report.md',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_doc',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"生成一份 Markdown 文档"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      markdownPreview: {
+        baseUrl: 'https://preview.example.com',
+        workspaceRoot: '/repo',
+      },
+    });
+
+    const finalReply = client.sendMarkdownCardToChat.mock.calls.at(-1)?.[1];
+    expect(finalReply).toContain('文档已生成。');
+    expect(finalReply).toContain('**Markdown 在线预览**');
+    expect(finalReply).toContain('[report.md](https://preview.example.com/preview/metaclaw-tasks%2Ftask_doc%2Freport.md)');
+  });
+
+  it('uploads every generated artifact file back to Feishu as browsable file messages', async () => {
+    const repoDir = mkdtempSync(resolve(tmpdir(), 'metaclaw-feishu-artifacts-'));
+    const taskDir = resolve(repoDir, 'metaclaw-tasks', 'task_doc');
+    mkdirSync(taskDir, { recursive: true });
+    const reportPath = resolve(taskDir, 'report.md');
+    const sheetPath = resolve(taskDir, 'data.csv');
+    writeFileSync(reportPath, '# Report\n正文', 'utf-8');
+    writeFileSync(sheetPath, 'a,b\n1,2\n', 'utf-8');
+
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 生成文件',
+            '任务 #task_doc 已创建：生成文件',
+            '+ #task_doc 已启动 codex-cli 执行器',
+            '+ #task_doc 文件已生成。',
+            '+ #task_doc tokens used',
+            '+ #task_doc 123',
+            '✓ 任务完成 (3.1s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 文件已生成。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+            `→ 文件输出目录: ${taskDir}`,
+            '→ 已省略文件正文输出，请直接查看生成文件',
+            '→ 已记录 2 个任务产物',
+            `   - ${reportPath}`,
+            `   - ${sheetPath}`,
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+      uploadFile: vi.fn()
+        .mockResolvedValueOnce('file_key_report')
+        .mockResolvedValueOnce('file_key_sheet'),
+      sendFileToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_files',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"生成文件"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      markdownPreview: {
+        baseUrl: 'https://preview.example.com',
+        workspaceRoot: repoDir,
+      },
+    });
+
+    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', [
+      '**任务产物已同步到飞书**',
+      '- report.md',
+      '- data.csv',
+    ].join('\n'));
+    expect(client.uploadFile).toHaveBeenNthCalledWith(1, reportPath);
+    expect(client.uploadFile).toHaveBeenNthCalledWith(2, sheetPath);
+    expect(client.sendFileToChat).toHaveBeenNthCalledWith(1, 'oc_chat', 'file_key_report');
+    expect(client.sendFileToChat).toHaveBeenNthCalledWith(2, 'oc_chat', 'file_key_sheet');
   });
 
   it('sends long Feishu replies in multiple ordered messages without dropping content', async () => {

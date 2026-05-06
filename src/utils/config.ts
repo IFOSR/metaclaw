@@ -35,6 +35,11 @@ const DEFAULT_CONFIG: Config = {
       event_port: 8787,
       event_path: '/feishu/events',
     },
+    markdown_preview: {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 8790,
+    },
   },
 };
 
@@ -58,6 +63,11 @@ export function loadConfig(configPath: string): Config {
       event_port: 8787,
       event_path: '/feishu/events',
     };
+    const defaultMarkdownPreviewConfig = DEFAULT_CONFIG.integrations?.markdown_preview ?? {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 8790,
+    };
 
     // 深度合并配置
     return {
@@ -80,6 +90,10 @@ export function loadConfig(configPath: string): Config {
         feishu: {
           ...defaultFeishuAppConfig,
           ...userConfig.integrations?.feishu,
+        },
+        markdown_preview: {
+          ...defaultMarkdownPreviewConfig,
+          ...userConfig.integrations?.markdown_preview,
         },
       },
     };

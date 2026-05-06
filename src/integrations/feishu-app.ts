@@ -1,8 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { basename } from 'path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 import type { Config } from '../core/types.js';
 import type { SessionSnapshot } from '../session/metaclaw-session.js';
 import type { MetaclawSession } from '../session/metaclaw-session.js';
+import { createMarkdownPreviewBaseUrl, createMarkdownPreviewLinks } from './markdown-preview.js';
 
 export interface FeishuAppConfig {
   enabled: boolean;
@@ -24,6 +27,7 @@ interface JsonResponse {
 
 interface FeishuAppClientDeps {
   postJson?: (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => Promise<JsonResponse>;
+  postForm?: (url: string, form: FormData, headers?: Record<string, string>) => Promise<JsonResponse>;
   deleteJson?: (url: string, headers?: Record<string, string>) => Promise<JsonResponse>;
   nowMs?: () => number;
 }
@@ -115,6 +119,7 @@ const MARKDOWN_FENCE_CLOSE_RE = /^```\s*$/;
 export class FeishuAppClient {
   private tenantToken: TenantTokenState | null = null;
   private readonly postJson: (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => Promise<JsonResponse>;
+  private readonly postForm: (url: string, form: FormData, headers?: Record<string, string>) => Promise<JsonResponse>;
   private readonly deleteJson: (url: string, headers?: Record<string, string>) => Promise<JsonResponse>;
   private readonly nowMs: () => number;
 
@@ -123,6 +128,7 @@ export class FeishuAppClient {
     deps: FeishuAppClientDeps = {},
   ) {
     this.postJson = deps.postJson ?? defaultPostJson;
+    this.postForm = deps.postForm ?? defaultPostForm;
     this.deleteJson = deps.deleteJson ?? defaultDeleteJson;
     this.nowMs = deps.nowMs ?? (() => Date.now());
   }
@@ -193,6 +199,55 @@ export class FeishuAppClient {
     }
   }
 
+  async uploadFile(filePath: string): Promise<string> {
+    const token = await this.getTenantAccessToken();
+    const fileStats = statSync(filePath);
+    const form = new FormData();
+    form.set('file_type', 'stream');
+    form.set('file_name', basename(filePath));
+    form.set('file', new Blob([readFileSync(filePath)]), basename(filePath));
+    form.set('duration', '0');
+
+    const response = await this.postForm(
+      'https://open.feishu.cn/open-apis/im/v1/files',
+      form,
+      {
+        authorization: `Bearer ${token}`,
+      },
+    );
+    const payload = await response.json() as {
+      code?: number;
+      msg?: string;
+      data?: { file_key?: string };
+      file_key?: string;
+    };
+    const fileKey = payload.data?.file_key ?? payload.file_key;
+    if (!response.ok || payload.code !== 0 || !fileKey) {
+      throw new Error(`飞书文件上传失败: ${payload.msg ?? response.status}`);
+    }
+    void fileStats;
+    return fileKey;
+  }
+
+  async sendFileToChat(chatId: string, fileKey: string): Promise<void> {
+    const token = await this.getTenantAccessToken();
+    const response = await this.postJson(
+      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+      {
+        receive_id: chatId,
+        msg_type: 'file',
+        content: JSON.stringify({ file_key: fileKey }),
+      },
+      {
+        authorization: `Bearer ${token}`,
+      },
+    );
+    const payload = await response.json() as { code?: number; msg?: string };
+    if (!response.ok || payload.code !== 0) {
+      throw new Error(`飞书文件消息发送失败: ${payload.msg ?? response.status}`);
+    }
+  }
+
   async addReactionToMessage(messageId: string, emojiType: string): Promise<string | null> {
     const token = await this.getTenantAccessToken();
     const response = await this.postJson(
@@ -229,9 +284,10 @@ export class FeishuAppClient {
 }
 
 interface FeishuEventBridgeDeps {
-  client: Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>;
+  client: FeishuMessageClient;
   session: MetaclawSession;
   config: FeishuAppConfig;
+  markdownPreview?: FeishuMessageHandlerDeps['markdownPreview'];
 }
 
 export interface FeishuBridge {
@@ -255,10 +311,19 @@ interface FeishuMessageSession {
   appendSystemMessage(...lines: string[]): void;
 }
 
+export interface FeishuMarkdownPreviewOptions {
+  baseUrl: string;
+  workspaceRoot: string;
+}
+
+type FeishuMessageClient = Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>
+  & Partial<Pick<FeishuAppClient, 'uploadFile' | 'sendFileToChat'>>;
+
 interface FeishuMessageHandlerDeps {
-  client: Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>;
+  client: FeishuMessageClient;
   session: FeishuMessageSession;
   seenMessageIds: Set<string>;
+  markdownPreview?: FeishuMarkdownPreviewOptions;
 }
 
 type FeishuWebSocketEventHandlers = Parameters<InstanceType<typeof Lark.EventDispatcher>['register']>[0];
@@ -356,16 +421,18 @@ export class FeishuEventBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      markdownPreview: this.deps.markdownPreview,
     });
   }
 }
 
 interface FeishuWebSocketBridgeDeps {
-  client: Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>;
+  client: FeishuMessageClient;
   session: MetaclawSession;
   appId: string;
   appSecret: string;
   verificationToken?: string;
+  markdownPreview?: FeishuMessageHandlerDeps['markdownPreview'];
 }
 
 export class FeishuWebSocketBridge implements FeishuBridge {
@@ -386,6 +453,7 @@ export class FeishuWebSocketBridge implements FeishuBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      markdownPreview: this.deps.markdownPreview,
     }));
 
     this.wsClient = new Lark.WSClient({
@@ -486,7 +554,8 @@ export async function handleFeishuMessageEvent(
       ? ''
       : formatFeishuProgressReply(outputLines);
     const output = formatFeishuReply(outputLines) || formatFeishuPendingReply(outputLines);
-    if (!output) {
+    const reply = appendMarkdownPreviewLinks(output, outputLines, deps.markdownPreview);
+    if (!reply) {
       return true;
     }
     try {
@@ -494,9 +563,10 @@ export async function handleFeishuMessageEvent(
         enqueueProgress(progressOutput);
       }
       await progressSendQueue;
-      for (const chunk of splitForFeishu(output)) {
+      for (const chunk of splitForFeishu(reply)) {
         await deps.client.sendMarkdownCardToChat(chatId, chunk);
       }
+      await sendArtifactFilesToFeishu(chatId, outputLines, deps);
     } catch (error) {
       deps.session.appendSystemMessage(`⚠️ 飞书消息回发失败: ${(error as Error).message}`);
     }
@@ -530,12 +600,14 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
     app_id: feishu.app_id,
     app_secret: appSecret,
   });
+  const markdownPreview = buildFeishuMarkdownPreviewOptions(config);
 
   if ((feishu.mode ?? 'websocket') === 'webhook') {
     return new FeishuEventBridge({
       config: feishu,
       session,
       client,
+      markdownPreview,
     });
   }
 
@@ -545,10 +617,23 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
     appId: feishu.app_id,
     appSecret,
     verificationToken: feishu.verification_token,
+    markdownPreview,
   });
 }
 
 export const createFeishuEventBridge = createFeishuBridge;
+
+export function buildFeishuMarkdownPreviewOptions(config: Config, workspaceRoot = process.cwd()): FeishuMarkdownPreviewOptions | undefined {
+  const previewConfig = config.integrations?.markdown_preview;
+  if (!previewConfig?.enabled) {
+    return undefined;
+  }
+
+  return {
+    baseUrl: createMarkdownPreviewBaseUrl(previewConfig),
+    workspaceRoot,
+  };
+}
 
 export function createFeishuMarkdownPostContent(markdown: string, options: { title?: string } = {}): FeishuPostContent {
   return {
@@ -971,6 +1056,96 @@ export function formatFeishuReply(outputLines: string[]): string {
     .trim();
 }
 
+export function appendMarkdownPreviewLinks(
+  reply: string,
+  outputLines: string[],
+  preview?: FeishuMessageHandlerDeps['markdownPreview'],
+): string {
+  if (!reply.trim() || !preview) {
+    return reply;
+  }
+
+  const links = createMarkdownPreviewLinks(extractMarkdownArtifactPaths(outputLines), {
+    baseUrl: preview.baseUrl,
+    workspaceRoot: preview.workspaceRoot,
+  });
+  if (links.length === 0) {
+    return reply;
+  }
+
+  return [
+    reply.trimEnd(),
+    '',
+    '**Markdown 在线预览**',
+    ...links.map(link => `- [${link.title}](${link.url})`),
+  ].join('\n');
+}
+
+export function extractMarkdownArtifactPaths(outputLines: string[]): string[] {
+  return extractArtifactPaths(outputLines).filter(path => /\.(md|markdown)$/i.test(path));
+}
+
+export function extractArtifactPaths(outputLines: string[]): string[] {
+  const paths: string[] = [];
+  let collecting = false;
+
+  for (const rawLine of outputLines) {
+    const line = rawLine.trim();
+    if (/^→\s+已记录\s+\d+\s+个任务产物/.test(line)) {
+      collecting = true;
+      continue;
+    }
+
+    if (!collecting) {
+      continue;
+    }
+
+    if (!line || line.startsWith('┌') || line.startsWith('→ ') || line.startsWith('✓ ')) {
+      collecting = false;
+      continue;
+    }
+
+    const artifactPath = line.match(/^-\s+(.+)$/)?.[1]?.trim()
+      ?? line.match(/^\s*-\s+(.+)$/)?.[1]?.trim();
+    if (artifactPath) {
+      paths.push(artifactPath);
+    }
+  }
+
+  return Array.from(new Set(paths));
+}
+
+async function sendArtifactFilesToFeishu(
+  chatId: string,
+  outputLines: string[],
+  deps: FeishuMessageHandlerDeps,
+): Promise<void> {
+  const artifactPaths = extractArtifactPaths(outputLines)
+    .filter(path => existsSync(path) && statSync(path).isFile());
+  if (artifactPaths.length === 0) {
+    return;
+  }
+  if (!deps.client.uploadFile || !deps.client.sendFileToChat) {
+    deps.session.appendSystemMessage('⚠️ 飞书任务产物同步跳过: 当前客户端不支持文件上传');
+    return;
+  }
+
+  await deps.client.sendMarkdownCardToChat(chatId, [
+    '**任务产物已同步到飞书**',
+    ...artifactPaths.map(path => `- ${basename(path)}`),
+  ].join('\n'));
+
+  for (const artifactPath of artifactPaths) {
+    try {
+      const fileKey = await deps.client.uploadFile(artifactPath);
+      await deps.client.sendFileToChat(chatId, fileKey);
+    } catch (error) {
+      deps.session.appendSystemMessage(`⚠️ 飞书任务产物同步失败: ${artifactPath}: ${(error as Error).message}`);
+      await deps.client.sendMarkdownCardToChat(chatId, `⚠️ 任务产物同步失败：${basename(artifactPath)}`);
+    }
+  }
+}
+
 function formatFeishuPendingReply(outputLines: string[]): string {
   const queuedLine = outputLines
     .map(line => line.trim())
@@ -1319,6 +1494,20 @@ async function defaultPostJson(
       ...headers,
     },
     body: JSON.stringify(body),
+  });
+
+  return response;
+}
+
+async function defaultPostForm(
+  url: string,
+  form: FormData,
+  headers: Record<string, string> = {},
+): Promise<JsonResponse> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: form,
   });
 
   return response;

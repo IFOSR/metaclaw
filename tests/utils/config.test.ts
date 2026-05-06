@@ -105,4 +105,28 @@ describe('loadConfig defaults', () => {
 
     expect(config.integrations?.feishu?.mode).toBe('websocket');
   });
+
+  it('loads Markdown preview config for generated document links', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'metaclaw-config-'));
+    const configPath = resolve(dir, 'config.yaml');
+    writeFileSync(configPath, [
+      'integrations:',
+      '  markdown_preview:',
+      '    enabled: true',
+      '    host: 0.0.0.0',
+      '    port: 8899',
+      '    public_base_url: https://preview.example.com',
+      '',
+    ].join('\n'));
+
+    const config = loadConfig(configPath);
+
+    expect(config.integrations?.markdown_preview).toEqual({
+      enabled: true,
+      host: '0.0.0.0',
+      port: 8899,
+      public_base_url: 'https://preview.example.com',
+    });
+    expect(config.integrations?.feishu?.mode).toBe('websocket');
+  });
 });
