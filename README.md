@@ -13,10 +13,15 @@ Metaclaw 是一个面向知识工作者的 TUI 应用，专注解决三个核心
 - 主动建议升级为需要用户确认的 `操作提案`
 - memory 命中后不再默认静默注入，而是先进入 `记忆召回确认`
 - 用户可按场景授权后续同类 recall 自动采用
+- 支持本地 Gateway，多 terminal 连接同一个 Metaclaw 实例，共享任务、记忆和执行器底座
+- 支持 Phase E 学习闭环：任务记忆卡、Skill 候选、Skill patch、Skill 治理和周报
+- 支持飞书通知/应用集成，以及本地 Markdown preview
 
 ## 快速开始
 
 ### 安装
+
+要求 Node.js `>=20`，并确保默认执行器 `codex` 可用。
 
 ```bash
 npm install
@@ -28,6 +33,12 @@ npm link
 
 ```bash
 metaclaw
+```
+
+也可以使用项目脚本启动：
+
+```bash
+./metaclaw.sh start
 ```
 
 首次启动会在 `~/.metaclaw/` 创建配置和数据库。
@@ -44,6 +55,25 @@ metaclaw
 每个 `connect` 都会在主 Metaclaw 进程内创建独立 `session_id`，共享任务、记忆和执行器底座，但会话近期上下文按 session 隔离，不会把两个 terminal 的普通对话混在一起。
 
 `connect` 使用和主进程一致的 Ink TUI 外观，并在状态区显示 `模式 client` 和当前 gateway session；非 TTY 管道场景会自动降级为简化文本客户端。
+
+### 运行状态与日志
+
+```bash
+./metaclaw.sh status
+./metaclaw.sh logs
+./metaclaw.sh logs -f
+./metaclaw.sh stop
+./metaclaw.sh restart
+```
+
+`metaclaw.sh` 会在启动前检查源码是否比 `dist/index.js` 更新；如果需要，会自动执行 `npm run build`。
+
+CLI 也支持直接运行 Gateway 或连接 Gateway：
+
+```bash
+metaclaw --gateway
+metaclaw --connect
+```
 
 ### 脚本化烟测
 
@@ -97,6 +127,7 @@ metaclaw --script /tmp/metaclaw-flow.txt
 /tasks ready        # 待执行任务
 /tasks parked       # 已挂起任务
 /tasks blocked      # 阻塞任务
+/tasks done         # 已完成任务
 
 # 任务操作
 /task <id>          # 查看详情
@@ -105,6 +136,7 @@ metaclaw --script /tmp/metaclaw-flow.txt
 /task <id> block 等待客户资料  # 标记阻塞
 /task <id> unblock  # 解除阻塞
 /task <id> unblock /tmp/evidence-v3.pdf  # 解除阻塞并附带新材料
+/task <id> cancel   # 取消
 /task <id> done     # 完成
 
 # 任务详情会展示
@@ -158,10 +190,13 @@ status: running codex-cli
 
 # 手动添加
 /memory add 张总偏好正式语气，必须抄送法务
+/memory add --scope contact --subject 张总 张总偏好正式语气，必须抄送法务
 
-# 搜索和删除
+# 搜索、编辑和删除
 /memory search 正式
+/memory edit <pref_id> --scope project 输出统一使用表格
 /memory delete <pref_id>
+/memory stats
 ```
 
 ### 材料与产物
@@ -223,12 +258,32 @@ status: running codex-cli
 - `/memory review-policy`
 - `/memory review-policy revoke <id>`
 
+### 学习闭环与 Skill 治理
+
+Metaclaw 会从任务结果、失败、产物、材料和执行器 Skill 使用事件中生成 reflection，再沉淀为待审核学习候选。审核通过后，候选可以 promotion 成任务记忆卡、executor skill、skill patch、停用建议或废弃建议。
+
+```bash
+/learning candidates                  # 待审核学习候选
+/learning approve <candidate_id> [备注]
+/learning reject <candidate_id> [原因]
+/learning promote <candidate_id>      # 下发成任务记忆卡 / Skill / Skill patch / 治理动作
+/learning cards                       # 最近任务记忆卡
+/learning skills                      # Skill Effect Summary
+/learning summary                     # 学习资产概览
+/learning weekly                      # 学习周报
+```
+
+学习资产会参与后续上下文召回：相关任务记忆卡会进入 recall review，只有用户确认后才会注入执行器上下文。
+
 ### 任务盘面
 
 ```bash
 /dashboard          # 显示优先级排序、阻塞任务、建议
+/attach [taskId] <文件路径...>  # 关联材料到当前任务或指定任务
 /history            # 查看最近交互历史
 /config             # 查看当前配置
+/help               # 查看命令帮助
+/exit               # 退出，也可用 /quit 或 /q
 ```
 
 ## 工作流程
@@ -279,13 +334,19 @@ observations 表记录（第 1 次）
 
 ```
 src/
+├── cli/            # CLI 参数解析：--script / --gateway / --connect
 ├── core/           # 核心引擎
 │   ├── types.ts           # 类型定义
 │   ├── task-engine.ts     # 任务状态机、快照、恢复
 │   ├── memory-engine.ts   # 偏好观察、确认、召回
+│   ├── context-recaller.ts # 任务、会话、时间线和相关历史召回
+│   ├── embedding-provider.ts # 本地 embedding provider
 │   ├── hybrid-memory-recaller.ts # 规则+语义混合召回
 │   ├── recall-review-builder.ts  # recall review 决策摘要
 │   ├── recall-policy-service.ts  # recall 自动采用策略判定
+│   ├── reflection-engine.ts      # 执行结果反思与学习候选生成
+│   ├── skill-governance-engine.ts # Skill 效果治理建议
+│   ├── learning-weekly-review-builder.ts # 学习周报
 │   └── orchestration.ts   # 优先级评分、盘面生成 / proposal 输出
 ├── storage/        # 数据层
 │   ├── database.ts        # SQLite 初始化
@@ -293,25 +354,45 @@ src/
 │   ├── task-repo.ts       # 任务数据访问
 │   ├── preference-repo.ts # 偏好数据访问
 │   ├── observation-repo.ts # 观察记录
+│   ├── task-memory-card-repo.ts # 任务记忆卡
+│   ├── learning-candidate-repo.ts # 学习候选审核
+│   ├── skill-effect-summary-repo.ts # Skill 效果摘要
 │   ├── task-memory-embedding-repo.ts # 任务 memory 向量
 │   ├── preference-embedding-repo.ts  # 偏好向量
 │   └── recall-review-policy-repo.ts  # recall 免确认策略
 ├── executor/       # 执行器适配
 │   ├── adapter.ts         # 抽象接口
 │   ├── codex-cli.ts       # Codex CLI 适配器（默认）
-│   └── claude-code.ts     # Claude Code CLI 适配器（兼容保留）
+│   ├── claude-code.ts     # Claude Code CLI 适配器（兼容保留）
+│   ├── prompt-builder.ts  # 执行上下文包构造
+│   └── skill-package-builder.ts # Skill / Skill patch 下发包
 ├── commands/       # 命令系统
 │   ├── router.ts          # 斜杠命令路由
 │   ├── task-commands.ts   # 任务命令
 │   ├── memory-commands.ts # 偏好命令
+│   ├── learning-commands.ts # 学习候选、任务记忆卡、Skill 治理命令
 │   └── global-commands.ts # 全局命令
+├── gateway/        # 本地 Gateway server/client，多 terminal 连接协议
+├── integrations/   # 飞书应用、Markdown preview
+├── notifications/  # 飞书通知
+├── session/        # 交互 session 与脚本化 session
 ├── tui/            # 终端界面
 │   └── app.tsx            # ink 组件
 └── utils/          # 工具
     ├── config.ts          # 配置加载
     ├── logger.ts          # 日志
+    ├── paths.ts           # Metaclaw 本地目录解析
     └── id.ts              # ID 生成
 ```
+
+核心数据存在 `~/.metaclaw/metaclaw.db`，主要包括：
+
+- `tasks`、`interactions`、`session_state`
+- `preferences`、`observations`、`preference_usage`
+- `task_relations`、`task_memory_embeddings`、`preference_embeddings`
+- `memory_recall_events`、`recall_review_policies`、`recall_feedback`
+- `reflection_events`、`learning_candidates`
+- executor skill 安装事件、skill 使用事件和 skill effect summary
 
 ## 配置
 
@@ -343,11 +424,18 @@ notifications:
 integrations:
   feishu:
     enabled: false         # 开启飞书应用双向通信
+    mode: websocket        # websocket 或 webhook
     app_id: ""             # 飞书应用 App ID，例如 cli_xxx
     app_secret_env: FEISHU_APP_SECRET # 推荐用环境变量保存 App Secret
     event_port: 8787       # 本地 callback HTTP 端口
     event_path: /feishu/events # 飞书事件订阅请求路径
     verification_token: "" # 可选：飞书事件订阅 Verification Token
+
+  markdown_preview:
+    enabled: true          # 本地 Markdown preview 服务
+    host: 127.0.0.1
+    port: 8790
+    public_base_url: ""    # 可选：公网或反代后的访问地址
 ```
 
 启动前需要在同一个 shell 里导出 App Secret：
@@ -362,6 +450,8 @@ export FEISHU_APP_SECRET="你的飞书应用 App Secret"
 
 如果要通过飞书和 Metaclaw 双向对话，使用 `integrations.feishu`。启动后 Metaclaw 会在本机监听 `event_port + event_path`，需要用内网穿透或公网反代把该地址配置到飞书应用的事件订阅 Request URL。
 收到飞书文本消息后，Metaclaw 会按普通输入处理，并把新增输出回发到同一个飞书会话。
+
+Markdown preview 默认监听 `http://127.0.0.1:8790`。如果需要通过公网或反向代理访问，配置 `public_base_url`。
 
 ## 开发
 
@@ -400,9 +490,14 @@ npm run test:watch      # 监听模式
 - 多任务调度、抢占、挂起恢复、阻塞解除
 - 对话 vs 任务边界
 - 偏好三次确认、inline `y/n/e` 确认、注入透明
+- recall review、自动采用策略和 feedback loop
 - 材料链路：文件、链接、网页抓取、材料摘要
 - 高风险动作确认门控
 - 任务产物回流与 `/task` 详情视图
+- Gateway client/server 协议与多 session 行为
+- Codex / Claude 执行器适配、prompt 构造、错误归因和中断处理
+- Phase E 学习候选、任务记忆卡、Skill promotion、Skill patch、Skill 治理和周报
+- 飞书通知、飞书应用集成和 Markdown preview
 
 ## 设计文档
 
@@ -410,6 +505,7 @@ npm run test:watch      # 监听模式
 - [技术设计 V1](docs/metaclaw-os_tech_design_v1.md) — 数据模型、状态机、执行器方案
 - [TUI 规范 V1](docs/metaclaw-os_tui_spec_v1.md) — 交互规范、命令体系
 - [实施方案 V1](docs/metaclaw-os_implementation_v1.md) — 技术栈、模块设计、分阶段路线
+- [Phase E 统一学习与执行器 Skill 演进](docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md) — 反思、学习资产、Skill promotion 与治理
 
 ## 许可
 
