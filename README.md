@@ -3,36 +3,49 @@
 > An AGI-native enterprise workbench for task continuity, memory, and proactive agent orchestration.
 > 面向企业服务场景的 AI 原生工作中枢，支持任务连续性、偏好记忆与主动智能体编排。
 
-Metaclaw is a TUI-based agentic workbench for organizations and teams. It helps enterprise users keep complex work moving across interruptions, sessions, tools, and execution contexts.
+Metaclaw is a terminal-based agentic workbench for organizations and teams. It helps enterprise users keep complex work moving across interruptions, sessions, tools, and execution contexts.
 
-Metaclaw 是一个面向组织与团队的 TUI 智能体工作中枢，帮助企业用户在跨中断、跨会话、跨工具和跨执行上下文的复杂工作中保持连续推进。
+Metaclaw 是一个面向组织与团队的终端智能体工作中枢，帮助企业用户在跨中断、跨会话、跨工具和跨执行上下文的复杂工作中保持连续推进。
 
-It focuses on three core capabilities:
+## Why Metaclaw · 为什么需要 Metaclaw
 
-1. **Continuity** — recover work seamlessly after interruptions and preserve context across days and sessions
-2. **Memory** — capture stable user, team, and project preferences to reduce repeated instructions
-3. **Guidance** — proactively surface what should happen next, where work is blocked, and which task is most valuable to continue
+Metaclaw focuses on three core capabilities:
 
-它专注解决三个核心问题：
+1. **Continuity**: recover work after interruptions and preserve context across days and sessions.
+2. **Memory**: capture stable user, team, and project preferences so people do not repeat the same instructions.
+3. **Guidance**: proactively surface what should happen next, where work is blocked, and which task is most valuable to continue.
 
-1. **Continuity（连续性）** — 任务被打断后能无缝恢复，跨天、跨会话保持上下文
-2. **Memory（记忆）** — 自动沉淀用户偏好，减少重复说明
-3. **Guidance（引导）** — 主动告诉你现在该做什么、哪里卡住了
+Metaclaw 专注三个核心能力：
 
-当前版本已经进入 V2 交互流：
+1. **Continuity（连续性）**：任务被打断后能恢复，并跨天、跨会话保留上下文。
+2. **Memory（记忆）**：沉淀用户、团队和项目偏好，减少重复说明。
+3. **Guidance（引导）**：主动提示下一步、阻塞点，以及最值得继续推进的任务。
 
-- 主动建议升级为需要用户确认的 `操作提案`
-- memory 命中后不再默认静默注入，而是先进入 `记忆召回确认`
-- 用户可按场景授权后续同类 recall 自动采用
-- 支持本地 Gateway，多 terminal 连接同一个 Metaclaw 实例，共享任务、记忆和执行器底座
-- 支持 Phase E 学习闭环：任务记忆卡、Skill 候选、Skill patch、Skill 治理和周报
-- 支持飞书通知/应用集成，以及本地 Markdown preview
+The current version includes:
 
-## 快速开始
+- User-confirmed operation proposals instead of silent automation.
+- Recall review before memory is injected into an executor context.
+- Local Gateway support, so multiple terminals can connect to one Metaclaw instance.
+- A learning loop for task memory cards, skill candidates, skill patches, governance, and weekly reviews.
+- Feishu notification/app integrations and local Markdown preview.
 
-### 安装
+当前版本包括：
 
-要求 Node.js `>=20`，并确保默认执行器 `codex` 可用。
+- 需要用户确认的操作提案，而不是静默自动化。
+- 记忆注入执行器前先进行 recall review。
+- 本地 Gateway，多 terminal 可连接同一个 Metaclaw 实例。
+- 任务记忆卡、Skill 候选、Skill patch、治理和周报组成的学习闭环。
+- 飞书通知/应用集成，以及本地 Markdown preview。
+
+## Quick Start · 快速开始
+
+### Requirements · 环境要求
+
+Metaclaw requires Node.js `>=20`. The default executor is `codex`; `claude` remains available as a compatible executor option.
+
+Metaclaw 需要 Node.js `>=20`。默认执行器是 `codex`，同时保留 `claude` 兼容入口。
+
+### Install · 安装
 
 ```bash
 npm install
@@ -40,34 +53,35 @@ npm run build
 npm link
 ```
 
-### 运行
+### Run · 运行
 
 ```bash
 metaclaw
 ```
 
-也可以使用项目脚本启动：
+You can also start Metaclaw with the project helper script:
 
 ```bash
 ./metaclaw.sh start
 ```
 
-首次启动会在 `~/.metaclaw/` 创建配置和数据库。
-默认执行器是 `codex`，仍保留 `claude` 兼容入口。
+On first launch, Metaclaw creates its config and database under `~/.metaclaw/`.
 
-### 连接已运行的 Metaclaw
+首次启动时，Metaclaw 会在 `~/.metaclaw/` 下创建配置和数据库。
 
-如果一个 terminal 已经启动了 Metaclaw，再开第二个 terminal 时不要重复 `start`。使用本地 Gateway 连接当前实例：
+### Connect To A Running Instance · 连接已运行实例
+
+If one terminal is already running Metaclaw, do not start a second full instance. Connect to the existing instance through the local Gateway:
 
 ```bash
 ./metaclaw.sh connect
 ```
 
-每个 `connect` 都会在主 Metaclaw 进程内创建独立 `session_id`，共享任务、记忆和执行器底座，但会话近期上下文按 session 隔离，不会把两个 terminal 的普通对话混在一起。
+Each connected terminal gets an independent `session_id`. Tasks, memory, and executor infrastructure are shared, but recent conversation context is isolated per session.
 
-`connect` 使用和主进程一致的 Ink TUI 外观，并在状态区显示 `模式 client` 和当前 gateway session；非 TTY 管道场景会自动降级为简化文本客户端。
+每个连接的 terminal 都有独立的 `session_id`。任务、记忆和执行器底座共享，但每个会话的近期对话上下文彼此隔离。
 
-### 运行状态与日志
+### Status And Logs · 状态与日志
 
 ```bash
 ./metaclaw.sh status
@@ -77,447 +91,432 @@ metaclaw
 ./metaclaw.sh restart
 ```
 
-`metaclaw.sh` 会在启动前检查源码是否比 `dist/index.js` 更新；如果需要，会自动执行 `npm run build`。
+`metaclaw.sh` checks whether the source is newer than `dist/index.js`; if needed, it runs `npm run build` before startup.
 
-CLI 也支持直接运行 Gateway 或连接 Gateway：
+`metaclaw.sh` 会检查源码是否比 `dist/index.js` 更新；如果需要，会在启动前自动执行 `npm run build`。
+
+The CLI can also run or connect to the Gateway directly:
 
 ```bash
 metaclaw --gateway
 metaclaw --connect
 ```
 
-### 脚本化烟测
+### Scripted Smoke Test · 脚本化烟测
 
 ```bash
 cat > /tmp/metaclaw-flow.txt <<'EOF'
-帮我整理三份合同的风险点对比表
+Compare the risk points across three contracts and produce a concise table.
 /tasks done
 EOF
 
 metaclaw --script /tmp/metaclaw-flow.txt
 ```
 
-`--script` 会按行执行输入脚本，适合做可重复的端到端烟测。空行和以 `#` 开头的注释会被忽略。
+`--script` executes input line by line. Blank lines and lines starting with `#` are ignored.
 
-### 发布前验收入口
+`--script` 会按行执行输入脚本。空行和以 `#` 开头的注释会被忽略。
 
-- 分轮验收包：`examples/e2e/`
-- 用户试用场景：`examples/trial-scenarios/`
+## Core Capabilities · 核心能力
 
-## 核心功能
+### Task Management And Execution · 任务管理与执行
 
-### 任务管理与执行
+Create tasks in natural language, execute them through the configured executor, and continue follow-up work in the same task context.
+
+你可以用自然语言创建任务，通过配置的执行器执行，并在同一任务上下文中继续 follow-up 工作。
 
 ```bash
-# 创建任务并自动执行（自然语言）
-> 帮我整理三份合同的风险点对比表
-→ 任务 #task_abc123 已创建：帮我整理三份合同的风险点对比表
-→ 派发给 codex-cli...
-→ 正在执行任务 #task_abc123...
-· #task_abc123 已启动 codex-cli 执行器
-· 正在等待执行器返回...
-✓ 任务完成 (12.3s)
+> Compare three contracts and create a risk matrix.
+→ Task #task_abc123 created: Compare three contracts and create a risk matrix.
+→ Dispatching to codex-cli...
+→ Running task #task_abc123...
+· #task_abc123 started codex-cli executor
+· Waiting for executor output...
+✓ Task completed (12.3s)
 
-┌─ 任务结果 ───────────────────────────────────────┐
-│ 摘要: [结果摘要...]
-│ 下一步: 如需延续，可基于当前结果继续创建 follow-up 任务
+┌─ Task Result ────────────────────────────────────┐
+│ Summary: [result summary...]
+│ Next step: continue from this result if needed
 └──────────────────────────────────────────────────┘
 
-[执行器输出结果...]
+[executor output...]
 
-💡 建议：继续处理任务 #task_xyz456: 审核财务报表
-
-# 后续指令会继续在当前任务上下文中执行
-> 继续，把表格导出为 Excel
-→ 正在执行任务 #task_abc123...
-✓ 任务完成 (5.2s)
-
-# 查看任务
-/tasks              # 所有任务
-/tasks active       # 活跃任务
-/tasks ready        # 待执行任务
-/tasks parked       # 已挂起任务
-/tasks blocked      # 阻塞任务
-/tasks done         # 已完成任务
-
-# 任务操作
-/task <id>          # 查看详情
-/task <id> pause    # 暂停
-/task <id> resume   # 恢复
-/task <id> block 等待客户资料  # 标记阻塞
-/task <id> unblock  # 解除阻塞
-/task <id> unblock /tmp/evidence-v3.pdf  # 解除阻塞并附带新材料
-/task <id> cancel   # 取消
-/task <id> done     # 完成
-
-# 任务详情会展示
-# - 最新结果摘要
-# - 本地文件材料 / 网页链接材料
-# - 材料概览 / 材料状态
-# - 任务产物
+> Continue and export the table to Excel.
+→ Running task #task_abc123...
+✓ Task completed (5.2s)
 ```
 
-### TUI 体验
-
-```text
-当前执行 1 | 待执行 0 | 已挂起 0 | 阻塞 0
-最近事件 开始执行任务 #task_abc123
-
-status: running codex-cli
-> 
-```
-
-新的终端界面会把输出分成几类：
-
-- `> ` 用户输入
-- `→` 系统路由、调度、上下文准备
-- `· #task...` 执行器进度步骤
-- `· 正在等待执行器返回...` 静默等待提示
-- `✓ 任务完成` 结果块头部
-
-### 偏好记忆与自动提取
+Task commands:
 
 ```bash
-# 系统自动观察重复模式
-> 用正式语气回复张总
-[执行...]
+/tasks              # All tasks
+/tasks active       # Active tasks
+/tasks ready        # Ready tasks
+/tasks parked       # Parked tasks
+/tasks blocked      # Blocked tasks
+/tasks done         # Completed tasks
 
-> 用正式语气回复李总
-[执行...]
+/task <id>          # Show task detail
+/task <id> pause    # Pause a task
+/task <id> resume   # Resume a task
+/task <id> block waiting for customer data
+/task <id> unblock
+/task <id> unblock /tmp/evidence-v3.pdf
+/task <id> cancel
+/task <id> done
+```
 
-> 用正式语气回复王总
-[执行...]
-💡 检测到重复模式（3次）："用正式语气"
-   要把它记为长期偏好吗？
-   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认
+The task detail view shows result summaries, local file materials, web link materials, material status, and task artifacts.
 
-# 也可以继续用命令确认
-/memory confirm obs_123 --scope contact --subject 张总
-已确认偏好 #pref_abc: 用正式语气
+任务详情会展示结果摘要、本地文件材料、网页链接材料、材料状态和任务产物。
 
-# 查看偏好
-/memory             # 已确认偏好
-/memory candidates  # 待确认偏好（出现3次后）
+### TUI Experience · 终端界面
 
-# 手动添加
-/memory add 张总偏好正式语气，必须抄送法务
-/memory add --scope contact --subject 张总 张总偏好正式语气，必须抄送法务
+```text
+Running 1 | Ready 0 | Parked 0 | Blocked 0
+Latest event Started task #task_abc123
 
-# 搜索、编辑和删除
-/memory search 正式
-/memory edit <pref_id> --scope project 输出统一使用表格
+status: running codex-cli
+>
+```
+
+The interface separates user input, routing, execution progress, waiting states, and task result blocks.
+
+界面会区分用户输入、系统路由、执行进度、等待状态和任务结果块。
+
+### Memory And Preference Extraction · 记忆与偏好提取
+
+Metaclaw observes repeated patterns and asks before saving long-term preferences.
+
+Metaclaw 会观察重复模式，并在保存长期偏好前请求用户确认。
+
+```bash
+> Draft a formal update for Alex about the project risk.
+[execution...]
+
+> Draft a formal update for Jamie about the project risk.
+[execution...]
+
+> Draft a formal update for Taylor about the project risk.
+[execution...]
+💡 Repeated pattern detected: "formal tone"
+   Save this as a long-term preference?
+   [y] confirm  [n] ignore  [e <new content>] edit and confirm
+```
+
+Memory commands:
+
+```bash
+/memory
+/memory candidates
+/memory confirm obs_123 --scope contact --subject Alex
+/memory add Alex prefers formal updates with legal copied
+/memory add --scope contact --subject Alex Alex prefers formal updates with legal copied
+/memory search formal
+/memory edit <pref_id> --scope project Use tables for outputs
 /memory delete <pref_id>
 /memory stats
 ```
 
-### 材料与产物
+### Materials And Artifacts · 材料与产物
+
+Attach files and links directly in natural language. Metaclaw tracks materials and records generated artifacts back to the task.
+
+可以在自然语言中直接附带文件和链接。Metaclaw 会跟踪材料，并把生成的产物回写到任务对象。
 
 ```bash
-# 直接在自然语言里附带文件和链接材料
-> 基于 ./weekly.md 和 https://example.com/report 整理 Phoenix 周报
+> Use ./weekly.md and https://example.com/report to prepare the Phoenix weekly report.
 
-# /task 详情里会拆开展示
-# - 本地文件材料
-# - 网页链接材料
-# - 材料概览
-# - 材料状态
+> Save the analysis as a markdown file.
 
-# 如果任务要求把结果写到目录
-> 把刚才的分析保存成 markdown 文件
-
-# 执行成功后，Metaclaw 会记录任务产物路径
 > /task <id>
-任务产物: /abs/path/to/output.md
+Artifacts: /abs/path/to/output.md
 ```
 
-### 高风险动作门控
+### Risky Action Gate · 高风险动作门控
+
+High-risk actions require explicit confirmation before execution.
+
+高风险动作必须明确确认后才会执行。
 
 ```bash
-> 直接把邮件发给客户
-⚠️ 这是高风险动作，默认不会直接执行。
-→ 输入“确认执行”后继续，或输入“取消执行”放弃。
+> Send the email directly to the customer.
+⚠️ This is a high-risk action and will not run by default.
+→ Type "confirm execution" to continue, or "cancel execution" to stop.
 
-> 确认执行
-→ 已确认高风险动作，继续执行原请求
+> confirm execution
+→ High-risk action confirmed. Continuing.
 ```
 
-### V2 提案与记忆召回确认
+### Proposals And Recall Review · 操作提案与记忆召回确认
+
+Metaclaw does not silently apply important context. It shows proposals and memory recall cards before acting.
+
+Metaclaw 不会静默采用重要上下文，而是在行动前展示操作提案和记忆召回卡。
 
 ```text
-┌─ 操作提案 ───────────────────────────────────────┐
-│ 场景：启动建议
-│ 动作：建议恢复任务 #task_123: Phoenix 周报整理
-│ 理由：已完成 80%，继续成本更低
-│ 请输入 [y] 接受并继续恢复 / [n] 暂不处理 / [r] 重新查看
+┌─ Operation Proposal ─────────────────────────────┐
+│ Scenario: startup suggestion
+│ Action: resume task #task_123: Phoenix weekly report
+│ Reason: 80% complete; continuing is cheaper than restarting
+│ Enter [y] accept / [n] skip / [r] review again
 └──────────────────────────────────────────────────┘
 
 > y
 
-┌─ 记忆召回确认 ───────────────────────────────────┐
-│ 当前任务：#task_123 Phoenix 周报整理
-│ 1. [project] Phoenix 周报统一保留风险栏目和经营数据栏目
-│    判断依据：与当前输入语义相近
-│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [a] 后续同类自动采用 / [r] 重新查看
+┌─ Memory Recall Review ───────────────────────────┐
+│ Current task: #task_123 Phoenix weekly report
+│ 1. [project] Phoenix weekly reports keep risk and operating metrics sections.
+│    Reason: semantically close to current input
+│ Enter [y] use all / [n] ignore all / [s numbers...] use selected / [a] auto-use similar recalls later / [r] review again
 └──────────────────────────────────────────────────┘
-
-> y
-→ 派发给 codex-cli...
 ```
 
-相关命令：
-
-- `/memory review-policy`
-- `/memory review-policy revoke <id>`
-
-### 学习闭环与 Skill 治理
-
-Metaclaw 会从任务结果、失败、产物、材料和执行器 Skill 使用事件中生成 reflection，再沉淀为待审核学习候选。审核通过后，候选可以 promotion 成任务记忆卡、executor skill、skill patch、停用建议或废弃建议。
+Related commands:
 
 ```bash
-/learning candidates                  # 待审核学习候选
-/learning approve <candidate_id> [备注]
-/learning reject <candidate_id> [原因]
-/learning promote <candidate_id>      # 下发成任务记忆卡 / Skill / Skill patch / 治理动作
-/learning cards                       # 最近任务记忆卡
-/learning skills                      # Skill Effect Summary
-/learning summary                     # 学习资产概览
-/learning weekly                      # 学习周报
+/memory review-policy
+/memory review-policy revoke <id>
 ```
 
-学习资产会参与后续上下文召回：相关任务记忆卡会进入 recall review，只有用户确认后才会注入执行器上下文。
+### Learning Loop And Skill Governance · 学习闭环与 Skill 治理
 
-### 任务盘面
+Metaclaw can turn execution results, failures, artifacts, materials, and executor skill usage events into reflections and reviewable learning candidates. Approved candidates can become task memory cards, executor skills, skill patches, disable suggestions, or deprecation suggestions.
+
+Metaclaw 可以从执行结果、失败、产物、材料和执行器 Skill 使用事件中生成 reflection，并沉淀为待审核学习候选。审核通过后，候选可以变成任务记忆卡、executor skill、skill patch、停用建议或废弃建议。
 
 ```bash
-/dashboard          # 显示优先级排序、阻塞任务、建议
-/attach [taskId] <文件路径...>  # 关联材料到当前任务或指定任务
-/history            # 查看最近交互历史
-/config             # 查看当前配置
-/help               # 查看命令帮助
-/exit               # 退出，也可用 /quit 或 /q
+/learning candidates                  # Review pending learning candidates
+/learning approve <candidate_id> [note]
+/learning reject <candidate_id> [reason]
+/learning promote <candidate_id>      # Promote into memory / skill / patch / governance action
+/learning cards                       # Recent task memory cards
+/learning skills                      # Skill effect summary
+/learning summary                     # Learning asset overview
+/learning weekly                      # Weekly learning review
 ```
 
-## 工作流程
+Learning assets participate in future recall review. They are injected into executor context only after user confirmation.
 
-### 完整执行流程
+学习资产会参与后续召回；只有用户确认后才会注入执行器上下文。
 
-1. **用户输入自然语言** → 创建任务对象
-2. **任务状态迁移** → CREATED → READY → RUNNING
-3. **偏好召回** → 根据规则与 embedding 命中相关记忆
-4. **Recall Review** → 把拟采用内容整理成可判断摘要卡
-5. **用户确认** → `y / n / s / a / r`
-6. **上下文注入** → 只把确认通过的记忆注入执行器
-7. **调用默认执行器（Codex CLI）** → 通过 CLI 子进程执行
-8. **结果回流** → 更新任务摘要、标记完成
-9. **模式观察** → 提取重复模式，达到 3 次进入候选偏好确认
-10. **主动提案** → 启动时、完成后或恢复场景生成下一步 proposal
-11. **结果回流** → 文件产物会登记回任务对象并展示在任务视图中
+### Dashboard · 任务盘面
 
-### 偏好生命周期
-
-```
-用户输入包含模式
-  ↓
-observations 表记录（第 1 次）
-  ↓
-重复出现（第 2 次）
-  ↓
-达到阈值（第 3 次）→ 进入候选偏好确认
-  ↓
-用户通过 `y` / `e <新内容>` / `/memory confirm` 确认 → preferences 表（status=confirmed）
-  ↓
-后续任务命中后，先进入 recall review，再把确认通过的内容注入执行器
+```bash
+/dashboard                         # Priorities, blocked tasks, and suggestions
+/attach [taskId] <file paths...>    # Attach materials to current or specified task
+/history                           # Recent interaction history
+/config                            # Current configuration
+/help                              # Command help
+/exit                              # Exit; /quit and /q also work
 ```
 
-### 任务连续性
+## Workflow · 工作流程
 
-```
-任务执行中 → 用户切换 → park（生成快照）
+### Execution Flow · 执行流程
+
+1. User enters natural language.
+2. Metaclaw creates or routes to a task object.
+3. Task state moves through `CREATED -> READY -> RUNNING`.
+4. Relevant memory is recalled through rules and embeddings.
+5. Recall review summarizes candidate context for user confirmation.
+6. Confirmed context is injected into the executor prompt.
+7. The configured executor runs the task.
+8. Results update task summaries, artifacts, and status.
+9. Repeated patterns become preference candidates.
+10. Proposals suggest what to continue next.
+
+Chinese flow summary:
+
+1. 用户输入自然语言。
+2. Metaclaw 创建任务对象或路由到已有任务。
+3. 任务状态经过 `CREATED -> READY -> RUNNING`。
+4. 通过规则和 embedding 召回相关记忆。
+5. Recall review 把候选上下文整理成可判断摘要。
+6. 用户确认后的上下文才会注入执行器 prompt。
+7. 配置的执行器执行任务。
+8. 结果回写任务摘要、产物和状态。
+9. 重复模式沉淀为偏好候选。
+10. 操作提案提示下一步最值得继续的工作。
+
+### Preference Lifecycle · 偏好生命周期
+
+```text
+User input contains a repeated pattern
   ↓
-快照保存：done/pending/nextStep/pauseReason
+Observation is recorded
   ↓
-恢复时 → 读取快照 → 生成恢复摘要
+Pattern repeats
   ↓
-继续执行 → 上下文无缝衔接
+Threshold is reached
+  ↓
+User confirms with y / e <new content> / /memory confirm
+  ↓
+Preference is saved as confirmed
+  ↓
+Future matches enter recall review before executor injection
 ```
 
-## 技术架构
+### Task Continuity · 任务连续性
 
+```text
+Task running
+  ↓
+User switches context
+  ↓
+Task is parked with a snapshot
+  ↓
+Snapshot stores done / pending / nextStep / pauseReason
+  ↓
+Resume reads the snapshot and rebuilds context
+  ↓
+Execution continues without losing task state
 ```
+
+## Architecture · 技术架构
+
+```text
 src/
-├── cli/            # CLI 参数解析：--script / --gateway / --connect
-├── core/           # 核心引擎
-│   ├── types.ts           # 类型定义
-│   ├── task-engine.ts     # 任务状态机、快照、恢复
-│   ├── memory-engine.ts   # 偏好观察、确认、召回
-│   ├── context-recaller.ts # 任务、会话、时间线和相关历史召回
-│   ├── embedding-provider.ts # 本地 embedding provider
-│   ├── hybrid-memory-recaller.ts # 规则+语义混合召回
-│   ├── recall-review-builder.ts  # recall review 决策摘要
-│   ├── recall-policy-service.ts  # recall 自动采用策略判定
-│   ├── reflection-engine.ts      # 执行结果反思与学习候选生成
-│   ├── skill-governance-engine.ts # Skill 效果治理建议
-│   ├── learning-weekly-review-builder.ts # 学习周报
-│   └── orchestration.ts   # 优先级评分、盘面生成 / proposal 输出
-├── storage/        # 数据层
-│   ├── database.ts        # SQLite 初始化
-│   ├── migrations.ts      # Schema 迁移
-│   ├── task-repo.ts       # 任务数据访问
-│   ├── preference-repo.ts # 偏好数据访问
-│   ├── observation-repo.ts # 观察记录
-│   ├── task-memory-card-repo.ts # 任务记忆卡
-│   ├── learning-candidate-repo.ts # 学习候选审核
-│   ├── skill-effect-summary-repo.ts # Skill 效果摘要
-│   ├── task-memory-embedding-repo.ts # 任务 memory 向量
-│   ├── preference-embedding-repo.ts  # 偏好向量
-│   └── recall-review-policy-repo.ts  # recall 免确认策略
-├── executor/       # 执行器适配
-│   ├── adapter.ts         # 抽象接口
-│   ├── codex-cli.ts       # Codex CLI 适配器（默认）
-│   ├── claude-code.ts     # Claude Code CLI 适配器（兼容保留）
-│   ├── prompt-builder.ts  # 执行上下文包构造
-│   └── skill-package-builder.ts # Skill / Skill patch 下发包
-├── commands/       # 命令系统
-│   ├── router.ts          # 斜杠命令路由
-│   ├── task-commands.ts   # 任务命令
-│   ├── memory-commands.ts # 偏好命令
-│   ├── learning-commands.ts # 学习候选、任务记忆卡、Skill 治理命令
-│   └── global-commands.ts # 全局命令
-├── gateway/        # 本地 Gateway server/client，多 terminal 连接协议
-├── integrations/   # 飞书应用、Markdown preview
-├── notifications/  # 飞书通知
-├── session/        # 交互 session 与脚本化 session
-├── tui/            # 终端界面
-│   └── app.tsx            # ink 组件
-└── utils/          # 工具
-    ├── config.ts          # 配置加载
-    ├── logger.ts          # 日志
-    ├── paths.ts           # Metaclaw 本地目录解析
-    └── id.ts              # ID 生成
+├── cli/            # CLI args: --script / --gateway / --connect
+├── core/           # Task, memory, recall, reflection, orchestration engines
+├── storage/        # SQLite database, migrations, repositories
+├── executor/       # Codex and Claude executor adapters, prompt builders, skill packages
+├── commands/       # Slash command router and command handlers
+├── gateway/        # Local Gateway server/client for multi-terminal sessions
+├── integrations/   # Feishu app integration and Markdown preview
+├── notifications/  # Feishu notifications
+├── session/        # Interactive and scripted sessions
+├── tui/            # Ink-based terminal UI
+└── utils/          # Config, paths, logger, IDs
 ```
 
-核心数据存在 `~/.metaclaw/metaclaw.db`，主要包括：
+Core data lives in `~/.metaclaw/metaclaw.db`, including tasks, interactions, session state, preferences, observations, recall events, learning candidates, reflection events, task memory cards, skill usage events, and governance summaries.
 
-- `tasks`、`interactions`、`session_state`
-- `preferences`、`observations`、`preference_usage`
-- `task_relations`、`task_memory_embeddings`、`preference_embeddings`
-- `memory_recall_events`、`recall_review_policies`、`recall_feedback`
-- `reflection_events`、`learning_candidates`
-- executor skill 安装事件、skill 使用事件和 skill effect summary
+核心数据存储在 `~/.metaclaw/metaclaw.db`，包括任务、交互、会话状态、偏好、观察记录、召回事件、学习候选、reflection、任务记忆卡、Skill 使用事件和治理摘要。
 
-## 配置
+## Configuration · 配置
 
-编辑 `~/.metaclaw/config.yaml`：
+Edit `~/.metaclaw/config.yaml`:
 
 ```yaml
 version: 1
 
 executor:
-  command: codex           # 默认执行器；可改为 claude
-  timeout: 300             # 空闲超时（秒）：长时间无 stdout/stderr 活动才视为异常
-  max_duration: 3600       # 总时长上限（秒）：宽松兜底，避免任务无限挂住
+  command: codex           # Default executor; can be changed to claude
+  timeout: 300             # Idle timeout in seconds
+  max_duration: 3600       # Total execution cap in seconds
 
 orchestration:
-  reminder_enabled: true   # 是否启用主动提醒
-  reminder_throttle: 300   # 提醒最小间隔（秒）
-  top_k_preferences: 5     # 偏好召回数量上限
+  reminder_enabled: true   # Enable proactive reminders
+  reminder_throttle: 300   # Minimum reminder interval in seconds
+  top_k_preferences: 5     # Max recalled preferences
 
 ui:
-  language: zh-CN          # 界面语言
-  dashboard_on_start: true # 启动时显示盘面
+  language: zh-CN          # UI language
+  dashboard_on_start: true # Show dashboard on startup
 
 notifications:
   feishu:
-    enabled: false         # 开启后会把待确认偏好候选发送到飞书群机器人
-    webhook_url: ""        # 飞书自定义机器人 webhook
-    secret: ""             # 可选：飞书机器人签名密钥
+    enabled: false
+    webhook_url: ""
+    secret: ""
 
 integrations:
   feishu:
-    enabled: false         # 开启飞书应用双向通信
-    mode: websocket        # websocket 或 webhook
-    app_id: ""             # 飞书应用 App ID，例如 cli_xxx
-    app_secret_env: FEISHU_APP_SECRET # 推荐用环境变量保存 App Secret
-    event_port: 8787       # 本地 callback HTTP 端口
-    event_path: /feishu/events # 飞书事件订阅请求路径
-    verification_token: "" # 可选：飞书事件订阅 Verification Token
+    enabled: false
+    mode: websocket
+    app_id: ""
+    app_secret_env: FEISHU_APP_SECRET
+    event_port: 8787
+    event_path: /feishu/events
+    verification_token: ""
 
   markdown_preview:
-    enabled: true          # 本地 Markdown preview 服务
+    enabled: true
     host: 127.0.0.1
     port: 8790
-    public_base_url: ""    # 可选：公网或反代后的访问地址
+    public_base_url: ""
 ```
 
-启动前需要在同一个 shell 里导出 App Secret：
+Before using the Feishu app integration, export the app secret in the same shell:
 
 ```bash
-export FEISHU_APP_SECRET="你的飞书应用 App Secret"
+export FEISHU_APP_SECRET="your Feishu app secret"
 ./metaclaw.sh start
 ```
 
-飞书通知当前覆盖“待确认偏好候选”事件，包括高置信偏好识别和三次重复模式识别。
-通知只做提醒，不会在飞书里直接确认偏好；确认仍需回到 Metaclaw 输入 `/memory confirm <id>` 或在 TUI 中输入 `y`。
+Feishu notifications currently cover pending preference candidates, including high-confidence preference detection and repeated-pattern detection. Notifications are reminders only; confirmation still happens in Metaclaw.
 
-如果要通过飞书和 Metaclaw 双向对话，使用 `integrations.feishu`。启动后 Metaclaw 会在本机监听 `event_port + event_path`，需要用内网穿透或公网反代把该地址配置到飞书应用的事件订阅 Request URL。
-收到飞书文本消息后，Metaclaw 会按普通输入处理，并把新增输出回发到同一个飞书会话。
+飞书通知当前覆盖待确认偏好候选，包括高置信偏好识别和重复模式识别。通知只做提醒，确认仍需回到 Metaclaw。
 
-Markdown preview 默认监听 `http://127.0.0.1:8790`。如果需要通过公网或反向代理访问，配置 `public_base_url`。
+For two-way Feishu chat, enable `integrations.feishu` and expose `event_port + event_path` through a public reverse proxy or tunnel, then configure that URL in Feishu event subscriptions.
 
-## 开发
+如果要通过飞书双向对话，启用 `integrations.feishu`，并通过公网反代或内网穿透暴露 `event_port + event_path`，再配置到飞书事件订阅中。
+
+Markdown preview listens on `http://127.0.0.1:8790` by default. Configure `public_base_url` when using a public reverse proxy.
+
+Markdown preview 默认监听 `http://127.0.0.1:8790`。如需公网访问，请配置 `public_base_url`。
+
+## Development · 开发
 
 ```bash
-# 开发模式（监听文件变化）
 npm run dev
-
-# 脚本化用户流烟测
 node dist/index.js --script /tmp/metaclaw-flow.txt
-
-# 运行测试
 npm test
-
-# 类型检查
 npm run lint
-
-# 构建
 npm run build
 ```
 
-## 测试
+## Testing · 测试
 
 ```bash
-npm test                # 运行所有测试
-npm run test:watch      # 监听模式
+npm test
+npm run test:watch
 ```
 
-试用案例见：
+Scenario packages:
 
 - `examples/e2e/README.md`
 - `examples/trial-scenarios/README.md`
 - `examples/trial-scenarios/scripts/`
 - `examples/trial-scenarios/manual/`
 
-当前自动化测试覆盖：
-- 多任务调度、抢占、挂起恢复、阻塞解除
-- 对话 vs 任务边界
-- 偏好三次确认、inline `y/n/e` 确认、注入透明
-- recall review、自动采用策略和 feedback loop
-- 材料链路：文件、链接、网页抓取、材料摘要
-- 高风险动作确认门控
-- 任务产物回流与 `/task` 详情视图
-- Gateway client/server 协议与多 session 行为
-- Codex / Claude 执行器适配、prompt 构造、错误归因和中断处理
-- Phase E 学习候选、任务记忆卡、Skill promotion、Skill patch、Skill 治理和周报
-- 飞书通知、飞书应用集成和 Markdown preview
+Current automated coverage includes:
 
-## 设计文档
+- Multi-task scheduling, preemption, parking, resume, and unblock flows.
+- Conversation-vs-task boundaries.
+- Preference confirmation, inline `y/n/e`, and transparent context injection.
+- Recall review, auto-use policy, and feedback loops.
+- Materials: files, links, web fetch, and material summaries.
+- High-risk action confirmation gates.
+- Task artifact tracking and `/task` detail views.
+- Gateway client/server protocol and multi-session behavior.
+- Codex / Claude executor adapters, prompt construction, error attribution, and interruptions.
+- Phase E learning candidates, task memory cards, skill promotion, skill patches, governance, and weekly reviews.
+- Feishu notifications, Feishu app integration, and Markdown preview.
 
-- [PRD V2](docs/metaclaw-os_prd_v2.md) — 产品需求、场景、验收标准
-- [技术设计 V1](docs/metaclaw-os_tech_design_v1.md) — 数据模型、状态机、执行器方案
-- [TUI 规范 V1](docs/metaclaw-os_tui_spec_v1.md) — 交互规范、命令体系
-- [实施方案 V1](docs/metaclaw-os_implementation_v1.md) — 技术栈、模块设计、分阶段路线
-- [Phase E 统一学习与执行器 Skill 演进](docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md) — 反思、学习资产、Skill promotion 与治理
+Chinese coverage summary:
 
-## 许可
+- 多任务调度、抢占、挂起恢复和阻塞解除。
+- 对话与任务边界。
+- 偏好确认、inline `y/n/e` 和上下文透明注入。
+- Recall review、自动采用策略和 feedback loop。
+- 文件、链接、网页抓取和材料摘要。
+- 高风险动作确认门控。
+- 任务产物回流和 `/task` 详情视图。
+- Gateway client/server 协议和多 session 行为。
+- Codex / Claude 执行器适配、prompt 构造、错误归因和中断处理。
+- Phase E 学习候选、任务记忆卡、Skill promotion、Skill patch、治理和周报。
+- 飞书通知、飞书应用集成和 Markdown preview。
+
+## Design Documents · 设计文档
+
+- [PRD V2](docs/metaclaw-os_prd_v2.md): product requirements, scenarios, and acceptance criteria.
+- [Technical Design V1](docs/metaclaw-os_tech_design_v1.md): data model, state machine, and executor design.
+- [TUI Spec V1](docs/metaclaw-os_tui_spec_v1.md): interaction model and command system.
+- [Implementation Plan V1](docs/metaclaw-os_implementation_v1.md): stack, modules, and staged roadmap.
+- [Phase E Learning And Executor Skill Evolution](docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md): reflection, learning assets, skill promotion, and governance.
+
+## License · 许可
 
 MIT
