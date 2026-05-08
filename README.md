@@ -1,8 +1,19 @@
 # Metaclaw
 
-> 任务连续性、偏好记忆与主动编排中枢
+> An AGI-native enterprise workbench for task continuity, memory, and proactive agent orchestration.
+> 面向企业服务场景的 AI 原生工作中枢，支持任务连续性、偏好记忆与主动智能体编排。
 
-Metaclaw 是一个面向知识工作者的 TUI 应用，专注解决三个核心问题：
+Metaclaw is a TUI-based agentic workbench for organizations and teams. It helps enterprise users keep complex work moving across interruptions, sessions, tools, and execution contexts.
+
+Metaclaw 是一个面向组织与团队的 TUI 智能体工作中枢，帮助企业用户在跨中断、跨会话、跨工具和跨执行上下文的复杂工作中保持连续推进。
+
+It focuses on three core capabilities:
+
+1. **Continuity** — recover work seamlessly after interruptions and preserve context across days and sessions
+2. **Memory** — capture stable user, team, and project preferences to reduce repeated instructions
+3. **Guidance** — proactively surface what should happen next, where work is blocked, and which task is most valuable to continue
+
+它专注解决三个核心问题：
 
 1. **Continuity（连续性）** — 任务被打断后能无缝恢复，跨天、跨会话保持上下文
 2. **Memory（记忆）** — 自动沉淀用户偏好，减少重复说明
