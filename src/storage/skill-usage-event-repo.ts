@@ -142,4 +142,13 @@ export class SkillUsageEventRepo {
     `).all(executionId) as SkillUsageEventRow[];
     return rows.map(rowToSkillUsageEvent);
   }
+
+  listRecent(limit = 50): SkillUsageEventRecord[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM executor_skill_usage_events
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as SkillUsageEventRow[];
+    return rows.map(rowToSkillUsageEvent);
+  }
 }

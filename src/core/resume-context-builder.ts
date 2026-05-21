@@ -17,6 +17,7 @@ interface BuildContextInput {
   resolvedPreferencesOverride?: ResolvedPreference[];
   relatedTaskIdsOverride?: string[];
   acceptedMemoryResources?: string[];
+  includeRecentConversationContext?: boolean;
 }
 
 interface TaskMemoryDocumentBuildInput {
@@ -91,6 +92,9 @@ export class ResumeContextBuilder {
       sessionId: input.sessionId,
       userInput: input.userInput,
     });
+    const currentConversationTurns = input.includeRecentConversationContext
+      ? this.contextRecaller.recallRecentSessionFull(input.sessionId, task.id)
+      : [];
     const relatedTaskTurns = input.relatedTaskIdsOverride
       ? this.contextRecaller.recallForTaskIds(input.relatedTaskIdsOverride)
       : [];
@@ -174,6 +178,7 @@ export class ResumeContextBuilder {
         taskCandidates: taskMemoryCandidates,
       },
       historyContext: {
+        currentConversationTurns,
         taskTurns: conversationHistory.filter(turn => turn.source === 'task'),
         sessionTurns: conversationHistory.filter(turn => turn.source === 'session'),
         timelineTurns: conversationHistory.filter(turn => turn.source === 'timeline'),

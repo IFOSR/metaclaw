@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
-import type { TaskStatus } from './types.js';
+import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
 import type { NaturalLanguageRoute } from './task-routing.js';
 
 export interface TaskSummary {
@@ -25,6 +25,21 @@ export interface IntentResult {
 export interface RouteResult {
   route: NaturalLanguageRoute | 'unknown';
   reason: string;
+}
+
+export interface PreferenceRecallSummary {
+  id: string;
+  scope: string;
+  subject: string | null;
+  type: string;
+  content: string;
+}
+
+export interface PreferenceRecallDecision {
+  preferenceId: string;
+  reason: string;
+  score?: number;
+  action?: MemoryApplicabilityAction;
 }
 
 const LLM_TIMEOUT = 30_000;
@@ -118,6 +133,21 @@ export class LlmBridge {
     }
   }
 
+  async recallPreferences(
+    userInput: string,
+    candidates: PreferenceRecallSummary[],
+  ): Promise<PreferenceRecallDecision[]> {
+    if (candidates.length === 0) return [];
+
+    try {
+      const prompt = this.buildPreferenceRecallPrompt(userInput, candidates);
+      const raw = await this.query(prompt);
+      return this.parsePreferenceRecallResult(raw, new Set(candidates.map(candidate => candidate.id)));
+    } catch {
+      throw new Error('LLM preference recall 调用失败');
+    }
+  }
+
   private buildIntentPrompt(userInput: string, tasks: TaskSummary[]): string {
     const taskList = tasks.map(t =>
       `  ${t.id}: [${t.status}] ${t.title} / ${t.goal}${t.summary ? ` / 进度: ${t.summary.slice(0, 50)}` : ''}`
@@ -203,6 +233,41 @@ export class LlmBridge {
     ].join('\n');
   }
 
+  private buildPreferenceRecallPrompt(
+    userInput: string,
+    candidates: PreferenceRecallSummary[],
+  ): string {
+    const list = candidates.map(candidate => [
+      `  ${candidate.id}:`,
+      `    scope=${candidate.scope}`,
+      `    subject=${candidate.subject ?? 'null'}`,
+      `    type=${candidate.type}`,
+      `    content=${candidate.content}`,
+    ].join('\n')).join('\n');
+
+    return [
+      '判断用户当前输入是否需要召回下面的用户偏好/记忆。',
+      '这是产品体验关键路径：必须理解用户意图和偏好的适用边界，不要做关键词匹配。',
+      '请对每条候选做三态裁决：auto_apply / ask_review / suppress。',
+      'auto_apply: 明确相关、低风险、没有当前指令冲突，可静默采用。',
+      'ask_review: 中等相关、不确定、可能改变执行路径或存在高影响，需要用户确认。',
+      'suppress: 只有关键词相同、泛词命中、元讨论、纠错/否认、无关场景，静默忽略。',
+      '只有当偏好对当前请求的执行方式、输出格式、对象关系或上下文选择有明确帮助时才 auto_apply 或 ask_review。',
+      '不要因为共享“内容、分析、相关、报告、图片、文档”等泛词就召回。',
+      '如果用户当前输入是在否认、纠错、询问系统行为，通常不要召回交付物偏好。',
+      'task-local 且属于当前任务的偏好通常可以召回；project/contact/global 需要语义相关。',
+      '只返回 JSON 数组，不要其他内容。每项必须包含 preferenceId、action、reason、score。',
+      '',
+      `用户输入：${userInput}`,
+      '',
+      '候选偏好：',
+      list,
+      '',
+      '返回格式：[{"preferenceId":"pref_xxx","action":"auto_apply|ask_review|suppress","reason":"为什么这样裁决","score":0.0到1.0}]',
+      '如果都完全不适用，可以返回 suppress 项，也可以返回 []。',
+    ].join('\n');
+  }
+
   private parseIntentResult(raw: string): IntentResult {
     try {
       const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -225,6 +290,51 @@ export class LlmBridge {
       if (Array.isArray(parsed)) return parsed.filter(id => typeof id === 'string');
     } catch {}
     return [];
+  }
+
+  private parsePreferenceRecallResult(raw: string, validIds: Set<string>): PreferenceRecallDecision[] {
+    try {
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed
+        .map((item): PreferenceRecallDecision | null => {
+          const preferenceId = typeof item?.preferenceId === 'string'
+            ? item.preferenceId
+            : typeof item?.id === 'string'
+              ? item.id
+              : null;
+          if (!preferenceId || !validIds.has(preferenceId)) {
+            return null;
+          }
+
+          const rawScore = typeof item?.score === 'number' ? item.score : undefined;
+          const score = rawScore === undefined
+            ? undefined
+            : Math.max(0, Math.min(1, rawScore));
+
+          return {
+            preferenceId,
+            reason: typeof item?.reason === 'string' && item.reason.trim()
+              ? item.reason.trim()
+              : 'executor 判定当前偏好适用',
+            score,
+            action: this.parsePreferenceRecallAction(item?.action),
+          };
+        })
+        .filter((item): item is PreferenceRecallDecision => Boolean(item));
+    } catch {}
+
+    return [];
+  }
+
+  private parsePreferenceRecallAction(value: unknown): MemoryApplicabilityAction | undefined {
+    return value === 'auto_apply' || value === 'ask_review' || value === 'suppress'
+      ? value
+      : undefined;
   }
 
   private parseRouteResult(raw: string): RouteResult {

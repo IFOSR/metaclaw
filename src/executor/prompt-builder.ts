@@ -103,6 +103,17 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
       });
     }
 
+    if ((bundle.historyContext.currentConversationTurns?.length ?? 0) > 0) {
+      lines.push('', '当前会话完整正文（用户要求基于刚才/上面内容继续，证据强度高于相似历史参考）：');
+      bundle.historyContext.currentConversationTurns!.forEach((turn, idx) => {
+        const turnLabel = turn.taskId ? `任务#${turn.taskId}` : '普通对话';
+        lines.push(`[${idx + 1}] ${turnLabel}｜${turn.createdAt}`);
+        lines.push(`用户: ${turn.userInput}`);
+        lines.push(`助手正文:`);
+        lines.push(turn.systemOutput);
+      });
+    }
+
     if (bundle.workspaceContext?.allowFilesystem) {
       lines.push(
         '',

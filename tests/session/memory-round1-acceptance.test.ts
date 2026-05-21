@@ -172,7 +172,7 @@ describe('Round 1 memory acceptance', () => {
     expect(reviewOutput).toContain('记忆召回确认');
     expect(reviewOutput).toContain('Phoenix 项目材料统一使用 Phoenix 术语');
     expect(reviewOutput).toContain('给张总的邮件使用正式语气');
-    expect(reviewOutput).toContain('输出尽量简洁');
+    expect(reviewOutput).not.toContain('输出尽量简洁');
 
     await session.submit('y', { awaitAsyncWork: true });
 
@@ -182,20 +182,16 @@ describe('Round 1 memory acceptance', () => {
     expect(resolvedPreferences.map((preference: { id: string }) => preference.id)).toEqual([
       expect.any(String),
       expect.any(String),
-      expect.any(String),
     ]);
     expect(resolvedPreferences[0].scope).toBe('project');
     expect(resolvedPreferences[1].scope).toBe('contact');
-    expect(resolvedPreferences[2].scope).toBe('global');
 
     const output = session.getSnapshot().output.join('\n');
     expect(output).toContain('今天明确要求先保留表格格式');
     expect(output.indexOf('[project] Phoenix 项目材料统一使用 Phoenix 术语')).toBeLessThan(
       output.indexOf('[contact] 给张总的邮件使用正式语气'),
     );
-    expect(output.indexOf('[contact] 给张总的邮件使用正式语气')).toBeLessThan(
-      output.indexOf('[global] 输出尽量简洁'),
-    );
+    expect(output).not.toContain('[global] 输出尽量简洁');
   });
 
   it('supports inline y confirmation for a pending preference candidate', async () => {
@@ -291,7 +287,7 @@ describe('Round 1 memory acceptance', () => {
     expect(session.getSnapshot().output.join('\n')).toContain('已编辑并确认偏好');
   });
 
-  it('creates a pending memory candidate from a single high-confidence user preference statement', async () => {
+  it('auto-captures a single high-confidence low-risk user preference statement', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -331,15 +327,12 @@ describe('Round 1 memory acceptance', () => {
     await session.submit('以后凡是长篇调研、人物研究、竞品分析，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径', { awaitAsyncWork: true });
 
     const candidates = memoryEngine.getCandidates();
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.pattern).toBe('凡是长篇调研、人物研究、竞品分析，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径');
-    expect(session.getSnapshot().output.join('\n')).toContain('检测到可能的长期偏好');
-    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
-    expect(notifier.notifyMemoryCandidate).toHaveBeenCalledWith(expect.objectContaining({
-      observationId: candidates[0]?.id,
-      pattern: candidates[0]?.pattern,
-      source: 'high-confidence',
-    }));
+    expect(candidates).toHaveLength(0);
+    expect(memoryEngine.list({ status: 'confirmed' }).map(preference => preference.content)).toContain(
+      '凡是长篇调研、人物研究、竞品分析，默认输出 Markdown 文件，并在聊天中只给摘要和文件路径',
+    );
+    expect(session.getSnapshot().output.join('\n')).toContain('已自动记录偏好');
+    expect(notifier.notifyMemoryCandidate).not.toHaveBeenCalled();
   });
 
   it('creates a pending memory candidate when executor output identifies an explicit reusable work rule', async () => {
@@ -385,5 +378,96 @@ describe('Round 1 memory acceptance', () => {
     expect(candidates.map(candidate => candidate.pattern)).toContain('长篇调研型输出应该保存成本地 Markdown 文件');
     expect(session.getSnapshot().output.join('\n')).toContain('检测到可能的长期偏好');
     expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
+  });
+
+  it('auto-captures explicit low-risk long-term preferences without confirmation', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'noop',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_memory_auto_capture_low_risk',
+      contextRecaller,
+      llmBridge: createDurableRouteBridge(),
+    });
+
+    session.initialize();
+    await session.submit('以后凡是复杂方案，默认先给结论，再列执行细节');
+
+    const confirmed = memoryEngine.list({ status: 'confirmed' });
+    expect(confirmed).toHaveLength(1);
+    expect(confirmed[0].content).toBe('凡是复杂方案，默认先给结论，再列执行细节');
+    expect(memoryEngine.getCandidates()).toHaveLength(0);
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('已自动记录偏好');
+    expect(output).not.toContain('要把它记为长期偏好吗');
+
+    await session.submit('/memory auto-captured');
+    expect(session.getSnapshot().output.join('\n')).toContain('自动写入记忆');
+    expect(session.getSnapshot().output.join('\n')).toContain(confirmed[0].id);
+  });
+
+  it('does not silently auto-capture high-risk memory candidates', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'noop',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_memory_auto_capture_high_risk',
+      contextRecaller,
+      llmBridge: createDurableRouteBridge(),
+    });
+
+    session.initialize();
+    await session.submit('以后凡是报告都要自动发给客户');
+
+    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
+    expect(memoryEngine.getCandidates()).toHaveLength(1);
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('高风险偏好不会静默写入');
   });
 });

@@ -354,6 +354,66 @@ const MIGRATIONS: Migration[] = [
         ON skill_effect_summaries(executor_name, used_count, updated_at);
     `,
   },
+  {
+    version: 12,
+    up: `
+      CREATE TABLE IF NOT EXISTS memory_audit_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        memory_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        score REAL,
+        reason TEXT NOT NULL DEFAULT '',
+        judge_source TEXT NOT NULL DEFAULT 'rule',
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_events_memory
+        ON memory_audit_events(memory_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_events_task
+        ON memory_audit_events(task_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_events_action
+        ON memory_audit_events(action, created_at);
+    `,
+  },
+  {
+    version: 13,
+    up: `
+      CREATE TABLE IF NOT EXISTS executor_profiles (
+        name TEXT PRIMARY KEY,
+        domains_json TEXT NOT NULL DEFAULT '[]',
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        input_types_json TEXT NOT NULL DEFAULT '[]',
+        output_types_json TEXT NOT NULL DEFAULT '[]',
+        strengths_json TEXT NOT NULL DEFAULT '[]',
+        weaknesses_json TEXT NOT NULL DEFAULT '[]',
+        risk_level TEXT NOT NULL DEFAULT 'medium',
+        availability TEXT NOT NULL DEFAULT 'available',
+        historical_success REAL NOT NULL DEFAULT 0.5,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS executor_route_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        user_input TEXT NOT NULL,
+        selected_executor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        candidates_json TEXT NOT NULL DEFAULT '[]',
+        reason TEXT NOT NULL DEFAULT '',
+        confirmed_by_user INTEGER NOT NULL DEFAULT 0,
+        result TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_executor_route_events_executor
+        ON executor_route_events(selected_executor, created_at);
+      CREATE INDEX IF NOT EXISTS idx_executor_route_events_task
+        ON executor_route_events(task_id, created_at);
+    `,
+  },
 ];
 
 function columnExists(db: Database.Database, table: string, column: string): boolean {

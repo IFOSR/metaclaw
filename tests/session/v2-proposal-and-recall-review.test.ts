@@ -40,6 +40,10 @@ function createConfig(): Config {
   };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
+
 describe('V2 proposal flow', () => {
   it('requires proposal confirmation and recall review before execution', async () => {
     const db = createTestDb();
@@ -237,5 +241,156 @@ describe('V2 proposal flow', () => {
       targetIds: ['pref_project_feedback'],
       queryTaskId: parkedTask.id,
     }).map(record => record.action)).toContain('select');
+  });
+
+  it('auto-applies high-confidence recall candidates and only asks review for uncertain candidates', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-tristate');
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    prefRepo.insert({
+      id: 'pref_auto_apply',
+      type: 'style',
+      scope: 'project',
+      subject: 'MetaClaw',
+      content: 'MetaClaw 优化方案默认先给结论，再列执行细节',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+    prefRepo.insert({
+      id: 'pref_ask_review',
+      type: 'domain',
+      scope: 'global',
+      subject: null,
+      content: '长篇报告需要同步生成飞书云文档',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+
+    const memoryEngine = new MemoryEngine(
+      prefRepo,
+      obsRepo,
+      undefined,
+      undefined,
+      undefined,
+      {
+        recallPreferences: vi.fn().mockResolvedValue([
+          {
+            preferenceId: 'pref_auto_apply',
+            action: 'auto_apply',
+            reason: '当前任务明确是 MetaClaw 优化方案，低风险输出结构偏好适用',
+            score: 0.92,
+          },
+          {
+            preferenceId: 'pref_ask_review',
+            action: 'ask_review',
+            reason: '可能触发外部文档同步，需要确认',
+            score: 0.7,
+          },
+        ]),
+      },
+    );
+
+    const task = taskEngine.create({
+      title: 'MetaClaw 优化',
+      goal: '根据最终优化方案实施 MetaClaw',
+    });
+    taskRepo.update(task.id, {
+      status: 'parked',
+      summary: '待根据最终优化方案继续实施',
+      snapshots: [{
+        done: ['已确认最终优化方案'],
+        pending: ['实施召回三态和记忆自动化'],
+        nextStep: '继续实施优化方案',
+        pauseReason: '等待继续执行',
+        createdAt: '2026-05-20T00:00:00Z',
+      }],
+    });
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'MetaClaw 优化已完成',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_v2_tristate',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+    await session.submit('y');
+    await flushMicrotasks();
+
+    const reviewOutput = session.getSnapshot().output.join('\n');
+    expect(reviewOutput).toContain('记忆召回确认');
+    expect(reviewOutput).toContain('已自动采用记忆');
+    const recallReviewOnly = reviewOutput.slice(reviewOutput.indexOf('┌─ 记忆召回确认'));
+    expect(recallReviewOnly).not.toContain('MetaClaw 优化方案默认先给结论，再列执行细节');
+    expect(reviewOutput).toContain('长篇报告需要同步生成飞书云文档');
+    const askReviewAudit = db.prepare(
+      `SELECT action, memory_id, reason, judge_source FROM memory_audit_events
+       WHERE memory_id = ? AND action = 'ask_review'
+       ORDER BY created_at DESC LIMIT 1`
+    ).get('pref_ask_review') as { action: string; memory_id: string; reason: string; judge_source: string } | undefined;
+    expect(askReviewAudit).toEqual(expect.objectContaining({
+      action: 'ask_review',
+      memory_id: 'pref_ask_review',
+      reason: '可能触发外部文档同步，需要确认',
+      judge_source: 'llm',
+    }));
+
+    await session.submit('y', { awaitAsyncWork: true });
+
+    const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvedPreferences = executionInput.executionContextBundle.memoryContext.resolvedPreferences;
+    expect(resolvedPreferences.map((preference: { id: string }) => preference.id)).toEqual([
+      'pref_auto_apply',
+      'pref_ask_review',
+    ]);
+
+    const finalOutput = session.getSnapshot().output.join('\n');
+    expect(finalOutput).toContain('已自动采用记忆');
+    expect(finalOutput).toContain('pref_auto_apply');
+
+    await session.submit(`/memory applied ${task.id}`);
+    const auditOutput = session.getSnapshot().output.join('\n');
+    expect(auditOutput).toContain('已自动采用记忆');
+    expect(auditOutput).toContain('pref_auto_apply');
+    expect(auditOutput).toContain('score=0.92');
   });
 });

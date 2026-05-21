@@ -1,6 +1,9 @@
 import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
+import { MemoryAuditEventRepo, type MemoryAuditEventRecord } from '../storage/memory-audit-event-repo.js';
+import { MemoryVaultExporter } from '../core/memory-vault-exporter.js';
 import type { PreferenceScope } from '../core/types.js';
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
+import { generateInteractionId } from '../utils/id.js';
 
 const VALID_SCOPES = new Set<PreferenceScope>(['global', 'project', 'contact', 'task-local']);
 
@@ -76,6 +79,21 @@ function formatReviewPolicyLine(policy: {
     `autoApply=${policy.autoApply ? 'yes' : 'no'}`,
   ].filter(Boolean);
   return `  #${policy.id} ${fragments.join(' | ')}`;
+}
+
+function formatAuditEventLine(
+  event: MemoryAuditEventRecord,
+  preferenceContent?: string,
+): string {
+  const taskText = event.taskId ? ` task=${event.taskId}` : '';
+  const scoreText = event.score === null ? '' : ` score=${event.score.toFixed(2)}`;
+  const contentText = preferenceContent ? ` ${preferenceContent}` : '';
+  return `  #${event.id} ${event.action}${taskText} memory=${event.memoryId}${scoreText} source=${event.judgeSource}${contentText}`;
+}
+
+function parseDirArg(args: string[]): string | undefined {
+  const index = args.indexOf('--dir');
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 export const memoryCommand: CommandHandler = {
@@ -191,6 +209,169 @@ export const memoryCommand: CommandHandler = {
           type: 'text',
           content: `偏好统计：\n  已确认: ${confirmed}\n  待确认: ${candidates}\n  总计: ${all.length}`,
         };
+      }
+
+      case 'recent': {
+        const repo = new MemoryAuditEventRepo(context.db);
+        const events = repo.findRecent();
+        if (events.length === 0) {
+          return { type: 'text', content: '暂无最近记忆事件' };
+        }
+        return {
+          type: 'text',
+          content: `最近记忆事件：\n${events.map(event => formatAuditEventLine(
+            event,
+            context.memoryEngine.list().find(pref => pref.id === event.memoryId)?.content,
+          )).join('\n')}`,
+        };
+      }
+
+      case 'auto-captured': {
+        const repo = new MemoryAuditEventRepo(context.db);
+        const events = repo.findByAction('auto_capture');
+        if (events.length === 0) {
+          return { type: 'text', content: '暂无自动写入记忆' };
+        }
+        return {
+          type: 'text',
+          content: `自动写入记忆：\n${events.map(event => formatAuditEventLine(
+            event,
+            context.memoryEngine.list().find(pref => pref.id === event.memoryId)?.content,
+          )).join('\n')}`,
+        };
+      }
+
+      case 'applied': {
+        const repo = new MemoryAuditEventRepo(context.db);
+        const taskId = args[1];
+        const events = repo.findApplied(taskId);
+        if (events.length === 0) {
+          return { type: 'text', content: taskId ? `任务 ${taskId} 暂无已自动采用记忆` : '暂无已自动采用记忆' };
+        }
+        const title = taskId ? `已自动采用记忆（${taskId}）：` : '已自动采用记忆：';
+        return {
+          type: 'text',
+          content: `${title}\n${events.map(event => formatAuditEventLine(
+            event,
+            context.memoryEngine.list().find(pref => pref.id === event.memoryId)?.content,
+          )).join('\n')}`,
+        };
+      }
+
+      case 'undo': {
+        const prefId = args[1];
+        if (!prefId) {
+          return { type: 'text', content: '用法: /memory undo <memoryId>' };
+        }
+        const existing = context.memoryEngine.list().find(pref => pref.id === prefId);
+        if (!existing) {
+          return { type: 'text', content: `记忆不存在或已撤销: ${prefId}` };
+        }
+        context.memoryEngine.delete(prefId);
+        new MemoryAuditEventRepo(context.db).insert({
+          id: `memory_audit_${generateInteractionId()}`,
+          taskId: null,
+          memoryId: prefId,
+          action: 'undo',
+          score: null,
+          reason: '用户通过 /memory undo 撤销记忆',
+          judgeSource: 'rule',
+          evidence: [],
+          createdAt: new Date().toISOString(),
+        });
+        return { type: 'text', content: `已撤销记忆 #${prefId}: ${existing.content}` };
+      }
+
+      case 'explain': {
+        const prefId = args[1];
+        if (!prefId) {
+          return { type: 'text', content: '用法: /memory explain <memoryId>' };
+        }
+        const preference = context.memoryEngine.list().find(pref => pref.id === prefId);
+        if (!preference) {
+          return { type: 'text', content: `记忆不存在: ${prefId}` };
+        }
+        const events = new MemoryAuditEventRepo(context.db).findByMemoryId(prefId);
+        return {
+          type: 'text',
+          content: [
+            `记忆说明 #${preference.id}`,
+            `scope=${preference.scope} subject=${preference.subject ?? 'none'} confidence=${preference.confidence}`,
+            preference.content,
+            '',
+            'Evidence / Timeline:',
+            ...events.map(event => formatAuditEventLine(event)),
+            ...events.map(event => `  reason=${event.reason}`),
+          ].join('\n'),
+        };
+      }
+
+      case 'evidence': {
+        const prefId = args[1];
+        if (!prefId) {
+          return { type: 'text', content: '用法: /memory evidence <memoryId>' };
+        }
+        const events = new MemoryAuditEventRepo(context.db).findByMemoryId(prefId);
+        if (events.length === 0) {
+          return { type: 'text', content: `记忆 #${prefId} 暂无 evidence` };
+        }
+        return {
+          type: 'text',
+          content: `Evidence for ${prefId}:\n${events.map(event => [
+            formatAuditEventLine(event),
+            `    reason=${event.reason}`,
+            `    evidence=${JSON.stringify(event.evidence)}`,
+          ].join('\n')).join('\n')}`,
+        };
+      }
+
+      case 'timeline': {
+        const events = new MemoryAuditEventRepo(context.db).findRecent(50);
+        if (events.length === 0) {
+          return { type: 'text', content: '暂无记忆时间线' };
+        }
+        return {
+          type: 'text',
+          content: `记忆时间线：\n${events.map(event => `${event.createdAt} ${formatAuditEventLine(event).trim()}`).join('\n')}`,
+        };
+      }
+
+      case 'relations': {
+        const prefId = args[1];
+        if (!prefId) {
+          return { type: 'text', content: '用法: /memory relations <memoryId>' };
+        }
+        const events = new MemoryAuditEventRepo(context.db).findByMemoryId(prefId);
+        if (events.length === 0) {
+          return { type: 'text', content: `记忆 #${prefId} 暂无 relations` };
+        }
+        return {
+          type: 'text',
+          content: `Relations for ${prefId}:\n${events.map(event =>
+            `  memory=${event.memoryId} task=${event.taskId ?? 'none'} evidence=${event.id} action=${event.action}`
+          ).join('\n')}`,
+        };
+      }
+
+      case 'vault': {
+        const subAction = args[1];
+        const vaultDir = parseDirArg(args.slice(2));
+        const exporter = new MemoryVaultExporter(context.db, context.memoryEngine);
+        if (subAction === 'export') {
+          const result = exporter.export({ vaultDir });
+          return {
+            type: 'text',
+            content: `Vault 导出完成：${result.vaultDir}\npreferences=${result.preferenceCount}\nevidence=${result.evidenceCount}`,
+          };
+        }
+        if (subAction === 'status') {
+          const result = exporter.status({ vaultDir });
+          return {
+            type: 'text',
+            content: `Vault 状态：${result.vaultDir}\npreferences=${result.preferenceCount}\nevidence=${result.evidenceCount}`,
+          };
+        }
+        return { type: 'text', content: '用法: /memory vault [export|status] [--dir <path>]' };
       }
 
       case 'review-policy': {

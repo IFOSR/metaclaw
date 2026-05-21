@@ -131,10 +131,10 @@ describe('MemoryEngine', () => {
 
     expect(results[0].scope).toBe('task-local');
     expect(results[0].subject).toBe('task_demo_1');
-    expect(results[1].scope).toBe('global');
+    expect(results).toHaveLength(1);
   });
 
-  it('includes confirmed global preferences as low-priority defaults', () => {
+  it('does not include confirmed global preferences as unrelated low-priority defaults', () => {
     engine.addManual({
       content: '输出尽量简洁',
       scope: 'global',
@@ -146,9 +146,89 @@ describe('MemoryEngine', () => {
       userInput: '整理 Phoenix 项目周报',
     });
 
-    expect(results).toHaveLength(1);
-    expect(results[0].scope).toBe('global');
-    expect(results[0].content).toBe('输出尽量简洁');
+    expect(results).toHaveLength(0);
+  });
+
+  it('does not recall a Feishu document workflow preference for unrelated image analysis input', () => {
+    engine.addManual({
+      content: '凡是让你生成相关报告的详细内容展示的，都要同步生成飞书云文档，并生成在线预览',
+      scope: 'global',
+      type: 'domain',
+    });
+
+    const results = engine.recall({
+      keywords: ['图片', '分析', '内容'],
+      userInput: '这不就是我给你说的图片吗',
+    });
+
+    expect(results).toHaveLength(0);
+  });
+
+  it('uses executor semantic preference recall for review and does not keyword fallback when executor returns empty', async () => {
+    const db = createTestDb();
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    prefRepo.insert({
+      id: 'pref_feishu_report',
+      type: 'domain',
+      scope: 'global',
+      subject: null,
+      content: '凡是让你生成相关报告的详细内容展示的，都要同步生成飞书云文档，并生成在线预览',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-14T00:00:00Z',
+      createdAt: '2026-05-14T00:00:00Z',
+      updatedAt: '2026-05-14T00:00:00Z',
+    });
+    const preferenceJudge = {
+      recallPreferences: vi.fn().mockResolvedValue([]),
+    };
+    const reviewEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, undefined, preferenceJudge);
+
+    const result = await reviewEngine.recallForReview({
+      keywords: ['相关', '报告', '内容'],
+      userInput: '这不就是我给你说的图片吗',
+    });
+
+    expect(preferenceJudge.recallPreferences).toHaveBeenCalledTimes(1);
+    expect(result.preferenceCandidates).toHaveLength(0);
+  });
+
+  it('falls back to legacy preference recall only when executor semantic recall fails', async () => {
+    const db = createTestDb();
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    prefRepo.insert({
+      id: 'pref_markdown',
+      type: 'style',
+      scope: 'global',
+      subject: null,
+      content: '输出用 Markdown 格式',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-14T00:00:00Z',
+      createdAt: '2026-05-14T00:00:00Z',
+      updatedAt: '2026-05-14T00:00:00Z',
+    });
+    const preferenceJudge = {
+      recallPreferences: vi.fn().mockRejectedValue(new Error('executor unavailable')),
+    };
+    const reviewEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, undefined, preferenceJudge);
+
+    const result = await reviewEngine.recallForReview({
+      keywords: ['Markdown'],
+      userInput: '请用 Markdown 输出',
+    });
+
+    expect(preferenceJudge.recallPreferences).toHaveBeenCalledTimes(1);
+    expect(result.preferenceCandidates.map(candidate => candidate.preferenceId)).toEqual(['pref_markdown']);
+    expect(result.preferenceCandidates[0]?.reason).toBe('命中通用表达偏好');
   });
 
   it('does not apply personality-tone global preferences to structured deliverable scenes like PPT', () => {
@@ -277,5 +357,141 @@ describe('MemoryEngine', () => {
       ],
     }));
     expect(result.auditId).toBe('recall_1');
+  });
+
+  it('annotates LLM preference recall decisions with tri-state applicability actions', async () => {
+    const db = createTestDb();
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    prefRepo.insert({
+      id: 'pref_auto',
+      type: 'style',
+      scope: 'project',
+      subject: 'MetaClaw',
+      content: 'MetaClaw 优化方案默认先给结论，再列执行细节',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+    prefRepo.insert({
+      id: 'pref_review',
+      type: 'domain',
+      scope: 'global',
+      subject: null,
+      content: '长篇报告需要同步生成飞书云文档',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+    prefRepo.insert({
+      id: 'pref_suppress',
+      type: 'style',
+      scope: 'global',
+      subject: null,
+      content: '小红书文案使用活泼语气',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+    const preferenceJudge = {
+      recallPreferences: vi.fn().mockResolvedValue([
+        {
+          preferenceId: 'pref_auto',
+          action: 'auto_apply',
+          reason: '当前请求是 MetaClaw 优化方案，输出结构偏好直接适用',
+          score: 0.91,
+        },
+        {
+          preferenceId: 'pref_review',
+          action: 'ask_review',
+          reason: '可能改变交付路径，需要确认是否外部同步',
+          score: 0.7,
+        },
+        {
+          preferenceId: 'pref_suppress',
+          action: 'suppress',
+          reason: '当前不是创意文案场景',
+          score: 0.18,
+        },
+      ]),
+    };
+    const reviewEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, undefined, preferenceJudge);
+
+    const result = await reviewEngine.recallForReview({
+      keywords: ['MetaClaw', '优化', '方案'],
+      subject: 'MetaClaw',
+      userInput: '根据最终优化方案实施 MetaClaw',
+    });
+
+    expect(result.preferenceCandidates.map(candidate => candidate.preferenceId)).toEqual([
+      'pref_auto',
+      'pref_review',
+    ]);
+    expect(result.preferenceCandidates[0]).toEqual(expect.objectContaining({
+      preferenceId: 'pref_auto',
+      applicabilityAction: 'auto_apply',
+      applicabilityScore: 0.91,
+      applicabilityReason: '当前请求是 MetaClaw 优化方案，输出结构偏好直接适用',
+      judgeSource: 'llm',
+    }));
+    expect(result.preferenceCandidates[1]).toEqual(expect.objectContaining({
+      preferenceId: 'pref_review',
+      applicabilityAction: 'ask_review',
+      applicabilityScore: 0.7,
+      judgeSource: 'llm',
+    }));
+  });
+
+  it('falls back to scope thresholds for tri-state applicability when LLM judge is unavailable', async () => {
+    const db = createTestDb();
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    prefRepo.insert({
+      id: 'pref_contact_low_confidence',
+      type: 'contact',
+      scope: 'contact',
+      subject: '张总',
+      content: '给张总的邮件使用正式语气',
+      status: 'confirmed',
+      confidence: 0.7,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+    const preferenceJudge = {
+      recallPreferences: vi.fn().mockRejectedValue(new Error('executor unavailable')),
+    };
+    const reviewEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, undefined, preferenceJudge);
+
+    const result = await reviewEngine.recallForReview({
+      keywords: ['张总', '邮件'],
+      subject: '张总',
+      userInput: '给张总起草一封邮件',
+    });
+
+    expect(result.preferenceCandidates[0]).toEqual(expect.objectContaining({
+      preferenceId: 'pref_contact_low_confidence',
+      applicabilityAction: 'ask_review',
+      applicabilityScore: 0.7,
+      judgeSource: 'fallback',
+    }));
   });
 });

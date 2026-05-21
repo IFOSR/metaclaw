@@ -71,7 +71,7 @@ describe('runMigrations', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const versions = db.prepare('SELECT version FROM schema_version ORDER BY version').all() as Array<{ version: number }>;
-    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 
     const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
     expect(taskColumns.map(column => column.name)).toEqual(expect.arrayContaining([
@@ -83,6 +83,28 @@ describe('runMigrations', () => {
       'last_interruption_reason',
       'interruption_count',
       'artifacts_json',
+    ]));
+
+    const auditColumns = db.prepare('PRAGMA table_info(memory_audit_events)').all() as Array<{ name: string }>;
+    expect(auditColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'id',
+      'task_id',
+      'memory_id',
+      'action',
+      'score',
+      'reason',
+      'judge_source',
+      'evidence_json',
+      'created_at',
+    ]));
+
+    const executorProfileColumns = db.prepare('PRAGMA table_info(executor_profiles)').all() as Array<{ name: string }>;
+    expect(executorProfileColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'name',
+      'domains_json',
+      'capabilities_json',
+      'risk_level',
+      'historical_success',
     ]));
 
     const repo = new TaskRepo(db);

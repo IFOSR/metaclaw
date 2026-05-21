@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HybridMemoryRecaller } from '../../src/core/hybrid-memory-recaller.js';
 import type { Preference, Task } from '../../src/core/types.js';
 
@@ -56,6 +56,10 @@ function createTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('HybridMemoryRecaller', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('merges rule recall and semantic recall before building review candidates', async () => {
     const recaller = new HybridMemoryRecaller();
 
@@ -113,6 +117,9 @@ describe('HybridMemoryRecaller', () => {
   });
 
   it('builds semantic preference and task candidates and persists recall audit', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-25T00:00:00Z'));
+
     const auditRepo = {
       insert: vi.fn(),
     };

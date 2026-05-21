@@ -146,6 +146,60 @@ describe('LlmBridge', () => {
     });
   });
 
+  describe('recallPreferences', () => {
+    it('builds a semantic preference recall prompt that rejects keyword-only matching', () => {
+      const bridge = new LlmBridge('claude');
+      const prompt = (bridge as any).buildPreferenceRecallPrompt('这不就是我给你说的图片吗', [
+        {
+          id: 'pref_feishu',
+          scope: 'global',
+          subject: null,
+          type: 'domain',
+          content: '调研报告要生成飞书云文档和在线预览',
+        },
+      ]);
+
+      expect(prompt).toContain('不要做关键词匹配');
+      expect(prompt).toContain('图片');
+      expect(prompt).toContain('pref_feishu');
+      expect(prompt).toContain('调研报告要生成飞书云文档和在线预览');
+    });
+
+    it('parses preference recall decisions and filters invalid ids', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parsePreferenceRecallResult(
+        '[{"preferenceId":"pref_1","reason":"适用于当前输出格式","score":0.8},{"preferenceId":"missing","reason":"无效","score":0.9}]',
+        new Set(['pref_1']),
+      );
+
+      expect(result).toEqual([
+        {
+          preferenceId: 'pref_1',
+          reason: '适用于当前输出格式',
+          score: 0.8,
+        },
+      ]);
+    });
+
+    it('returns empty decisions when executor says no preference applies', async () => {
+      const bridge = new LlmBridge('claude');
+      const querySpy = vi.spyOn(bridge, 'query').mockResolvedValue('[]');
+
+      const result = await bridge.recallPreferences('普通闲聊', [
+        {
+          id: 'pref_1',
+          scope: 'global',
+          subject: null,
+          type: 'domain',
+          content: '报告要生成飞书文档',
+        },
+      ]);
+
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(result).toEqual([]);
+    });
+  });
+
   describe('command args', () => {
     it('builds codex exec args with bypassed approvals and sandbox', () => {
       const bridge = new LlmBridge('codex');

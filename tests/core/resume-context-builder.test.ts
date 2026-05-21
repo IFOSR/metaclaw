@@ -44,7 +44,7 @@ describe('ResumeContextBuilder', () => {
 
   function insertInteraction(input: {
     id: string;
-    taskId: string;
+    taskId: string | null;
     sessionId: string;
     userInput: string;
     systemOutput: string;
@@ -120,6 +120,37 @@ describe('ResumeContextBuilder', () => {
     expect(bundle.resumeContext?.blockedReason).toBe('等待客户补充证据文件');
     expect(bundle.materialContext.resources).toContain('/tmp/evidence-v3.pdf');
     expect(bundle.executionInstructions.some(line => line.includes('先检查新增材料是否足以推进任务'))).toBe(true);
+  });
+
+  it('injects full recent conversation output for tasks derived from the current conversation', async () => {
+    const task = taskEngine.create({ title: '整理刚才调研', goal: '把刚才的调研内容整理成飞书文档版' });
+    const longResearchBody = [
+      '刚才的调研正文：',
+      '第一部分：目标市场中海外 AI 托管代运营服务正在从单点工具转向组合式工作流。',
+      '第二部分：Shopify、Amazon、TikTok Shop 卖家最关心的是获客、履约和客服自动化。',
+      '第三部分：结论是优先切入独立站卖家的客服与广告素材迭代场景。',
+      '第四部分：这段正文必须原样进入后续整理任务，不能只留下 150 字摘要。',
+    ].join('\n');
+
+    insertInteraction({
+      id: 'int_recent_research',
+      taskId: null,
+      sessionId: 'sess_recent_research',
+      userInput: '请调研出海电商 AI 托管运营方向',
+      systemOutput: longResearchBody,
+      createdAt: '2026-05-13T01:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '把刚才的调研内容整理成飞书文档版和在线预览版',
+      sessionId: 'sess_recent_research',
+      includeRecentConversationContext: true,
+    });
+
+    expect(bundle.historyContext.currentConversationTurns).toHaveLength(1);
+    expect(bundle.historyContext.currentConversationTurns?.[0]?.systemOutput).toContain('第四部分：这段正文必须原样进入后续整理任务');
   });
 
   it('orders memory context as current input, then task-local, then broader scopes', async () => {

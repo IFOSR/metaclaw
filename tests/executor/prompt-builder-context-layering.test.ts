@@ -222,4 +222,41 @@ describe('buildExecutorContextPrompt context layering', () => {
     expect(prompt.indexOf('任务记忆卡片（Task Memory Cards')).toBeLessThan(prompt.indexOf('相似历史参考（Reference Context Pack'));
     expect(prompt.indexOf('任务#task_palantir_analysis')).toBeLessThan(prompt.indexOf('任务#task_yixunpan_geo'));
   });
+
+  it('renders full current conversation content before weak references for conversation-derived work', () => {
+    const bundle = baseBundle({
+      mode: 'fresh',
+      resumeContext: undefined,
+      historyContext: {
+        currentConversationTurns: [
+          {
+            taskId: '',
+            userInput: '刚才请你调研出海电商 AI 托管运营',
+            systemOutput: '完整调研正文：目标客户、需求链路、竞品对比、商业模式和优先切入点都在这里。',
+            createdAt: '2026-05-13T01:00:00.000Z',
+            source: 'session',
+          },
+        ],
+        taskTurns: [],
+        sessionTurns: [],
+        timelineTurns: [],
+        relatedTurns: [
+          {
+            taskId: 'task_old',
+            userInput: '历史相似调研',
+            systemOutput: '旧结论不应覆盖当前正文',
+            createdAt: '2026-05-12T01:00:00.000Z',
+            source: 'llm',
+          },
+        ],
+      },
+      executionInstructions: ['使用与用户相同的语言回复'],
+    });
+
+    const prompt = buildExecutorContextPrompt(buildInput(bundle));
+
+    expect(prompt).toContain('当前会话完整正文（用户要求基于刚才/上面内容继续，证据强度高于相似历史参考）：');
+    expect(prompt).toContain('完整调研正文：目标客户、需求链路、竞品对比、商业模式和优先切入点都在这里。');
+    expect(prompt.indexOf('当前会话完整正文')).toBeLessThan(prompt.indexOf('相似历史参考（Reference Context Pack'));
+  });
 });

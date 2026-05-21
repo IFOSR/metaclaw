@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { extractHighConfidencePreferenceCandidates } from '../../src/session/session-helpers.js';
+import {
+  extractHighConfidencePreferenceCandidates,
+  isHighRiskMemoryCandidate,
+} from '../../src/session/session-helpers.js';
 
 describe('extractHighConfidencePreferenceCandidates', () => {
   it('extracts future default workflow rules from user input', () => {
@@ -16,5 +19,11 @@ describe('extractHighConfidencePreferenceCandidates', () => {
     )).toEqual([
       '长篇调研型输出应该保存成本地 Markdown 文件',
     ]);
+  });
+
+  it('classifies external side-effect memory candidates as high risk', () => {
+    expect(isHighRiskMemoryCandidate('以后凡是报告都要自动发给客户')).toBe(true);
+    expect(isHighRiskMemoryCandidate('以后默认删除临时文件')).toBe(true);
+    expect(isHighRiskMemoryCandidate('复杂方案默认先给结论，再列执行细节')).toBe(false);
   });
 });

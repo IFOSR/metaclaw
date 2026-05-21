@@ -73,6 +73,29 @@ describe('SchedulerEngine', () => {
     expect(scheduler.getRuntimeState().runningTaskId).toBe(urgentTaskId);
   });
 
+  it('promotes and runs the highest-priority created backlog task when idle', async () => {
+    const normalTaskId = taskEngine.create({ title: '普通已创建任务', goal: '普通已创建任务' }).id;
+    const urgentTaskId = taskEngine.create({ title: '紧急已创建任务', goal: '紧急已创建任务' }).id;
+    taskRepo.update(urgentTaskId, {
+      prioritySignals: {
+        dueAt: '2026-04-16T01:00:00Z',
+        isReady: true,
+        progressRatio: 0.8,
+        blocksOthers: true,
+        idleHours: 0,
+      },
+    });
+    const onDispatch = vi.fn();
+    const scheduler = new SchedulerEngine(taskEngine, orchestration, executor, onDispatch);
+
+    const scheduledTaskId = await scheduler.scheduleNext();
+
+    expect(scheduledTaskId).toBe(urgentTaskId);
+    expect(taskRepo.findById(urgentTaskId)?.status).toBe('running');
+    expect(taskRepo.findById(normalTaskId)?.status).toBe('created');
+    expect(onDispatch).toHaveBeenCalledWith(urgentTaskId, undefined);
+  });
+
   it('parks the current task when a higher-priority task arrives', async () => {
     const currentTaskId = createReadyTask({ title: '当前任务' });
     const scheduler = new SchedulerEngine(taskEngine, orchestration, executor);

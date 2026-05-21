@@ -9,6 +9,7 @@ const LLM_CANDIDATE_LIMIT = 20;
 const LLM_RESULT_LIMIT = 5;
 const TIMELINE_HISTORY_LIMIT = 20;
 const OUTPUT_TRUNCATE_LENGTH = 150;
+const FULL_OUTPUT_DEFAULT_LIMIT = 12_000;
 const CHINA_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 interface RecallInput {
@@ -40,6 +41,21 @@ function toTurn(row: InteractionRow, source: ConversationTurn['source']): Conver
     taskId: row.task_id,
     userInput: row.user_input,
     systemOutput: truncateOutput(row.system_output),
+    createdAt: row.created_at,
+    source,
+  };
+}
+
+function truncateFullOutput(output: string, maxLength: number): string {
+  if (output.length <= maxLength) return output;
+  return `${output.slice(0, maxLength)}...`;
+}
+
+function toFullTurn(row: InteractionRow, source: ConversationTurn['source'], maxOutputLength: number): ConversationTurn {
+  return {
+    taskId: row.task_id,
+    userInput: row.user_input,
+    systemOutput: truncateFullOutput(row.system_output, maxOutputLength),
     createdAt: row.created_at,
     source,
   };
@@ -199,6 +215,22 @@ export class ContextRecaller {
     }
 
     return turns.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  recallRecentSessionFull(
+    sessionId: string,
+    excludeTaskId: string,
+    options: { limit?: number; maxOutputLength?: number } = {},
+  ): ConversationTurn[] {
+    const limit = options.limit ?? 3;
+    const maxOutputLength = options.maxOutputLength ?? FULL_OUTPUT_DEFAULT_LIMIT;
+    const rows = this.db.prepare(
+      'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? AND (task_id IS NULL OR task_id != ?) ORDER BY created_at DESC LIMIT ?'
+    ).all(sessionId, excludeTaskId, limit) as InteractionRow[];
+
+    return rows
+      .map(row => toFullTurn(row, 'session', maxOutputLength))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
   private async recallByLlm(userInput: string, excludeIds: Set<string>): Promise<ConversationTurn[]> {

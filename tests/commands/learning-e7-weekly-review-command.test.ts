@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
@@ -79,7 +79,14 @@ function seedWeeklyReviewData(db: Database.Database): void {
 }
 
 describe('learningCommand E7 weekly self-review', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders a weekly learning report with actionable review commands', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
+
     const db = createTestDb();
     seedWeeklyReviewData(db);
 

@@ -174,21 +174,13 @@ describe('Round 1 memory resume acceptance', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('记忆召回确认');
-
-    await inputCapture.handler?.('y', {});
-    await flushUpdates();
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
-
     const resumedInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0];
     const resolvedPreferences = resumedInput.executionContextBundle.memoryContext.resolvedPreferences;
 
     expect(resumedInput.executionContextBundle.mode).toBe('resume-parked');
+    expect(resolvedPreferences).toHaveLength(1);
     expect(resolvedPreferences[0].scope).toBe('task-local');
     expect(resolvedPreferences[0].reason).toBe('命中当前任务局部偏好');
-    expect(resolvedPreferences[1].scope).toBe('global');
 
     resumedDeferred.resolve({
       success: true,
@@ -199,7 +191,7 @@ describe('Round 1 memory resume acceptance', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('已注入 2 条偏好');
+    expect(app.lastFrame()).toContain('已注入 1 条偏好');
     expect(app.lastFrame()).toContain('[task-local] 当前任务固定使用表格结构并保留风险栏目');
     expect(app.lastFrame()).toContain('命中当前任务局部偏好');
 

@@ -32,6 +32,7 @@ export type QueuedExecutionRequest = {
   schedulingReason?: string;
   priorityHint?: 'normal' | 'high' | 'urgent';
   newlyProvidedResources?: string[];
+  includeRecentConversationContext?: boolean;
 };
 
 export function extractPatterns(input: string): string[] {
@@ -122,6 +123,15 @@ export function isRiskyExternalActionInstruction(input: string): boolean {
   }
 
   return /(发给客户|发给用户|发给对方|发送给客户|发送给用户|发送给对方|提交给法务|提交给财务|法务提交|财务提交|对外发送|外发|群发|发出去)/.test(normalized);
+}
+
+export function isHighRiskMemoryCandidate(input: string): boolean {
+  const normalized = input.replace(/\s+/g, '');
+  if (!normalized) {
+    return false;
+  }
+
+  return /(自动)?(发给客户|发给用户|发给对方|发送给客户|发送给用户|发送给对方|对外发送|外发|群发|发出去|提交给法务|提交给财务|删除|清空|覆盖|生产环境|线上|prod|财务承诺|法律承诺|合同承诺)/i.test(normalized);
 }
 
 export function isRiskConfirmationInstruction(input: string): boolean {

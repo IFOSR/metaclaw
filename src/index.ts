@@ -67,12 +67,15 @@ async function main() {
 
   const taskMemoryCardRepo = new TaskMemoryCardRepo(db);
 
-  // 5. 初始化引擎
+  // 5. 初始化执行器语义桥接
+  const llmBridge = new LlmBridge(config.executor.command);
+
+  // 6. 初始化引擎
   const taskEngine = new TaskEngine(taskRepo, snapshotDir);
-  const memoryEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, taskMemoryCardRepo);
+  const memoryEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, taskMemoryCardRepo, llmBridge);
   const orchestration = new OrchestrationEngine(taskEngine);
 
-  // 6. 初始化执行器
+  // 7. 初始化执行器
   const executor = createExecutor({
     command: config.executor.command,
     timeout: config.executor.timeout,
@@ -80,15 +83,14 @@ async function main() {
     workspaceRoot: process.cwd(),
   });
 
-  // 7. 检查执行器可用性
+  // 8. 检查执行器可用性
   if (!(await executor.isAvailable())) {
     console.error(`错误：未找到 ${config.executor.command} 命令。请先安装对应执行器。`);
     process.exit(1);
   }
 
-  // 8. 初始化上下文召回器和 LLM 桥接
+  // 9. 初始化上下文召回器
   const sessionId = `sess_${nanoid(10)}`;
-  const llmBridge = new LlmBridge(config.executor.command);
   const contextRecaller = new ContextRecaller(db, llmBridge);
   const notifier = createNotificationService(config);
 

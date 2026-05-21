@@ -205,6 +205,13 @@ export interface TaskMemoryContext {
 }
 
 export interface HistoryContext {
+  currentConversationTurns?: Array<{
+    taskId: string;
+    userInput: string;
+    systemOutput: string;
+    createdAt: string;
+    source: 'task' | 'session' | 'timeline' | 'keyword' | 'llm';
+  }>;
   taskTurns: Array<{
     taskId: string;
     userInput: string;
@@ -339,7 +346,30 @@ export interface PreferenceMemoryCandidate {
   reason: string;
   source: RecallCandidateSource;
   score: number;
+  applicabilityAction?: MemoryApplicabilityAction;
+  applicabilityScore?: number;
+  applicabilityReason?: string;
+  judgeSource?: MemoryApplicabilityJudgeSource;
 }
+
+export const MemoryApplicabilityAction = {
+  AUTO_APPLY: 'auto_apply',
+  ASK_REVIEW: 'ask_review',
+  SUPPRESS: 'suppress',
+} as const;
+
+export type MemoryApplicabilityAction =
+  (typeof MemoryApplicabilityAction)[keyof typeof MemoryApplicabilityAction];
+
+export const MemoryApplicabilityJudgeSource = {
+  LLM: 'llm',
+  RULE: 'rule',
+  POLICY: 'policy',
+  FALLBACK: 'fallback',
+} as const;
+
+export type MemoryApplicabilityJudgeSource =
+  (typeof MemoryApplicabilityJudgeSource)[keyof typeof MemoryApplicabilityJudgeSource];
 
 export const RecallReviewOption = {
   ACCEPT_ALL: 'accept_all',

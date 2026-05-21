@@ -1,9 +1,21 @@
-import type { Preference, PreferenceScope, PreferenceStatus, Observation, TaskMemoryCandidate } from './types.js';
+import {
+  MemoryApplicabilityAction,
+  MemoryApplicabilityJudgeSource,
+  type MemoryApplicabilityAction as MemoryApplicabilityActionType,
+  type MemoryApplicabilityJudgeSource as MemoryApplicabilityJudgeSourceType,
+  type Preference,
+  type PreferenceMemoryCandidate,
+  type PreferenceScope,
+  type PreferenceStatus,
+  type Observation,
+  type TaskMemoryCandidate,
+} from './types.js';
 import type { PreferenceRepo } from '../storage/preference-repo.js';
 import type { ObservationRepo } from '../storage/observation-repo.js';
 import type { TaskMemoryCardRepo } from '../storage/task-memory-card-repo.js';
 import type { PreferenceEmbeddingService } from './preference-embedding-service.js';
 import type { HybridMemoryRecaller, HybridMemoryRecallResult } from './hybrid-memory-recaller.js';
+import type { PreferenceRecallDecision } from './llm-bridge.js';
 import { generatePreferenceId } from '../utils/id.js';
 
 const CONFIRM_THRESHOLD = 3;
@@ -21,6 +33,16 @@ interface ScoredPreference {
   score: number;
 }
 
+interface PreferenceRecallJudge {
+  recallPreferences(userInput: string, candidates: Array<{
+    id: string;
+    scope: string;
+    subject: string | null;
+    type: string;
+    content: string;
+  }>): Promise<PreferenceRecallDecision[]>;
+}
+
 type PersonalityTone = 'playful' | 'casual' | 'warm' | 'formal' | 'sharp' | 'generic';
 
 const SCOPE_PRIORITY: Record<string, number> = {
@@ -30,6 +52,13 @@ const SCOPE_PRIORITY: Record<string, number> = {
   global: 10,
 };
 
+const SCOPE_TRI_STATE_THRESHOLDS: Record<PreferenceScope, { autoApply: number; askReview: number }> = {
+  'task-local': { autoApply: 0.72, askReview: 0.45 },
+  project: { autoApply: 0.8, askReview: 0.55 },
+  contact: { autoApply: 0.82, askReview: 0.58 },
+  global: { autoApply: 0.88, askReview: 0.65 },
+};
+
 export class MemoryEngine {
   constructor(
     private prefRepo: PreferenceRepo,
@@ -37,6 +66,7 @@ export class MemoryEngine {
     private preferenceEmbeddingService?: PreferenceEmbeddingService,
     private hybridMemoryRecaller?: Pick<HybridMemoryRecaller, 'recall'>,
     private taskMemoryCardRepo?: Pick<TaskMemoryCardRepo, 'searchRelevant'>,
+    private preferenceRecallJudge?: PreferenceRecallJudge,
   ) {}
 
   /**
@@ -201,7 +231,8 @@ export class MemoryEngine {
       }
     }
 
-    // 2.75 confirmed global 偏好作为最低优先级默认工作方式兜底
+    // 2.75 confirmed global 偏好只在当前场景显式相关时作为低优先级工作方式。
+    // 不能把所有 global 偏好都默认候选，否则会在无关输入上反复弹出召回确认。
     for (const preference of this.prefRepo.findByScope('global')) {
       if (preference.status !== 'confirmed' || seen.has(preference.id)) {
         continue;
@@ -222,6 +253,10 @@ export class MemoryEngine {
     for (const keyword of context.keywords) {
       const matched = this.prefRepo.searchByKeyword(keyword);
       for (const p of matched) {
+        if (p.scope === 'global' && !this.isGlobalPreferenceSceneCompatible(p, [userInput, keyword].join(' '))) {
+          continue;
+        }
+
         if (seen.has(p.id)) {
           const existing = results.find(r => r.pref.id === p.id);
           if (existing) existing.score += 30;
@@ -249,28 +284,8 @@ export class MemoryEngine {
   }
 
   async recallForReview(context: RecallContext): Promise<HybridMemoryRecallResult> {
-    const rulePreferenceCandidates = this.recall(context).map(preference => ({
-      id: preference.id,
-      preferenceId: preference.id,
-      scope: preference.scope,
-      subject: preference.subject,
-      summary: preference.content,
-      reason: preference.scope === 'task-local' && context.taskId && (
-        preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId)
-      )
-        ? '命中当前任务局部偏好'
-        : preference.subject
-          ? `命中主体：${preference.subject}`
-          : preference.scope === 'global' && preference.type === 'style'
-            ? this.isPersonalityTonePreference(preference.content)
-              ? '匹配当前场合后采用该表达风格'
-              : '命中通用表达偏好'
-            : '命中当前输入关键词',
-      source: 'rule' as const,
-      score: Math.round(preference.confidence * 100),
-    }));
-
     const queryText = context.userInput ?? [context.subject, ...context.keywords].filter(Boolean).join(' ');
+    const rulePreferenceCandidates = await this.recallPreferencesForReview(context, queryText);
     const taskMemoryCardCandidates: TaskMemoryCandidate[] = this.taskMemoryCardRepo && context.taskId
       ? this.taskMemoryCardRepo.searchRelevant({
         queryText,
@@ -308,6 +323,181 @@ export class MemoryEngine {
       rulePreferenceCandidates,
       ruleTaskCandidates: taskMemoryCardCandidates,
     });
+  }
+
+  private async recallPreferencesForReview(context: RecallContext, queryText: string) {
+    const executorCandidates = this.buildExecutorPreferenceCandidates(context);
+
+    if (this.preferenceRecallJudge && queryText.trim() && executorCandidates.length > 0) {
+      try {
+        const decisions = await this.preferenceRecallJudge.recallPreferences(
+          queryText,
+          executorCandidates.map(preference => ({
+            id: preference.id,
+            scope: preference.scope,
+            subject: preference.subject,
+            type: preference.type,
+            content: preference.content,
+          })),
+        );
+        const byId = new Map(executorCandidates.map(preference => [preference.id, preference]));
+        return this.filterSuppressedCandidates(decisions
+          .map(decision => {
+            const preference = byId.get(decision.preferenceId);
+            if (!preference) {
+              return null;
+            }
+
+            return this.annotateApplicability(this.toPreferenceMemoryCandidate(
+              preference,
+              decision.reason,
+              Math.round((decision.score ?? preference.confidence) * 100),
+            ), {
+              action: decision.action ?? this.resolveActionFromScore(preference.scope, decision.score ?? preference.confidence),
+              score: decision.score ?? preference.confidence,
+              reason: decision.reason,
+              judgeSource: MemoryApplicabilityJudgeSource.LLM,
+            });
+          })
+          .filter((candidate): candidate is PreferenceMemoryCandidate => Boolean(candidate)));
+      } catch {
+        // Executor semantic matching is the preferred path. If unavailable, fall back to legacy rules.
+      }
+    }
+
+    return this.filterSuppressedCandidates(this.recall(context).map(preference => {
+      const score = this.estimateFallbackApplicabilityScore(preference, context);
+      const reason = this.buildRuleRecallReason(preference, context);
+      return this.annotateApplicability(this.toPreferenceMemoryCandidate(
+        preference,
+        reason,
+        Math.round(score * 100),
+      ), {
+        action: this.resolveActionFromScore(preference.scope, score),
+        score,
+        reason,
+        judgeSource: MemoryApplicabilityJudgeSource.FALLBACK,
+      });
+    }));
+  }
+
+  private buildExecutorPreferenceCandidates(context: RecallContext): Preference[] {
+    const candidates: Preference[] = [];
+    const seen = new Set<string>();
+
+    for (const preference of this.prefRepo.findAll()) {
+      if (preference.status !== 'confirmed') {
+        continue;
+      }
+
+      if (
+        preference.scope === 'task-local'
+        && context.taskId
+        && !(preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId))
+      ) {
+        continue;
+      }
+
+      if (context.subject && preference.subject && preference.subject !== context.subject) {
+        // Keep global/task-local candidates broad, but avoid asking the executor to choose unrelated named entities.
+        if (preference.scope === 'project' || preference.scope === 'contact') {
+          continue;
+        }
+      }
+
+      if (!seen.has(preference.id)) {
+        seen.add(preference.id);
+        candidates.push(preference);
+      }
+    }
+
+    return candidates;
+  }
+
+  private toPreferenceMemoryCandidate(preference: Preference, reason: string, score: number) {
+    return {
+      id: preference.id,
+      preferenceId: preference.id,
+      scope: preference.scope,
+      subject: preference.subject,
+      summary: preference.content,
+      reason,
+      source: 'rule' as const,
+      score,
+    };
+  }
+
+  private annotateApplicability(
+    candidate: PreferenceMemoryCandidate,
+    decision: {
+      action: MemoryApplicabilityActionType;
+      score: number;
+      reason: string;
+      judgeSource: MemoryApplicabilityJudgeSourceType;
+    },
+  ): PreferenceMemoryCandidate {
+    return {
+      ...candidate,
+      applicabilityAction: decision.action,
+      applicabilityScore: Math.max(0, Math.min(1, decision.score)),
+      applicabilityReason: decision.reason,
+      judgeSource: decision.judgeSource,
+    };
+  }
+
+  private filterSuppressedCandidates(candidates: PreferenceMemoryCandidate[]): PreferenceMemoryCandidate[] {
+    return candidates.filter(candidate => candidate.applicabilityAction !== MemoryApplicabilityAction.SUPPRESS);
+  }
+
+  private resolveActionFromScore(scope: PreferenceScope, score: number): MemoryApplicabilityActionType {
+    const threshold = SCOPE_TRI_STATE_THRESHOLDS[scope];
+    if (score >= threshold.autoApply) {
+      return MemoryApplicabilityAction.AUTO_APPLY;
+    }
+    if (score >= threshold.askReview) {
+      return MemoryApplicabilityAction.ASK_REVIEW;
+    }
+    return MemoryApplicabilityAction.SUPPRESS;
+  }
+
+  private estimateFallbackApplicabilityScore(preference: Preference, context: RecallContext): number {
+    if (
+      preference.scope === 'task-local'
+      && context.taskId
+      && (preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId))
+    ) {
+      return Math.max(preference.confidence, 0.92);
+    }
+
+    if (context.subject && preference.subject === context.subject) {
+      const threshold = SCOPE_TRI_STATE_THRESHOLDS[preference.scope];
+      return Math.max(0, Math.min(threshold.autoApply - 0.01, preference.confidence));
+    }
+
+    const threshold = SCOPE_TRI_STATE_THRESHOLDS[preference.scope];
+    return Math.max(0, Math.min(threshold.autoApply - 0.01, preference.confidence * 0.8));
+  }
+
+  private buildRuleRecallReason(preference: Preference, context: RecallContext): string {
+    if (
+      preference.scope === 'task-local'
+      && context.taskId
+      && (preference.subject === context.taskId || preference.sourceTasks.includes(context.taskId))
+    ) {
+      return '命中当前任务局部偏好';
+    }
+
+    if (preference.subject) {
+      return `命中主体：${preference.subject}`;
+    }
+
+    if (preference.scope === 'global' && preference.type === 'style') {
+      return this.isPersonalityTonePreference(preference.content)
+        ? '匹配当前场合后采用该表达风格'
+        : '命中通用表达偏好';
+    }
+
+    return 'fallback 关键词/规则召回';
   }
 
   /**
@@ -360,16 +550,22 @@ export class MemoryEngine {
   }
 
   private isGlobalPreferenceSceneCompatible(preference: Preference, userInput: string): boolean {
-    if (preference.scope !== 'global' || preference.type !== 'style') {
+    if (preference.scope !== 'global') {
       return true;
+    }
+
+    const normalizedInput = userInput.replace(/\s+/g, '');
+    if (!normalizedInput) {
+      return false;
     }
 
     const preferenceTone = this.classifyPersonalityTonePreference(preference.content);
-    if (!preferenceTone) {
-      return true;
+    if (preferenceTone) {
+      return this.isPersonalityToneSceneCompatible(preferenceTone, userInput);
     }
 
-    return this.isPersonalityToneSceneCompatible(preferenceTone, userInput);
+    return this.extractGlobalPreferenceTriggerTerms(preference.content)
+      .some(term => normalizedInput.includes(term));
   }
 
   private isPersonalityTonePreference(content: string): boolean {
@@ -437,5 +633,44 @@ export class MemoryEngine {
 
   private isStructuredWorkScene(normalizedInput: string): boolean {
     return /(ppt|幻灯片|slides|报告|周报|纪要|总结|提纲|方案|一页|表格|文档|材料|复盘|汇报|调研|分析|研究|投资|估值|财务|市场|竞争|尽调)/i.test(normalizedInput);
+  }
+
+  private extractGlobalPreferenceTriggerTerms(content: string): string[] {
+    const normalized = content.replace(/\s+/g, '');
+    const stopTerms = new Set([
+      '以后', '之后', '后续', '凡是', '让你', '相关', '内容', '详细', '展示',
+      '默认', '应该', '需要', '必须', '都要', '同步', '形成', '生成', '创建',
+      '输出', '使用', '采用', '进行', '这个', '那个', '当前', '全部',
+      '强制', '不要', '不强', '制表',
+    ]);
+    const terms = new Set<string>();
+
+    for (const term of normalized.match(/[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]{2,}/g) ?? []) {
+      if (!stopTerms.has(term)) {
+        terms.add(term);
+      }
+    }
+
+    const chars = [...normalized];
+    for (let index = 0; index <= chars.length - 2; index += 1) {
+      const bigram = chars[index] + chars[index + 1];
+      if (/^[\u4e00-\u9fff]{2}$/u.test(bigram) && !stopTerms.has(bigram)) {
+        terms.add(bigram);
+      }
+    }
+
+    return Array.from(terms)
+      .filter(term => term.length >= 2)
+      .filter(term => !this.isNegatedGlobalPreferenceTerm(normalized, term));
+  }
+
+  private isNegatedGlobalPreferenceTerm(normalizedContent: string, term: string): boolean {
+    const index = normalizedContent.indexOf(term);
+    if (index < 0) {
+      return false;
+    }
+
+    const prefix = normalizedContent.slice(Math.max(0, index - 4), index);
+    return /(不强制|不要|不需要|无需|避免)$/.test(prefix);
   }
 }

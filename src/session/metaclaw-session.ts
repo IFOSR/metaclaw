@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'fs';
+import { MemoryApplicabilityAction } from '../core/types.js';
 import type {
   Config,
   GuidanceActionType,
@@ -15,6 +16,7 @@ import type { TaskEngine } from '../core/task-engine.js';
 import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
+import { createExecutorByName } from '../executor/factory.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
@@ -27,15 +29,22 @@ import { RecallPolicyService } from '../core/recall-policy-service.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
+import { profileCommand } from '../commands/profile-commands.js';
+import { executorCommand } from '../commands/executor-commands.js';
 import { learningCommand } from '../commands/learning-commands.js';
 import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCommand, exitCommand } from '../commands/global-commands.js';
 import { generateInteractionId } from '../utils/id.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 import { RecallFeedbackRepo, type RecallFeedbackAction } from '../storage/recall-feedback-repo.js';
+import { MemoryAuditEventRepo } from '../storage/memory-audit-event-repo.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
 import { SkillUsageEventRepo } from '../storage/skill-usage-event-repo.js';
+import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
+import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
 import { parseSkillUsageEventLine } from '../executor/skill-usage-event-parser.js';
+import { ExecutorRouter, type ExecutorRouteDecision } from '../core/executor-router.js';
+import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
 import {
   buildSchedulingReason,
   extractPatterns,
@@ -43,6 +52,7 @@ import {
   isConversationDerivedWorkInstruction,
   isConversationalContinuationInstruction,
   isExplicitTaskControlReference,
+  isHighRiskMemoryCandidate,
   isRiskCancellationInstruction,
   isRiskConfirmationInstruction,
   isRiskyExternalActionInstruction,
@@ -68,6 +78,8 @@ export interface MetaclawSessionDeps {
   contextRecaller: ContextRecaller;
   llmBridge: LlmBridge;
   notifier?: NotificationService;
+  executorFactory?: (name: string) => ExecutorAdapter | null;
+  availableExecutorCommands?: Set<string>;
 }
 
 export interface SessionSnapshot {
@@ -117,12 +129,22 @@ interface PendingRecallSelection {
   acceptedMemoryResources: string[];
 }
 
+interface RoutedExecutorSelection {
+  executor: ExecutorAdapter;
+  decision: ExecutorRouteDecision;
+  eventId: string;
+  effectiveAction: ExecutorRouteDecision['action'];
+  fallbackReason: string | null;
+}
+
 interface PendingRecallReview {
   taskId: string;
   taskTitle: string;
   request: QueuedExecutionRequest;
   proposalType: GuidanceActionType | null;
   card: RecallReviewCard;
+  autoAppliedPreferenceCandidates: PreferenceMemoryCandidate[];
+  autoAppliedTaskCandidates: TaskMemoryCandidate[];
   preferenceCandidates: PreferenceMemoryCandidate[];
   taskCandidates: TaskMemoryCandidate[];
   selectionItems: Array<
@@ -227,6 +249,8 @@ export class MetaclawSession {
 
   initialize(options: { resumeStartupTasks?: boolean; showDashboard?: boolean } = {}): void {
     if (this.initialized) return;
+
+    this.seedExecutorRegistry();
 
     const resumeStartupTasks = options.resumeStartupTasks ?? true;
     const showDashboard = options.showDashboard ?? true;
@@ -498,6 +522,80 @@ export class MetaclawSession {
     return new RecallPolicyService(new RecallReviewPolicyRepo(this.deps.db));
   }
 
+  private seedExecutorRegistry(): void {
+    seedDefaultExecutorProfiles(new ExecutorProfileRepo(this.deps.db), {
+      defaultExecutorName: this.deps.executor.name,
+      availableCommands: this.deps.availableExecutorCommands,
+    });
+  }
+
+  private resolveExecutorForTask(taskId: string | null, userInput: string): RoutedExecutorSelection {
+    this.seedExecutorRegistry();
+    const defaultExecutorName = this.deps.executor.name;
+    const profiles = new ExecutorProfileRepo(this.deps.db).findAll();
+    const decision = new ExecutorRouter(profiles).route({ userInput, defaultExecutorName });
+    const routeEventRepo = new ExecutorRouteEventRepo(this.deps.db);
+    const eventId = `route_${generateInteractionId()}`;
+    routeEventRepo.insert({
+      id: eventId,
+      taskId,
+      userInput,
+      selectedExecutor: decision.selectedExecutor,
+      action: decision.action,
+      candidates: decision.candidates,
+      reason: decision.reason,
+      confirmedByUser: false,
+      result: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const selectedExecutor = decision.selectedExecutor === defaultExecutorName
+      ? this.deps.executor
+      : this.createExecutorForRoute(decision.selectedExecutor);
+    if (!selectedExecutor) {
+      routeEventRepo.updateResult(eventId, 'fallback_default:unsupported_executor');
+      return {
+        executor: this.deps.executor,
+        decision,
+        eventId,
+        effectiveAction: 'fallback_default',
+        fallbackReason: `Executor ${decision.selectedExecutor} 已注册但当前运行时无法直接派发，回退 ${defaultExecutorName}`,
+      };
+    }
+
+    if (decision.action === 'ask_review') {
+      routeEventRepo.updateResult(eventId, 'fallback_default:review_required');
+      return {
+        executor: this.deps.executor,
+        decision,
+        eventId,
+        effectiveAction: 'fallback_default',
+        fallbackReason: `Executor ${decision.selectedExecutor} 需要人工确认，当前回退 ${defaultExecutorName}`,
+      };
+    }
+
+    return {
+      executor: selectedExecutor,
+      decision,
+      eventId,
+      effectiveAction: decision.action,
+      fallbackReason: null,
+    };
+  }
+
+  private createExecutorForRoute(name: string): ExecutorAdapter | null {
+    const injected = this.deps.executorFactory?.(name);
+    if (injected) {
+      return injected;
+    }
+
+    return createExecutorByName(name, {
+      timeout: this.deps.config.executor.timeout,
+      maxDuration: this.deps.config.executor.max_duration,
+      workspaceRoot: process.cwd(),
+    });
+  }
+
   private async prepareTaskExecution(
     taskId: string,
     request: QueuedExecutionRequest,
@@ -515,13 +613,29 @@ export class MetaclawSession {
       userInput: request.userPrompt,
     });
 
+    const autoAppliedPreferenceCandidates = recallResult.preferenceCandidates.filter(candidate =>
+      candidate.applicabilityAction === MemoryApplicabilityAction.AUTO_APPLY
+    );
+    const reviewPreferenceCandidates = recallResult.preferenceCandidates.filter(candidate =>
+      candidate.applicabilityAction !== MemoryApplicabilityAction.AUTO_APPLY
+    );
+    const autoAppliedTaskCandidates: TaskMemoryCandidate[] = [];
+    const reviewTaskCandidates = recallResult.taskCandidates;
+
     const decision = this.createRecallPolicyService().resolve({
       proposalType,
-      taskCandidates: recallResult.taskCandidates,
-      preferenceCandidates: recallResult.preferenceCandidates,
+      taskCandidates: reviewTaskCandidates,
+      preferenceCandidates: reviewPreferenceCandidates,
     });
 
-    if (recallResult.preferenceCandidates.length === 0 && recallResult.taskCandidates.length === 0) {
+    if (reviewPreferenceCandidates.length === 0 && reviewTaskCandidates.length === 0) {
+      if (autoAppliedPreferenceCandidates.length > 0 || autoAppliedTaskCandidates.length > 0) {
+        this.approvedRecallSelections.set(
+          taskId,
+          this.buildAcceptedRecallSelection(autoAppliedPreferenceCandidates, autoAppliedTaskCandidates),
+        );
+        this.appendAutoAppliedMemoryBlock(taskId, task.title, autoAppliedPreferenceCandidates, autoAppliedTaskCandidates);
+      }
       await this.submitScheduledTask(taskId, request);
       return;
     }
@@ -530,16 +644,15 @@ export class MetaclawSession {
       this.approvedRecallSelections.set(
         taskId,
         this.buildAcceptedRecallSelection(
-          recallResult.preferenceCandidates,
-          recallResult.taskCandidates,
+          [...autoAppliedPreferenceCandidates, ...reviewPreferenceCandidates],
+          [...autoAppliedTaskCandidates, ...reviewTaskCandidates],
         ),
       );
-      this.appendOutput(
-        '',
-        '┌─ 记忆自动采用 ───────────────────────────────────┐',
-        `│ 当前任务：#${taskId} ${task.title}`,
-        `│ 已按既有策略自动采用 ${recallResult.preferenceCandidates.length + recallResult.taskCandidates.length} 条召回内容`,
-        '└──────────────────────────────────────────────────┘',
+      this.appendAutoAppliedMemoryBlock(
+        taskId,
+        task.title,
+        [...autoAppliedPreferenceCandidates, ...reviewPreferenceCandidates],
+        [...autoAppliedTaskCandidates, ...reviewTaskCandidates],
       );
       await this.submitScheduledTask(taskId, request);
       return;
@@ -547,12 +660,12 @@ export class MetaclawSession {
 
     const reviewBuilder = new RecallReviewBuilder();
     const card = reviewBuilder.build({
-      taskCandidates: recallResult.taskCandidates,
-      preferenceCandidates: recallResult.preferenceCandidates,
+      taskCandidates: reviewTaskCandidates,
+      preferenceCandidates: reviewPreferenceCandidates,
     });
     const selectionItems = [
-      ...recallResult.preferenceCandidates.map(candidate => ({ kind: 'preference' as const, candidate })),
-      ...recallResult.taskCandidates.map(candidate => ({ kind: 'task' as const, candidate })),
+      ...reviewPreferenceCandidates.map(candidate => ({ kind: 'preference' as const, candidate })),
+      ...reviewTaskCandidates.map(candidate => ({ kind: 'task' as const, candidate })),
     ];
 
     this.pendingRecallReview = {
@@ -561,12 +674,69 @@ export class MetaclawSession {
       request,
       proposalType,
       card,
-      preferenceCandidates: recallResult.preferenceCandidates,
-      taskCandidates: recallResult.taskCandidates,
+      autoAppliedPreferenceCandidates,
+      autoAppliedTaskCandidates,
+      preferenceCandidates: reviewPreferenceCandidates,
+      taskCandidates: reviewTaskCandidates,
       selectionItems,
       auditId: recallResult.auditId,
     };
+    if (autoAppliedPreferenceCandidates.length > 0 || autoAppliedTaskCandidates.length > 0) {
+      this.appendAutoAppliedMemoryBlock(taskId, task.title, autoAppliedPreferenceCandidates, autoAppliedTaskCandidates);
+    }
+    this.recordAskReviewMemoryAuditEvents(taskId, reviewPreferenceCandidates);
     this.appendRecallReviewBlock(this.pendingRecallReview);
+  }
+
+  private recordAskReviewMemoryAuditEvents(taskId: string, preferenceCandidates: PreferenceMemoryCandidate[]): void {
+    for (const candidate of preferenceCandidates) {
+      this.recordMemoryAuditEvent({
+        taskId,
+        memoryId: candidate.preferenceId,
+        action: 'ask_review',
+        score: candidate.applicabilityScore ?? Math.min(1, candidate.score / 100),
+        reason: candidate.applicabilityReason ?? candidate.reason,
+        judgeSource: candidate.judgeSource ?? 'rule',
+        evidence: [{ reason: candidate.reason, source: candidate.source }],
+      });
+    }
+  }
+
+  private appendAutoAppliedMemoryBlock(
+    taskId: string,
+    taskTitle: string,
+    preferenceCandidates: PreferenceMemoryCandidate[],
+    taskCandidates: TaskMemoryCandidate[],
+  ): void {
+    const lines = [
+      '',
+      '┌─ 已自动采用记忆 ─────────────────────────────────┐',
+      `│ 当前任务：#${taskId} ${taskTitle}`,
+    ];
+
+    for (const candidate of preferenceCandidates) {
+      const score = candidate.applicabilityScore ?? Math.min(1, candidate.score / 100);
+      const reason = candidate.applicabilityReason ?? candidate.reason;
+      this.recordMemoryAuditEvent({
+        taskId,
+        memoryId: candidate.preferenceId,
+        action: 'auto_apply',
+        score,
+        reason,
+        judgeSource: candidate.judgeSource ?? 'rule',
+        evidence: [{ reason: candidate.reason, source: candidate.source }],
+      });
+      lines.push(`│ - ${candidate.preferenceId}: ${candidate.summary} score=${score.toFixed(2)}`);
+      lines.push(`│   reason=${reason}`);
+    }
+
+    for (const candidate of taskCandidates) {
+      lines.push(`│ - ${candidate.id}: ${candidate.title} score=${candidate.score}`);
+      lines.push(`│   reason=${candidate.reason}`);
+    }
+
+    lines.push('└──────────────────────────────────────────────────┘');
+    this.appendOutput(...lines);
   }
 
   private buildAcceptedRecallSelection(
@@ -587,6 +757,17 @@ export class MetaclawSession {
         taskCandidates.flatMap(candidate => candidate.artifactPaths),
       )),
     };
+  }
+
+  private buildRecallSelectionWithAutoApplied(
+    pending: PendingRecallReview,
+    preferenceCandidates: PreferenceMemoryCandidate[],
+    taskCandidates: TaskMemoryCandidate[],
+  ): PendingRecallSelection {
+    return this.buildAcceptedRecallSelection(
+      [...pending.autoAppliedPreferenceCandidates, ...preferenceCandidates],
+      [...pending.autoAppliedTaskCandidates, ...taskCandidates],
+    );
   }
 
   private parseRecallSelectionInput(input: string, maxIndex: number): number[] | null {
@@ -661,7 +842,7 @@ export class MetaclawSession {
     return false;
   }
 
-  private handlePendingLastTaskConfirmation(userInput: string): boolean {
+  private async handlePendingLastTaskConfirmation(userInput: string): Promise<boolean> {
     if (!this.pendingLastTaskConfirmation) {
       return false;
     }
@@ -682,9 +863,11 @@ export class MetaclawSession {
 
     if (/^f$/iu.test(trimmed)) {
       this.pendingLastTaskConfirmation = null;
-      void this.createFollowUpFromCompletedTask(pending).catch(error => {
+      try {
+        await this.createFollowUpFromCompletedTask(pending);
+      } catch (error) {
         this.appendOutput(`错误: ${(error as Error).message}`);
-      });
+      }
       return true;
     }
 
@@ -695,9 +878,11 @@ export class MetaclawSession {
       }
 
       this.pendingLastTaskConfirmation = null;
-      void this.resumeUnfinishedTaskFromConfirmation(pending).catch(error => {
+      try {
+        await this.resumeUnfinishedTaskFromConfirmation(pending);
+      } catch (error) {
         this.appendOutput(`错误: ${(error as Error).message}`);
-      });
+      }
       return true;
     }
 
@@ -811,7 +996,8 @@ export class MetaclawSession {
 
     if (/^y$/iu.test(trimmed)) {
       this.pendingRecallReview = null;
-      const selection = this.buildAcceptedRecallSelection(
+      const selection = this.buildRecallSelectionWithAutoApplied(
+        pending,
         pending.preferenceCandidates,
         pending.taskCandidates,
       );
@@ -823,12 +1009,13 @@ export class MetaclawSession {
     if (/^n$/iu.test(trimmed)) {
       this.recordRecallFeedback(pending, 'reject', pending.selectionItems.map((_, index) => index + 1));
       this.pendingRecallReview = null;
-      this.approvedRecallSelections.set(pending.taskId, {
-        authoritative: true,
-        resolvedPreferences: [],
-        relatedTaskIds: [],
-        acceptedMemoryResources: [],
-      });
+      this.approvedRecallSelections.set(
+        pending.taskId,
+        this.buildAcceptedRecallSelection(
+          pending.autoAppliedPreferenceCandidates,
+          pending.autoAppliedTaskCandidates,
+        ),
+      );
       void this.submitScheduledTask(pending.taskId, pending.request);
       return true;
     }
@@ -857,7 +1044,8 @@ export class MetaclawSession {
     if (/^a$/iu.test(trimmed)) {
       this.persistAutoApplyPolicies(pending);
       this.pendingRecallReview = null;
-      const selection = this.buildAcceptedRecallSelection(
+      const selection = this.buildRecallSelectionWithAutoApplied(
+        pending,
         pending.preferenceCandidates,
         pending.taskCandidates,
       );
@@ -889,7 +1077,7 @@ export class MetaclawSession {
       this.recordRecallFeedback(pending, 'select', indexes);
       this.approvedRecallSelections.set(
         pending.taskId,
-        this.buildAcceptedRecallSelection(selectedPreferences, selectedTasks),
+        this.buildRecallSelectionWithAutoApplied(pending, selectedPreferences, selectedTasks),
       );
       void this.submitScheduledTask(pending.taskId, pending.request);
       return true;
@@ -1232,7 +1420,7 @@ export class MetaclawSession {
     }
 
     if (this.pendingLastTaskConfirmation) {
-      const handled = this.handlePendingLastTaskConfirmation(userInput);
+      const handled = await this.handlePendingLastTaskConfirmation(userInput);
       if (handled) {
         return;
       }
@@ -1429,6 +1617,8 @@ export class MetaclawSession {
 
     const inlineResources = extractInlineResourceMatches(userInput);
     const normalizedGoal = stripInlineResourceMatches(userInput, inlineResources) || userInput;
+    const conversationDerived = this.focusContext?.kind === 'conversation'
+      && isConversationDerivedWorkInstruction(userInput);
     const task = this.deps.taskEngine.create({
       title: normalizedGoal.slice(0, 50),
       goal: normalizedGoal,
@@ -1449,10 +1639,11 @@ export class MetaclawSession {
       userPrompt: userInput,
       contextTaskId: taskId,
       executionMode: 'fresh',
-      schedulingReason: this.focusContext?.kind === 'conversation' && isConversationDerivedWorkInstruction(userInput)
+      schedulingReason: conversationDerived
         ? '按当前对话创建跟进任务'
         : buildSchedulingReason(userInput),
       priorityHint: parsePriorityHint(userInput),
+      includeRecentConversationContext: conversationDerived,
     });
   }
 
@@ -1559,6 +1750,29 @@ export class MetaclawSession {
     outputLines: string[],
   ): void {
     for (const candidate of candidates) {
+      if (
+        !sourceId.startsWith('task_')
+        && !isHighRiskMemoryCandidate(candidate)
+        && !this.hasExistingPreference(candidate)
+      ) {
+        const pref = this.deps.memoryEngine.addManual({
+          content: candidate,
+          scope: 'global',
+          type: 'domain',
+        });
+        this.recordMemoryAuditEvent({
+          taskId: null,
+          memoryId: pref.id,
+          action: 'auto_capture',
+          score: 1,
+          reason: '用户明确长期偏好，低风险自动写入',
+          judgeSource: 'rule',
+          evidence: [{ sourceId, content: candidate }],
+        });
+        outputLines.push(`→ 已自动记录偏好 #${pref.id}: ${pref.content}`);
+        continue;
+      }
+
       const { observation, shouldPromptConfirm } = this.deps.memoryEngine.observeCandidate(candidate, sourceId);
       if (!shouldPromptConfirm) {
         continue;
@@ -1571,15 +1785,51 @@ export class MetaclawSession {
         };
       }
 
-      outputLines.push(
+      if (isHighRiskMemoryCandidate(candidate)) {
+        outputLines.push(
+          '',
+          `⚠️ 高风险偏好不会静默写入："${candidate}"`,
+          '   请确认后再保存为长期记忆。',
+          '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
+          `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
+        );
+      } else {
+        outputLines.push(
         '',
         `💡 检测到可能的长期偏好："${candidate}"`,
         '   要把它记为长期偏好吗？',
         '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
         `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
-      );
+        );
+      }
       this.notifyMemoryCandidate(observation.id, candidate, 'high-confidence');
     }
+  }
+
+  private hasExistingPreference(content: string): boolean {
+    return this.deps.memoryEngine.list().some(preference => preference.content === content);
+  }
+
+  private recordMemoryAuditEvent(input: {
+    taskId: string | null;
+    memoryId: string;
+    action: 'auto_capture' | 'auto_apply' | 'ask_review';
+    score: number | null;
+    reason: string;
+    judgeSource: string;
+    evidence: unknown[];
+  }): void {
+    new MemoryAuditEventRepo(this.deps.db).insert({
+      id: `memory_audit_${generateInteractionId()}`,
+      taskId: input.taskId,
+      memoryId: input.memoryId,
+      action: input.action,
+      score: input.score,
+      reason: input.reason,
+      judgeSource: input.judgeSource,
+      evidence: input.evidence,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   private notifyMemoryCandidate(
@@ -1796,6 +2046,7 @@ export class MetaclawSession {
       acceptedMemoryResources: approvedRecallSelection.authoritative
         ? approvedRecallSelection.acceptedMemoryResources
         : undefined,
+      includeRecentConversationContext: request.includeRecentConversationContext,
     });
     this.appendOutput('【执行上下文准备完成】');
     if (executionContextBundle.memoryContext.resolvedPreferences.length > 0) {
@@ -1808,6 +2059,15 @@ export class MetaclawSession {
           `  - [${preference.scope}] ${preference.content} (confidence=${preference.confidence}, 命中原因：${preference.reason})`
         ),
       );
+    }
+
+    this.refreshRuntimeState();
+    const routedExecutor = this.resolveExecutorForTask(taskId, userPrompt);
+    this.appendOutput(
+      `→ 路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+    );
+    if (routedExecutor.fallbackReason) {
+      this.appendOutput(`→ ${routedExecutor.fallbackReason}`);
     }
 
     this.refreshRuntimeState();
@@ -1830,7 +2090,8 @@ export class MetaclawSession {
       const executionId = `exec_${generateInteractionId()}`;
       const skillUsageEventRepo = new SkillUsageEventRepo(this.deps.db);
 
-      const result = await this.deps.executor.execute({
+      const executor = routedExecutor.executor;
+      const result = await executor.execute({
         task: this.deps.taskEngine['taskRepo'].findById(taskId)!,
         preferences,
         userPrompt,
@@ -1847,7 +2108,7 @@ export class MetaclawSession {
               id: `sue_${generateInteractionId()}`,
               taskId,
               executionId,
-              executorName: this.deps.executor.name,
+              executorName: executor.name,
               skillName: parsedSkillEvent.skillName,
               skillVersion: parsedSkillEvent.skillVersion,
               eventType: parsedSkillEvent.eventType,
@@ -1878,11 +2139,12 @@ export class MetaclawSession {
         this.deps.sessionId,
         userPrompt,
         result.output,
-        this.deps.executor.name,
+        executor.name,
         new Date().toISOString(),
       );
 
       if (result.success) {
+        new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'success');
         const workspaceContext = executionContextBundle.workspaceContext;
         const artifactPaths = this.collectArtifactPaths(
           result.output,
@@ -1981,6 +2243,7 @@ export class MetaclawSession {
       }
 
       const errorMessage = result.error || '未知错误';
+      new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, `failed:${errorMessage}`);
       if (this.blockTaskOnRecoverableFailure(taskId, errorMessage)) {
         await finishExecution([
           `✗ 执行失败: ${errorMessage}`,
@@ -1994,6 +2257,7 @@ export class MetaclawSession {
       await finishExecution([`✗ 执行失败: ${errorMessage}`]);
       this.lastProgressLineByTask.delete(taskId);
     } catch (error) {
+      new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, `exception:${(error as Error).message}`);
       const currentTask = this.deps.taskEngine['taskRepo'].findById(taskId);
       if (currentTask?.status === 'running') {
         const errorMessage = (error as Error).message;
@@ -2283,6 +2547,8 @@ function createDefaultCommandRouter(): CommandRouter {
   router.register(tasksCommand);
   router.register(taskCommand);
   router.register(memoryCommand);
+  router.register(profileCommand);
+  router.register(executorCommand);
   router.register(learningCommand);
   router.register(dashboardCommand);
   router.register(attachCommand);

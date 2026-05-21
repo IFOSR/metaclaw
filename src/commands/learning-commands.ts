@@ -2,6 +2,9 @@ import { LearningCandidateRepo, type LearningCandidateRecord } from '../storage/
 import { ExecutorSkillInstallEventRepo, type ExecutorSkillInstallStatus } from '../storage/executor-skill-install-event-repo.js';
 import { TaskMemoryCardRepo, type TaskMemoryCardOutcome } from '../storage/task-memory-card-repo.js';
 import { SkillEffectSummaryRepo, type SkillEffectSummaryRecord } from '../storage/skill-effect-summary-repo.js';
+import { SkillUsageEventRepo } from '../storage/skill-usage-event-repo.js';
+import { ReflectionEventRepo } from '../storage/reflection-event-repo.js';
+import { ReflectionEngine } from '../core/reflection-engine.js';
 import { PromotionGate } from '../core/promotion-gate.js';
 import { buildExecutorSkillPackage } from '../executor/skill-package-builder.js';
 import { SkillGovernanceEngine, assessSkillGovernance, type SkillGovernanceAction } from '../core/skill-governance-engine.js';
@@ -94,6 +97,10 @@ function formatTaskMemoryCardLine(card: ReturnType<TaskMemoryCardRepo['listRecen
   return `  #${card.id} [${card.outcome}] ${card.title} (${card.taskId})`;
 }
 
+function formatPatchCandidateLine(candidate: LearningCandidateRecord): string {
+  return `  #${candidate.id} [${candidate.status}/${candidate.safetyStatus}] ${candidate.title}`;
+}
+
 function writeInstallAudit(
   repo: ExecutorSkillInstallEventRepo,
   input: {
@@ -126,6 +133,81 @@ export const learningCommand: CommandHandler = {
     const repo = new LearningCandidateRepo(context.db);
 
     switch (action) {
+      case 'skill-feedback': {
+        const usageEvents = new SkillUsageEventRepo(context.db).listRecent(50);
+        const reflectionRepo = new ReflectionEventRepo(context.db);
+        const engine = new ReflectionEngine();
+        let created = 0;
+
+        for (const event of usageEvents) {
+          if (!['skill_failed', 'skill_suggested_patch'].includes(event.eventType)) {
+            continue;
+          }
+
+          const reflection = engine.reflectOnSkillUsage(event);
+          if (reflectionRepo.findById(reflection.event.id)) {
+            continue;
+          }
+
+          const existingForSource = context.db.prepare(
+            'SELECT id FROM reflection_events WHERE source_type = ? AND source_id = ? LIMIT 1'
+          ).get('executor_skill_usage', event.id) as { id: string } | undefined;
+          if (existingForSource) {
+            continue;
+          }
+
+          reflectionRepo.insert(reflection.event);
+          if (reflection.candidate) {
+            repo.insert(reflection.candidate);
+            created += 1;
+          }
+        }
+
+        return { type: 'text', content: `已生成 Skill Runtime Feedback：${created} 个候选` };
+      }
+
+      case 'patch': {
+        const subAction = args[1] ?? 'candidates';
+        if (subAction === 'candidates') {
+          const candidates = repo.listPending().filter(candidate => candidate.kind === 'skill_patch');
+          if (candidates.length === 0) {
+            return { type: 'text', content: '暂无 Skill Patch Candidates' };
+          }
+          return {
+            type: 'text',
+            content: `Skill Patch Candidates：\n${candidates.map(formatPatchCandidateLine).join('\n')}`,
+          };
+        }
+
+        if (subAction === 'approve') {
+          const id = args[2];
+          if (!id) {
+            return { type: 'text', content: '用法: /learning patch approve <id>' };
+          }
+          const candidate = repo.findById(id);
+          if (!candidate || candidate.kind !== 'skill_patch') {
+            return { type: 'text', content: `未找到 Skill Patch Candidate #${id}` };
+          }
+          repo.updateReview(id, {
+            status: 'approved',
+            reviewNote: args.slice(3).join(' ') || null,
+            promotedAssetId: candidate.promotedAssetId,
+            updatedAt: new Date().toISOString(),
+          });
+          return { type: 'text', content: `已批准 Skill Patch Candidate #${id}` };
+        }
+
+        if (subAction === 'promote') {
+          const id = args[2];
+          if (!id) {
+            return { type: 'text', content: '用法: /learning patch promote <id>' };
+          }
+          return learningCommand.execute(['promote', id], context);
+        }
+
+        return { type: 'text', content: `未知 patch 操作: ${subAction}` };
+      }
+
       case 'candidates': {
         const candidates = repo.listPending();
         if (candidates.length === 0) {

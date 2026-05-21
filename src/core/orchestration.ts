@@ -67,10 +67,14 @@ export class OrchestrationEngine {
   }
 
   /**
-   * 获取优先级排序后的 READY 任务
+   * 获取优先级排序后的 READY / CREATED 待调度任务
    */
   getPrioritizedTasks(): Array<{ task: Task; score: PriorityScore; reasons: string[] }> {
-    const tasks = filterDurableTasks(this.taskEngine['taskRepo'].findByStatus('ready'));
+    const repo = this.taskEngine['taskRepo'];
+    const tasks = filterDurableTasks([
+      ...repo.findByStatus('ready'),
+      ...repo.findByStatus('created'),
+    ]);
 
     const scored = tasks.map(task => {
       const { score, reasons } = this.evaluateTask(task);
