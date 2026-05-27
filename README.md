@@ -297,6 +297,8 @@ MetaClaw separates document generation from Feishu delivery:
 
 Executors should not call Feishu Docs or cloud-document APIs directly. If a user asks for a "Feishu cloud document" or "online preview", MetaClaw instructs the executor to produce local Markdown artifacts; the backend handles Feishu synchronization and preview links.
 
+Feishu progress cards show the execution chain explicitly. MetaClaw first sends the request to `codex-cli` for intent parsing and execution preparation, then shows the router decision, routing reason, and the actual executor that starts the task, for example `hermes-agent` for research workflows. This prevents Feishu users from mistaking the intent parser for the final executor.
+
 Default preview URL:
 
 ```text
