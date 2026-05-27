@@ -161,6 +161,8 @@ hermes --oneshot "<prompt>" --yolo --accept-hooks
 
 `--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. This is required because MetaClaw executor runs cannot rely on an interactive terminal confirmation mid-task.
 
+Hermes research workflows often run longer than CLI coding tasks. MetaClaw automatically gives `hermes-agent` at least `timeout: 900` seconds of idle time and `max_duration: 7200` seconds of total runtime, even if the global executor config is shorter.
+
 Use it as the default executor if desired:
 
 ```yaml

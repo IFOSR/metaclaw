@@ -136,6 +136,8 @@ hermes --oneshot "<prompt>" --yolo --accept-hooks
 
 `--oneshot` 让 Hermes 以脚本/headless 模式运行，`--yolo` 跳过危险命令确认，`--accept-hooks` 自动接受未见过的 hooks。MetaClaw 的执行器运行过程中不能依赖用户再到终端里交互确认，所以需要这种非交互授权模式。
 
+Hermes 调研类工作流通常比 CLI 编码任务执行更久。即使全局执行器配置更短，MetaClaw 也会自动给 `hermes-agent` 至少 `timeout: 900` 秒的连续无输出等待时间，以及 `max_duration: 7200` 秒的总执行时长。
+
 ### Claude Code
 
 ```bash

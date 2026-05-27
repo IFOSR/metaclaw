@@ -15,7 +15,7 @@ export function createExecutor(config: { command: string; timeout: number; maxDu
   }
 
   if (config.command === 'hermes') {
-    return new HermesAgentAdapter(config);
+    return new HermesAgentAdapter(withHermesTimeoutDefaults(config));
   }
 
   if (config.command === 'deepseek' || config.command === 'deepseek-tui') {
@@ -27,6 +27,14 @@ export function createExecutor(config: { command: string; timeout: number; maxDu
   }
 
   return new ClaudeCodeAdapter(config);
+}
+
+function withHermesTimeoutDefaults<T extends { timeout: number; maxDuration?: number }>(config: T): T {
+  return {
+    ...config,
+    timeout: Math.max(config.timeout, 900),
+    maxDuration: Math.max(config.maxDuration ?? 0, 7200),
+  };
 }
 
 export function createExecutorByName(
@@ -42,7 +50,7 @@ export function createExecutorByName(
   }
 
   if (name === 'hermes-agent') {
-    return new HermesAgentAdapter({ ...config, command: 'hermes' });
+    return new HermesAgentAdapter(withHermesTimeoutDefaults({ ...config, command: 'hermes' }));
   }
 
   if (name === 'deepseek-tui') {

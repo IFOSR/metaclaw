@@ -40,6 +40,17 @@ describe('createExecutorByName', () => {
     expect(createExecutorByName('hermes-agent', config)?.name).toBe('hermes-agent');
     expect(createExecutorByName('deepseek-tui', config)?.name).toBe('deepseek-tui');
   });
+
+  it('uses longer timeout defaults for Hermes research workflows', () => {
+    const executor = createExecutorByName('hermes-agent', {
+      timeout: 300,
+      maxDuration: 3600,
+      workspaceRoot: '/repo',
+    }) as any;
+
+    expect(executor.config.timeout).toBe(900);
+    expect(executor.config.maxDuration).toBe(7200);
+  });
 });
 
 describe('createExecutor', () => {
@@ -52,5 +63,17 @@ describe('createExecutor', () => {
     expect(createExecutor({ ...config, command: 'deepseek' }).name).toBe('deepseek-tui');
     expect(createExecutor({ ...config, command: 'deepseek-tui' }).name).toBe('deepseek-tui');
     expect(createExecutor({ ...config, command: 'openclaw' }).name).toBe('openclaw');
+  });
+
+  it('uses longer timeout defaults when Hermes is configured as the default executor', () => {
+    const executor = createExecutor({
+      command: 'hermes',
+      timeout: 300,
+      maxDuration: 3600,
+      workspaceRoot: '/repo',
+    }) as any;
+
+    expect(executor.config.timeout).toBe(900);
+    expect(executor.config.maxDuration).toBe(7200);
   });
 });
