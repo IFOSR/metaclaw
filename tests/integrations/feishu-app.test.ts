@@ -1071,6 +1071,92 @@ describe('Feishu app helpers', () => {
       .not.toContain('main result should arrive too late');
   });
 
+  it('streams resumed task guidance to Feishu after an urgent task completes', async () => {
+    const listeners = new Set<(snapshot: { output: string[] }) => void>();
+    const output = ['before'];
+    const notify = () => {
+      for (const listener of listeners) {
+        listener({ output: [...output] });
+      }
+    };
+    let resolveSubmit!: () => void;
+    const submitPromise = new Promise<{ exitRequested: false }>(resolve => {
+      resolveSubmit = () => resolve({ exitRequested: false });
+    });
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((callback: (snapshot: { output: string[] }) => void) => {
+        listeners.add(callback);
+        callback({ output: [...output] });
+        return () => {
+          listeners.delete(callback);
+        };
+      }),
+      submit: vi.fn().mockImplementation(() => submitPromise),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const handled = handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_urgent_resume_guidance',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"紧急优先处理客户问题"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    await Promise.resolve();
+    output.push(
+      '> 紧急优先处理客户问题',
+      '任务 #task_urgent 已创建：紧急优先处理客户问题',
+      '→ 抢占当前任务 #task_main',
+      '→ 正在执行任务 #task_urgent...',
+      '✓ 任务完成 (0.4s)',
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: urgent summary only',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '',
+      'urgent full line 1',
+      'urgent full line 2',
+      '┌─ 操作指引 ───────────────────────────────────────┐',
+      '│ 场景：恢复已挂起任务',
+      '│ 推荐动作：继续处理任务 #task_main: 之前的长任务',
+      '│ 目标任务：#task_main 之前的长任务',
+      '│ 原因：刚被高优任务打断，恢复连续性收益最高',
+      '│       下一步已明确：恢复后继续当前未完成步骤',
+      '└──────────────────────────────────────────────────┘',
+      '→ 正在执行任务 #task_main...',
+      '+ #task_main old task output must not leak into urgent reply',
+    );
+    notify();
+    resolveSubmit();
+    await handled;
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    const allSent = sentTexts.join('\n');
+    expect(allSent).toContain('urgent full line 1\nurgent full line 2');
+    expect(sentTexts).toContain([
+      '**恢复已挂起任务**',
+      '→ 继续处理任务 #task_main: 之前的长任务',
+      '任务：#task_main 之前的长任务',
+      '- 刚被高优任务打断，恢复连续性收益最高',
+      '- 下一步已明确：恢复后继续当前未完成步骤',
+    ].join('\n'));
+    expect(allSent).not.toContain('urgent summary only');
+    expect(allSent).not.toContain('old task output must not leak');
+  });
+
   it('keeps resumed Feishu replies scoped to the resumed task instead of the later latest task', async () => {
     const session = {
       getSnapshot: vi.fn()

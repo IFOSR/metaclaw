@@ -546,7 +546,11 @@ export async function handleFeishuMessageEvent(
       const progressLines = progressTargetTaskId
         ? filterFeishuOutputLinesForTask(allMessageLines, progressTargetTaskId)
         : newLines;
-      for (const progressOutput of formatFeishuStreamingProgressReplies(progressLines, sentProgressSteps)) {
+      const guidanceLines = extractFeishuGuidanceProgressLines(allMessageLines);
+      for (const progressOutput of formatFeishuStreamingProgressReplies([
+        ...guidanceLines,
+        ...progressLines,
+      ], sentProgressSteps)) {
         enqueueProgress(progressOutput);
       }
     });
@@ -1469,6 +1473,29 @@ function extractFeishuGuidanceProgressBlocks(outputLines: string[]): string[] {
   return blocks;
 }
 
+function extractFeishuGuidanceProgressLines(outputLines: string[]): string[] {
+  const lines: string[] = [];
+  let collecting = false;
+
+  for (const rawLine of outputLines) {
+    const line = rawLine.trim();
+    if (line.startsWith('┌─ 操作指引')) {
+      collecting = true;
+      lines.push(rawLine);
+      continue;
+    }
+    if (!collecting) {
+      continue;
+    }
+    lines.push(rawLine);
+    if (line.startsWith('└')) {
+      collecting = false;
+    }
+  }
+
+  return lines;
+}
+
 function formatFeishuGuidanceProgressBlock(lines: string[]): string | null {
   const scene = lines.find(line => line.startsWith('│ 场景：'))?.replace(/^│\s*场景：/, '').trim();
   if (scene !== '恢复已挂起任务' && scene !== '解除阻塞后恢复') {
@@ -1777,16 +1804,16 @@ function extractLatestTaskResultBody(outputLines: string[]): string | null {
 
 function extractAppendedTaskResultOutput(outputLines: string[]): string | null {
   let resultBlockEnd = -1;
-  for (let index = outputLines.length - 1; index >= 0; index -= 1) {
+  let inTaskResultBlock = false;
+  for (let index = 0; index < outputLines.length; index += 1) {
     const line = outputLines[index]?.trim() ?? '';
-    if (line.startsWith('└') && index > 0) {
-      const hasTaskResultStart = outputLines
-        .slice(0, index)
-        .some(candidate => candidate.trim().startsWith('┌─ 任务结果'));
-      if (hasTaskResultStart) {
-        resultBlockEnd = index;
-        break;
-      }
+    if (line.startsWith('┌─ 任务结果')) {
+      inTaskResultBlock = true;
+      continue;
+    }
+    if (inTaskResultBlock && line.startsWith('└')) {
+      resultBlockEnd = index;
+      inTaskResultBlock = false;
     }
   }
   if (resultBlockEnd === -1) {
