@@ -327,15 +327,6 @@ src/
 └── utils/
 ```
 
-## 文档
-
-- [产品需求](docs/metaclaw-os_prd_v2.md)
-- [技术设计](docs/metaclaw-os_tech_design_v1.md)
-- [TUI 规范](docs/metaclaw-os_tui_spec_v1.md)
-- [实现计划](docs/metaclaw-os_implementation_v1.md)
-- [学习与执行器 Skill 演进](docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md)
-- [执行器路由边界](docs/plans/2026-05-26-executor-routing-boundaries.md)
-
 ## License
 
 MIT

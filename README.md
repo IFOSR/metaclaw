@@ -469,15 +469,6 @@ src/
 └── utils/          # Config, paths, logger, IDs
 ```
 
-## Documentation
-
-- [Product Requirements](docs/metaclaw-os_prd_v2.md)
-- [Technical Design](docs/metaclaw-os_tech_design_v1.md)
-- [TUI Specification](docs/metaclaw-os_tui_spec_v1.md)
-- [Implementation Plan](docs/metaclaw-os_implementation_v1.md)
-- [Learning And Executor Skill Evolution](docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md)
-- [Executor Routing Boundaries](docs/plans/2026-05-26-executor-routing-boundaries.md)
-
 ## License
 
 MIT
