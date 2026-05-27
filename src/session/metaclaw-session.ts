@@ -2193,6 +2193,16 @@ export class MetaclawSession {
       );
 
       if (result.success) {
+        if (this.blockTaskOnUndeliverableExecutorOutput(taskId, result.output)) {
+          new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'blocked:undeliverable_output');
+          await finishExecution([
+            '✗ 执行未完成: 执行器返回了未交付结果，未生成任务产物',
+            this.buildUndeliverableOutputHint(taskId),
+          ]);
+          this.lastProgressLineByTask.delete(taskId);
+          return;
+        }
+
         new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'success');
         const workspaceContext = executionContextBundle.workspaceContext;
         let artifactPaths = this.collectArtifactPaths(
@@ -2357,6 +2367,29 @@ export class MetaclawSession {
     return true;
   }
 
+  private blockTaskOnUndeliverableExecutorOutput(taskId: string, output: string): boolean {
+    if (!isUndeliverableExecutorOutput(output)) {
+      return false;
+    }
+
+    const currentTask = this.deps.taskEngine['taskRepo'].findById(taskId);
+    if (!currentTask || currentTask.status !== 'running') {
+      return false;
+    }
+
+    this.deps.taskEngine.block(taskId, {
+      taskId,
+      type: 'manual',
+      description: '执行器返回未完成说明，未生成最终产物',
+      status: 'waiting',
+    });
+    return true;
+  }
+
+  private buildUndeliverableOutputHint(taskId: string): string {
+    return `→ 任务 #${taskId} 已转为阻塞；执行器说明命令被拒绝、超时或报告尚未写入。请补充授权/继续指令后执行 /task ${taskId} unblock，或直接说“继续完成刚才的报告”`;
+  }
+
   private buildRecoverableFailureHint(taskId: string, errorMessage: string): string {
     if (isPermissionFailure(errorMessage)) {
       return `→ 任务 #${taskId} 已转为阻塞，请先确认相关目录权限或系统授权；确认后执行 /task ${taskId} unblock，或直接说“已授权，继续刚才那个任务”`;
@@ -2400,7 +2433,7 @@ export class MetaclawSession {
 
     const needsFeishuDocumentDelivery = [userPrompt, ...preferences.map(preference => preference.content)]
       .some(text => /(飞书云文档|飞书文档|云文档|在线预览)/u.test(text));
-    if (!needsFeishuDocumentDelivery || !output.trim()) {
+    if (!needsFeishuDocumentDelivery || !output.trim() || isUndeliverableExecutorOutput(output)) {
       return artifactPaths;
     }
 
@@ -2638,4 +2671,17 @@ function createDefaultCommandRouter(): CommandRouter {
   router.register(helpCommand);
   router.register(exitCommand);
   return router;
+}
+
+function isUndeliverableExecutorOutput(output: string): boolean {
+  const normalized = output.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /Timeout\s+—\s+denying command/i.test(normalized)
+    || /denying command/i.test(normalized)
+    || /停止当前\s*workflow|等待用户响应|需要你允许后/u.test(normalized)
+    || /还没有生成最终\s*Markdown\s*文件|尚未写入|没有生成最终\s*Markdown/u.test(normalized)
+    || /未完成项：[\s\S]{0,300}(详细报告|Markdown|文件).*尚未写入/u.test(normalized);
 }

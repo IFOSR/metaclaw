@@ -131,8 +131,10 @@ hermes --help
 MetaClaw 调用方式：
 
 ```bash
-hermes chat -q "<prompt>" -Q
+hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
+
+`--oneshot` 让 Hermes 以脚本/headless 模式运行，`--yolo` 跳过危险命令确认，`--accept-hooks` 自动接受未见过的 hooks。MetaClaw 的执行器运行过程中不能依赖用户再到终端里交互确认，所以需要这种非交互授权模式。
 
 ### Claude Code
 

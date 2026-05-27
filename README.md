@@ -156,8 +156,10 @@ hermes --help
 MetaClaw calls it as:
 
 ```bash
-hermes chat -q "<prompt>" -Q
+hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
+
+`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. This is required because MetaClaw executor runs cannot rely on an interactive terminal confirmation mid-task.
 
 Use it as the default executor if desired:
 

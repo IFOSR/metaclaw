@@ -5,11 +5,11 @@ import { OpenClawAdapter } from '../../src/executor/openclaw.js';
 import { createExecutor, createExecutorByName } from '../../src/executor/factory.js';
 
 describe('HermesAgentAdapter', () => {
-  it('uses hermes non-interactive chat mode', () => {
+  it('uses hermes headless mode with approvals and hooks bypassed', () => {
     const adapter = new HermesAgentAdapter({ command: 'hermes', timeout: 300 });
     const args = (adapter as any).buildSpawnArgs('test prompt');
 
-    expect(args).toEqual(['chat', '-q', 'test prompt', '-Q']);
+    expect(args).toEqual(['--oneshot', 'test prompt', '--yolo', '--accept-hooks']);
   });
 });
 

@@ -382,4 +382,64 @@ describe('scripted session', () => {
     expect(doneTask?.artifacts).toContain(fallbackArtifact);
     expect(result.output.join('\n')).toContain('已记录 1 个任务产物');
   });
+
+  it('does not write a fallback Feishu Markdown artifact from undeliverable executor output', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'hermes-agent',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: [
+          '⏱ Timeout — denying command',
+          '',
+          '磊哥，我已开始调研并确认“pi Agent”大概率指的是 earendil-works/pi。',
+          '但在继续拉取/保存资料准备写入 Markdown 报告时，当前环境拦截了后续文件/资料下载命令。',
+          '因此这次还没有生成最终 Markdown 文件。',
+          '',
+          '未完成项：',
+          '- 详细报告 Markdown 尚未写入：',
+          '  /home/ylfego/Program/metaclaw/metaclaw-tasks/task_h0ghGKo5V9',
+          '',
+          '需要你允许后，我再继续完成完整调研报告并写入目标目录。',
+        ].join('\n'),
+        exitCode: 0,
+        durationMs: 200,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '明确工作任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const result = await runScriptedSession({
+      inputs: [
+        '请调研 pi Agent，产出飞书云文档和在线预览',
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_feishu_doc_undeliverable',
+      contextRecaller,
+      llmBridge,
+    });
+
+    const blockedTask = taskEngine.list().find(task => task.status === 'blocked');
+    expect(blockedTask).toBeTruthy();
+    const fallbackArtifact = resolve(process.cwd(), 'metaclaw-tasks', blockedTask!.id, 'feishu-document.md');
+    expect(blockedTask?.artifacts).not.toContain(fallbackArtifact);
+    expect(result.output.join('\n')).toContain('执行未完成');
+    expect(result.output.join('\n')).not.toContain('已记录 1 个任务产物');
+  });
 });
