@@ -15,6 +15,17 @@ interface RenderLine {
   indent: number;
 }
 
+interface EditorState {
+  text: string;
+  cursor: number;
+}
+
+interface InputHistoryState {
+  entries: string[];
+  cursor: number | null;
+  draft: EditorState;
+}
+
 const META_TEXT_COLOR = 'whiteBright';
 const PANEL_HEADER_COLOR = 'whiteBright';
 const RUNTIME_SUMMARY_COLOR = 'cyanBright';
@@ -239,9 +250,88 @@ function shouldShowWaitingHint(snapshot: SessionSnapshot, lines: string[], showW
     || lastMeaningfulLine.startsWith('→ 派发给');
 }
 
+function createInputHistoryState(): InputHistoryState {
+  return {
+    entries: [],
+    cursor: null,
+    draft: { text: '', cursor: 0 },
+  };
+}
+
+function recordInputHistory(state: InputHistoryState, userInput: string, nextEditor: EditorState): InputHistoryState {
+  const entries = state.entries[state.entries.length - 1] === userInput
+    ? state.entries
+    : [...state.entries, userInput].slice(-100);
+  return {
+    entries,
+    cursor: null,
+    draft: nextEditor,
+  };
+}
+
+function recallPreviousInput(state: InputHistoryState, currentEditor: EditorState): {
+  state: InputHistoryState;
+  editor: EditorState;
+} {
+  if (state.entries.length === 0) {
+    return { state, editor: currentEditor };
+  }
+
+  const cursor = state.cursor === null
+    ? state.entries.length - 1
+    : Math.max(0, state.cursor - 1);
+  const text = state.entries[cursor] ?? '';
+  return {
+    state: {
+      ...state,
+      cursor,
+      draft: state.cursor === null ? currentEditor : state.draft,
+    },
+    editor: { text, cursor: text.length },
+  };
+}
+
+function recallNextInput(state: InputHistoryState, currentEditor: EditorState): {
+  state: InputHistoryState;
+  editor: EditorState;
+} {
+  if (state.cursor === null) {
+    return { state, editor: currentEditor };
+  }
+
+  if (state.cursor >= state.entries.length - 1) {
+    return {
+      state: {
+        ...state,
+        cursor: null,
+      },
+      editor: state.draft,
+    };
+  }
+
+  const cursor = state.cursor + 1;
+  const text = state.entries[cursor] ?? '';
+  return {
+    state: {
+      ...state,
+      cursor,
+    },
+    editor: { text, cursor: text.length },
+  };
+}
+
+function resetInputHistoryBrowsing(state: InputHistoryState, editor: EditorState): InputHistoryState {
+  return {
+    ...state,
+    cursor: null,
+    draft: editor,
+  };
+}
+
 export function App(props: AppProps) {
   const [editor, setEditor] = useState({ text: '', cursor: 0 });
   const editorRef = useRef({ text: '', cursor: 0 });
+  const inputHistoryRef = useRef<InputHistoryState>(createInputHistoryState());
   const lastInputAtRef = useRef(Date.now());
   const lastOutputAtRef = useRef(Date.now());
   const [snapshot, setSnapshot] = useState<SessionSnapshot>(EMPTY_SNAPSHOT);
@@ -340,6 +430,7 @@ export function App(props: AppProps) {
       if (!editorState.text.trim()) return;
 
       const { userInput, nextEditor } = prepareEditorSubmission(editorState);
+      inputHistoryRef.current = recordInputHistory(inputHistoryRef.current, userInput, nextEditor);
       editorRef.current = nextEditor;
       setEditor(nextEditor);
 
@@ -347,6 +438,22 @@ export function App(props: AppProps) {
       if (result.exitRequested) {
         setTimeout(() => process.exit(0), 100);
       }
+      return;
+    }
+
+    if (key.upArrow) {
+      const next = recallPreviousInput(inputHistoryRef.current, editorState);
+      inputHistoryRef.current = next.state;
+      editorRef.current = next.editor;
+      setEditor(next.editor);
+      return;
+    }
+
+    if (key.downArrow) {
+      const next = recallNextInput(inputHistoryRef.current, editorState);
+      inputHistoryRef.current = next.state;
+      editorRef.current = next.editor;
+      setEditor(next.editor);
       return;
     }
 
@@ -370,6 +477,7 @@ export function App(props: AppProps) {
           text: editorState.text.slice(0, editorState.cursor - 1) + editorState.text.slice(editorState.cursor),
           cursor: editorState.cursor - 1,
         };
+        inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
         editorRef.current = next;
         setEditor(next);
       }
@@ -381,6 +489,7 @@ export function App(props: AppProps) {
         text: editorState.text.slice(0, editorState.cursor) + char + editorState.text.slice(editorState.cursor),
         cursor: editorState.cursor + char.length,
       };
+      inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
       editorRef.current = next;
       setEditor(next);
     }
@@ -447,6 +556,10 @@ export {
   buildRenderLines,
   formatRenderLine,
   getLineColor,
+  createInputHistoryState,
+  recallNextInput,
+  recallPreviousInput,
+  recordInputHistory,
 };
 
 export {

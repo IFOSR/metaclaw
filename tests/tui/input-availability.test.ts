@@ -72,6 +72,89 @@ afterEach(() => {
 });
 
 describe('App input availability', () => {
+  it('recalls submitted input history with up and down arrows', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-history');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: 'history navigation test',
+        response: 'ok',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_input_history',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    const typeText = async (text: string) => {
+      for (const char of text) {
+        await inputCapture.handler?.(char, {});
+        await flushUpdates();
+      }
+    };
+    const submit = async () => {
+      await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+      await flushUpdates();
+    };
+
+    await typeText('第一条任务');
+    await submit();
+    await typeText('第二条任务');
+    await submit();
+    await typeText('当前草稿');
+
+    await inputCapture.handler?.('', { upArrow: true });
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('> 第二条任务');
+
+    await inputCapture.handler?.('', { upArrow: true });
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('> 第一条任务');
+
+    await inputCapture.handler?.('', { downArrow: true });
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('> 第二条任务');
+
+    await inputCapture.handler?.('', { downArrow: true });
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('> 当前草稿');
+
+    app.unmount();
+    app.cleanup();
+  });
+
   it('keeps the prompt usable and queues a new task while another task is running', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
