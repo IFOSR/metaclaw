@@ -476,7 +476,7 @@ describe('Feishu app helpers', () => {
       '**处理步骤**',
       '→ 任务 #task_test 已创建：能收到消息吗?',
       '【提取最近历史记录上下文】',
-      '→ 进入执行准备阶段',
+      '→ 发送给 codex-cli 进行意图解析与执行准备',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
       '→ 正在执行任务 #task_test...',
@@ -540,7 +540,7 @@ describe('Feishu app helpers', () => {
 
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', '**处理步骤**\n→ 任务 #task_stream 已创建：流式展示步骤');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '**处理步骤**\n【提取最近历史记录上下文】');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 进入执行准备阶段');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(4, 'oc_chat', '**处理步骤**\n【构建执行上下文】');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(5, 'oc_chat', '**处理步骤**\n【执行上下文准备完成】');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(6, 'oc_chat', '**处理步骤**\n→ 正在执行任务 #task_stream...');
@@ -1350,7 +1350,7 @@ describe('Feishu app helpers', () => {
       '**处理步骤**',
       '→ 任务 #task_OO0EG38SJo 已创建：今天早上都执行了什么任务',
       '【提取最近历史记录上下文】',
-      '→ 进入执行准备阶段',
+      '→ 发送给 codex-cli 进行意图解析与执行准备',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
       '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
@@ -1375,7 +1375,7 @@ describe('Feishu app helpers', () => {
       '【提取最近历史记录上下文】',
       '→ 派发给 codex-cli...',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 进入执行准备阶段',
+      '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备',
     ]);
   });
 
@@ -1387,7 +1387,7 @@ describe('Feishu app helpers', () => {
       '→ 原因：research_workflow / research',
       '+ #task_research 已启动 hermes-agent 执行器',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 进入执行准备阶段',
+      '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备',
       '**处理步骤**\n→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
       '**处理步骤**\n→ 原因：research_workflow / research',
       '**处理步骤**\n→ 已启动 hermes-agent 执行器',

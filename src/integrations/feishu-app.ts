@@ -1556,7 +1556,10 @@ function extractFeishuProgressStep(rawLine: string): string | null {
   }
 
   if (/^→\s+派发给\s+[^.。]+[.。]{3}$/.test(line)) {
-    return '→ 进入执行准备阶段';
+    const parserExecutor = line.match(/^→\s+派发给\s+([^.。]+)[.。]{3}$/)?.[1]?.trim();
+    return parserExecutor
+      ? `→ 发送给 ${parserExecutor} 进行意图解析与执行准备`
+      : '→ 进入意图解析与执行准备阶段';
   }
 
   if (line.startsWith('→ 路由决策：')) {
