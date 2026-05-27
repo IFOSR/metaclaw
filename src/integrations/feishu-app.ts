@@ -1556,11 +1556,24 @@ function extractFeishuProgressStep(rawLine: string): string | null {
   }
 
   if (/^→\s+派发给\s+[^.。]+[.。]{3}$/.test(line)) {
+    return '→ 进入执行准备阶段';
+  }
+
+  if (line.startsWith('→ 路由决策：')) {
+    return line;
+  }
+
+  if (line.startsWith('→ 原因：')) {
     return line;
   }
 
   if (/^→\s+正在执行任务\s+#task_[^\s]+[.。]{3}$/.test(line)) {
     return line;
+  }
+
+  const executorStarted = line.match(/^[+·•]\s+#task_[^\s]+\s+已启动\s+(.+?)\s+执行器$/);
+  if (executorStarted) {
+    return `→ 已启动 ${executorStarted[1]} 执行器`;
   }
 
   if (/^✓\s+任务完成/.test(line)) {

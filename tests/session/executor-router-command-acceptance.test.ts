@@ -189,6 +189,10 @@ describe('executor router command acceptance', () => {
       durationMs: 50,
     });
     await submitPromise;
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('→ 路由决策：hermes-agent (auto_dispatch');
+    expect(output).toContain('→ 原因：');
+    expect(output).toContain('workflow_automation');
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;

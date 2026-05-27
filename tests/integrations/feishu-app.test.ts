@@ -476,10 +476,11 @@ describe('Feishu app helpers', () => {
       '**处理步骤**',
       '→ 任务 #task_test 已创建：能收到消息吗?',
       '【提取最近历史记录上下文】',
-      '→ 派发给 codex-cli...',
+      '→ 进入执行准备阶段',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
       '→ 正在执行任务 #task_test...',
+      '→ 已启动 codex-cli 执行器',
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '能收到。');
@@ -539,12 +540,13 @@ describe('Feishu app helpers', () => {
 
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', '**处理步骤**\n→ 任务 #task_stream 已创建：流式展示步骤');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '**处理步骤**\n【提取最近历史记录上下文】');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 派发给 codex-cli...');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 进入执行准备阶段');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(4, 'oc_chat', '**处理步骤**\n【构建执行上下文】');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(5, 'oc_chat', '**处理步骤**\n【执行上下文准备完成】');
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(6, 'oc_chat', '**处理步骤**\n→ 正在执行任务 #task_stream...');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(7, 'oc_chat', '**处理步骤**\n✓ 任务完成 (3.2s)');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(8, 'oc_chat', '最终答案');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(7, 'oc_chat', '**处理步骤**\n→ 已启动 codex-cli 执行器');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(8, 'oc_chat', '**处理步骤**\n✓ 任务完成 (3.2s)');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(9, 'oc_chat', '最终答案');
     expect(session.subscribe).toHaveBeenCalled();
   });
 
@@ -602,6 +604,7 @@ describe('Feishu app helpers', () => {
       '【提取最近历史记录上下文】',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
+      '→ 已启动 codex-cli 执行器',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', [
       '我刚才根据注入的历史上下文，回答了你“之前都做过什么任务”的问题，概括了几件事：',
@@ -667,6 +670,7 @@ describe('Feishu app helpers', () => {
       '**处理步骤**',
       '→ 任务 #task_full 已创建：请详细解释一下这个问题',
       '→ 正在执行任务 #task_full...',
+      '→ 已启动 codex-cli 执行器',
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', fullAnswer);
@@ -942,6 +946,7 @@ describe('Feishu app helpers', () => {
     expect(sentTexts[0]).toBe([
       '**处理步骤**',
       '→ 任务 #task_long 已创建：请完整输出长内容',
+      '→ 已启动 codex-cli 执行器',
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(sentTexts.slice(1).join('')).toBe(longAnswer);
@@ -1335,6 +1340,9 @@ describe('Feishu app helpers', () => {
       '→ 派发给 codex-cli...',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
+      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 原因：research_workflow / research',
+      '+ #task_OO0EG38SJo 已启动 hermes-agent 执行器',
       '→ 正在执行任务 #task_OO0EG38SJo...',
       '✓ 任务完成 (8.1s)',
       '最终答案',
@@ -1342,9 +1350,12 @@ describe('Feishu app helpers', () => {
       '**处理步骤**',
       '→ 任务 #task_OO0EG38SJo 已创建：今天早上都执行了什么任务',
       '【提取最近历史记录上下文】',
-      '→ 派发给 codex-cli...',
+      '→ 进入执行准备阶段',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
+      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 原因：research_workflow / research',
+      '→ 已启动 hermes-agent 执行器',
       '→ 正在执行任务 #task_OO0EG38SJo...',
       '✓ 任务完成 (8.1s)',
     ].join('\n'));
@@ -1364,7 +1375,22 @@ describe('Feishu app helpers', () => {
       '【提取最近历史记录上下文】',
       '→ 派发给 codex-cli...',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 派发给 codex-cli...',
+      '**处理步骤**\n→ 进入执行准备阶段',
+    ]);
+  });
+
+  it('streams executor routing details to Feishu so users see the real executor', () => {
+    const sent = new Set<string>();
+    expect(formatFeishuStreamingProgressReplies([
+      '→ 派发给 codex-cli...',
+      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 原因：research_workflow / research',
+      '+ #task_research 已启动 hermes-agent 执行器',
+    ], sent)).toEqual([
+      '**处理步骤**\n→ 进入执行准备阶段',
+      '**处理步骤**\n→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '**处理步骤**\n→ 原因：research_workflow / research',
+      '**处理步骤**\n→ 已启动 hermes-agent 执行器',
     ]);
   });
 
