@@ -59,6 +59,16 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitForExecutorCallCount(execute: ReturnType<typeof vi.fn>, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (execute.mock.calls.length >= count) {
+      return;
+    }
+    await flushUpdates();
+  }
+  throw new Error(`expected executor call count >= ${count}, got ${execute.mock.calls.length}`);
+}
+
 function createDeferredResult() {
   let resolve!: (value: ExecutorResult) => void;
   const promise = new Promise<ExecutorResult>(res => {
@@ -109,6 +119,10 @@ describe('App auto-resume after preemption', () => {
       }),
     };
     const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '明确工作任务',
+      }),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,
@@ -149,8 +163,7 @@ describe('App auto-resume after preemption', () => {
       exitCode: 0,
       durationMs: 400,
     });
-    await flushUpdates();
-    await flushUpdates();
+    await waitForExecutorCallCount(executor.execute as ReturnType<typeof vi.fn>, 3);
 
     expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0].task.title).toContain('主线研究任务');
     expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0].executionContextBundle.mode).toBe('resume-parked');
@@ -162,8 +175,7 @@ describe('App auto-resume after preemption', () => {
       exitCode: 0,
       durationMs: 500,
     });
-    await flushUpdates();
-    await flushUpdates();
+    await waitForExecutorCallCount(executor.execute as ReturnType<typeof vi.fn>, 4);
 
     expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[3][0].task.title).toContain('普通排队任务');
 

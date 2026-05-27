@@ -4,7 +4,7 @@ import type { TaskEngine } from './task-engine.js';
 import type { OrchestrationEngine } from './orchestration.js';
 
 const PREEMPT_DELTA = 5;
-const AUTO_RESUME_READY_REASON = '高优任务完成，恢复进入待调度队列';
+const AUTO_RESUME_READY_REASON = '挂起任务满足执行条件，恢复进入待调度队列';
 
 export interface SubmitResult {
   action: 'started' | 'queued' | 'preempted';
@@ -14,7 +14,6 @@ export interface SubmitResult {
 
 export interface SubmitOptions {
   reason: string;
-  priorityHint?: 'normal' | 'high' | 'urgent';
 }
 
 export interface DispatchContext {
@@ -30,13 +29,14 @@ export class SchedulerEngine {
     private orchestration: OrchestrationEngine,
     private executor: ExecutorAdapter,
     private onDispatch?: (taskId: string, context?: DispatchContext) => Promise<void> | void,
+    private classifyPrioritySignals?: (tasks: Task[]) => Promise<void> | void,
   ) {}
 
   async scheduleNext(): Promise<string | null> {
     const currentTask = this.getCurrentRunningTask();
     if (currentTask) return currentTask.id;
 
-    this.promoteAutoResumableParkedTasks();
+    await this.promoteAutoResumableParkedTasks();
 
     const next = this.getNextSchedulableTask();
     if (!next) return null;
@@ -46,8 +46,8 @@ export class SchedulerEngine {
   }
 
   async submit(taskId: string, input: string | SubmitOptions): Promise<SubmitResult> {
-    const submitOptions = typeof input === 'string' ? { reason: input, priorityHint: 'normal' as const } : input;
-    const { reason, priorityHint } = submitOptions;
+    const submitOptions = typeof input === 'string' ? { reason: input } : input;
+    const { reason } = submitOptions;
     const repo = this.taskEngine['taskRepo'];
     const task = repo.findById(taskId);
     if (!task) {
@@ -69,7 +69,7 @@ export class SchedulerEngine {
       return { action: 'queued', taskId };
     }
 
-    if (this.shouldPreempt(currentTask, candidateTask, reason, priorityHint)) {
+    if (this.shouldPreempt(currentTask, candidateTask)) {
       await this.preemptWith(taskId, reason);
       return { action: 'preempted', taskId, preemptedTaskId: currentTask.id };
     }
@@ -104,6 +104,7 @@ export class SchedulerEngine {
     const repo = this.taskEngine['taskRepo'];
     return {
       runningTaskId: this.getCurrentRunningTask()?.id ?? null,
+      runningExecutorName: null,
       readyTaskIds: repo.findByStatus('ready').map(task => task.id),
       blockedTaskIds: repo.findByStatus('blocked').map(task => task.id),
       parkedTaskIds: repo.findByStatus('parked').map(task => task.id),
@@ -156,14 +157,12 @@ export class SchedulerEngine {
   private shouldPreempt(
     currentTask: Task,
     candidateTask: Task,
-    reason: string,
-    priorityHint: SubmitOptions['priorityHint'],
   ): boolean {
     const currentScore = this.orchestration.evaluateTask(currentTask).score.total;
     const candidateScore = this.orchestration.evaluateTask(candidateTask).score.total;
-    const hasManualPriorityHint = priorityHint === 'urgent' || /紧急|优先|立刻|马上/.test(reason);
+    const hasExplicitSemanticPriority = candidateTask.prioritySignals.semanticPriority === 'urgent';
 
-    return hasManualPriorityHint || candidateScore >= currentScore + PREEMPT_DELTA;
+    return hasExplicitSemanticPriority || candidateScore >= currentScore + PREEMPT_DELTA;
   }
 
   private getNextSchedulableTask():
@@ -189,11 +188,15 @@ export class SchedulerEngine {
     };
   }
 
-  private promoteAutoResumableParkedTasks(): void {
+  private async promoteAutoResumableParkedTasks(): Promise<void> {
     const repo = this.taskEngine['taskRepo'];
     const candidates = repo
       .findByStatus('parked')
       .filter(task => this.isAutoResumableParkedTask(task));
+
+    if (this.classifyPrioritySignals) {
+      await Promise.resolve(this.classifyPrioritySignals(candidates));
+    }
 
     for (const task of candidates) {
       this.taskEngine.transition(task.id, 'ready');
@@ -205,12 +208,12 @@ export class SchedulerEngine {
   }
 
   private isAutoResumableParkedTask(task: Task): boolean {
-    return /抢占/.test(task.lastInterruptionReason);
+    return task.prioritySignals.isReady
+      && task.dependencies.every(dependency => dependency.status === 'resolved');
   }
 
   private isAutoResumableReadyTask(task: Task): boolean {
     return task.status === 'ready'
-      && /抢占/.test(task.lastInterruptionReason)
       && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
   }
 }

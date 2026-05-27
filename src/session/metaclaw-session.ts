@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { resolve } from 'path';
 import { MemoryApplicabilityAction } from '../core/types.js';
 import type {
   Config,
@@ -163,6 +164,7 @@ export class MetaclawSession {
   private focusContext: FocusContext | null = null;
   private runtimeState: RuntimeState = {
     runningTaskId: null,
+    runningExecutorName: null,
     readyTaskIds: [],
     blockedTaskIds: [],
     parkedTaskIds: [],
@@ -180,6 +182,7 @@ export class MetaclawSession {
   private queuedExecution = new Map<string, QueuedExecutionRequest>();
   private activeDispatches = new Set<Promise<void>>();
   private lastProgressLineByTask = new Map<string, string>();
+  private runningExecutorNameByTask = new Map<string, string>();
   private lastReminderAt: number | null = null;
   private lastReminderFingerprint: string | null = null;
   private readonly resumeContextBuilder: ResumeContextBuilder;
@@ -202,6 +205,7 @@ export class MetaclawSession {
       deps.orchestration,
       deps.executor,
       async (taskId: string, context?: DispatchContext) => this.dispatchTask(taskId, context),
+      async (tasks: Task[]) => this.classifyMissingSemanticPriorities(tasks),
     );
   }
 
@@ -543,6 +547,9 @@ export class MetaclawSession {
       selectedExecutor: decision.selectedExecutor,
       action: decision.action,
       candidates: decision.candidates,
+      primaryIntent: decision.primaryIntent,
+      matchedBoundary: decision.matchedBoundary,
+      rejected: decision.rejected,
       reason: decision.reason,
       confirmedByUser: false,
       result: null,
@@ -944,7 +951,6 @@ export class MetaclawSession {
       contextTaskId: completedTask.id,
       executionMode: 'follow-up',
       schedulingReason: '基于上次已完成任务继续',
-      priorityHint: parsePriorityHint(pending.originalInput),
     });
   }
 
@@ -977,7 +983,6 @@ export class MetaclawSession {
       contextTaskId: plan.contextTaskId,
       executionMode: unfinishedTask.status === 'parked' ? 'resume-parked' : 'fresh',
       schedulingReason: unfinishedTask.status === 'parked' ? '恢复最近未完成任务' : '继续最近未完成任务',
-      priorityHint: parsePriorityHint(pending.originalInput),
     });
   }
 
@@ -1278,7 +1283,13 @@ export class MetaclawSession {
   }
 
   private refreshRuntimeState(): void {
-    this.runtimeState = this.scheduler.getRuntimeState();
+    const schedulerState = this.scheduler.getRuntimeState();
+    this.runtimeState = {
+      ...schedulerState,
+      runningExecutorName: schedulerState.runningTaskId
+        ? this.runningExecutorNameByTask.get(schedulerState.runningTaskId) ?? null
+        : null,
+    };
     this.notify();
   }
 
@@ -1345,7 +1356,6 @@ export class MetaclawSession {
         contextTaskId: plan.contextTaskId,
         executionMode: targetTask.status === 'parked' ? 'resume-parked' : 'fresh',
         schedulingReason: targetTask.status === 'parked' ? '恢复上一个任务' : '继续上一个任务',
-        priorityHint: parsePriorityHint(userInput),
       });
       return true;
     }
@@ -1558,7 +1568,6 @@ export class MetaclawSession {
             contextTaskId: referencedTask.id,
             executionMode: 'resume-blocked',
             schedulingReason: '网络已恢复，继续之前阻塞任务',
-            priorityHint: parsePriorityHint(userInput),
           });
           return;
         }
@@ -1574,6 +1583,7 @@ export class MetaclawSession {
         }
         const followUpTask = this.deps.taskEngine.create(plan.newTaskInput);
         taskId = followUpTask.id;
+        await this.applySemanticPriority(taskId, userInput);
         this.setCurrentTaskId(taskId);
         this.setFocusContext({ kind: 'task', taskId });
         this.appendOutput(
@@ -1585,7 +1595,6 @@ export class MetaclawSession {
           contextTaskId: plan.contextTaskId,
           executionMode: 'follow-up',
           schedulingReason: '跟进任务恢复',
-          priorityHint: parsePriorityHint(userInput),
         });
         return;
       }
@@ -1600,12 +1609,12 @@ export class MetaclawSession {
         return;
       }
       const executionMode = referencedTask.status === 'parked' ? 'resume-parked' : 'fresh';
+      await this.applySemanticPriority(taskId, userInput);
       await this.prepareTaskExecution(taskId, {
         userPrompt: userInput,
         contextTaskId: taskId,
         executionMode,
         schedulingReason: referencedTask.status === 'parked' ? '恢复已挂起任务' : '用户提交',
-        priorityHint: parsePriorityHint(userInput),
       });
       return;
     }
@@ -1625,6 +1634,7 @@ export class MetaclawSession {
       resources: inlineResources.map(resource => resource.resolvedPath),
     });
     taskId = task.id;
+    await this.applySemanticPriority(taskId, userInput);
     this.setCurrentTaskId(taskId);
     this.setFocusContext({ kind: 'task', taskId });
     if (routeDecisionNote) {
@@ -1642,7 +1652,6 @@ export class MetaclawSession {
       schedulingReason: conversationDerived
         ? '按当前对话创建跟进任务'
         : buildSchedulingReason(userInput),
-      priorityHint: parsePriorityHint(userInput),
       includeRecentConversationContext: conversationDerived,
     });
   }
@@ -1660,6 +1669,42 @@ export class MetaclawSession {
       this.getLlmTimeoutMs(),
       { route: 'unknown', reason: 'LLM route 超时，fallback' },
     );
+  }
+
+  private async applySemanticPriority(taskId: string, userInput: string): Promise<void> {
+    const task = this.deps.taskEngine['taskRepo'].findById(taskId);
+    if (!task || typeof this.deps.llmBridge.resolveTaskPriority !== 'function') {
+      return;
+    }
+
+    const priority = await this.awaitWithTimeout(
+      Promise.resolve(this.deps.llmBridge.resolveTaskPriority(userInput)),
+      this.getLlmTimeoutMs(),
+      { priority: parsePriorityHint(userInput), reason: 'LLM priority 超时，fallback' },
+    );
+
+    this.deps.taskEngine['taskRepo'].update(taskId, {
+      prioritySignals: {
+        ...task.prioritySignals,
+        semanticPriority: priority.priority,
+        semanticPriorityReason: priority.reason,
+      },
+    });
+  }
+
+  private async classifyMissingSemanticPriorities(tasks: Task[]): Promise<void> {
+    if (typeof this.deps.llmBridge.resolveTaskPriority !== 'function') {
+      return;
+    }
+
+    for (const task of tasks) {
+      const current = this.deps.taskEngine['taskRepo'].findById(task.id);
+      if (!current || current.prioritySignals.semanticPriority) {
+        continue;
+      }
+
+      await this.applySemanticPriority(current.id, current.goal || current.title);
+    }
   }
 
   private async resolveIntentDecision(
@@ -1917,7 +1962,6 @@ export class MetaclawSession {
     this.queuedExecution.set(taskId, request);
     const result = await this.scheduler.submit(taskId, {
       reason: request.schedulingReason || '新任务提交',
-      priorityHint: request.priorityHint,
     });
     this.refreshRuntimeState();
 
@@ -1993,6 +2037,7 @@ export class MetaclawSession {
   private async executeTask(taskId: string, request: QueuedExecutionRequest): Promise<void> {
     const { userPrompt, contextTaskId, executionMode, schedulingReason, newlyProvidedResources } = request;
     const finishExecution = async (lines: string[]) => {
+      this.runningExecutorNameByTask.delete(taskId);
       this.refreshRuntimeState();
       this.appendOutput(...lines);
       await this.scheduler.scheduleNext();
@@ -2063,8 +2108,10 @@ export class MetaclawSession {
 
     this.refreshRuntimeState();
     const routedExecutor = this.resolveExecutorForTask(taskId, userPrompt);
+    this.runningExecutorNameByTask.set(taskId, routedExecutor.executor.name);
     this.appendOutput(
       `→ 路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+      `→ 原因：${routedExecutor.decision.primaryIntent} / ${routedExecutor.decision.matchedBoundary.join(' + ') || routedExecutor.decision.reason}`,
     );
     if (routedExecutor.fallbackReason) {
       this.appendOutput(`→ ${routedExecutor.fallbackReason}`);
@@ -2081,6 +2128,7 @@ export class MetaclawSession {
       }
 
       if (currentTask.status !== 'running') {
+        this.runningExecutorNameByTask.delete(taskId);
         this.refreshRuntimeState();
         return;
       }
@@ -2127,6 +2175,7 @@ export class MetaclawSession {
 
       const latestTask = this.deps.taskEngine['taskRepo'].findById(taskId);
       if (!latestTask || latestTask.status !== 'running') {
+        this.runningExecutorNameByTask.delete(taskId);
         this.refreshRuntimeState();
         return;
       }
@@ -2146,9 +2195,16 @@ export class MetaclawSession {
       if (result.success) {
         new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'success');
         const workspaceContext = executionContextBundle.workspaceContext;
-        const artifactPaths = this.collectArtifactPaths(
+        let artifactPaths = this.collectArtifactPaths(
           result.output,
           workspaceContext?.targetPaths ?? [],
+        );
+        artifactPaths = this.ensureFeishuDocumentArtifact(
+          result.output,
+          artifactPaths,
+          workspaceContext,
+          executionContextBundle.memoryContext.resolvedPreferences,
+          userPrompt,
         );
         const taskSummary = this.buildTaskResultSummary(result.output, artifactPaths, workspaceContext);
         this.deps.taskEngine['taskRepo'].update(taskId, {
@@ -2277,6 +2333,7 @@ export class MetaclawSession {
       }
 
       this.lastProgressLineByTask.delete(taskId);
+      this.runningExecutorNameByTask.delete(taskId);
       this.refreshRuntimeState();
     }
   }
@@ -2328,6 +2385,34 @@ export class MetaclawSession {
       .filter(path => existsSync(path));
 
     return Array.from(new Set(normalized));
+  }
+
+  private ensureFeishuDocumentArtifact(
+    output: string,
+    artifactPaths: string[],
+    workspaceContext: { allowFilesystem: boolean; targetPaths: string[] } | undefined,
+    preferences: ResolvedPreference[],
+    userPrompt: string,
+  ): string[] {
+    if (!workspaceContext?.allowFilesystem || artifactPaths.some(path => /\.(md|markdown)$/i.test(path))) {
+      return artifactPaths;
+    }
+
+    const needsFeishuDocumentDelivery = [userPrompt, ...preferences.map(preference => preference.content)]
+      .some(text => /(飞书云文档|飞书文档|云文档|在线预览)/u.test(text));
+    if (!needsFeishuDocumentDelivery || !output.trim()) {
+      return artifactPaths;
+    }
+
+    const targetDirectory = workspaceContext.targetPaths[0];
+    if (!targetDirectory) {
+      return artifactPaths;
+    }
+
+    mkdirSync(targetDirectory, { recursive: true });
+    const artifactPath = resolve(targetDirectory, 'feishu-document.md');
+    writeFileSync(artifactPath, output.trimEnd() + '\n', 'utf-8');
+    return Array.from(new Set([...artifactPaths, artifactPath]));
   }
 
   private ensureWorkspaceTargets(targetPaths: string[]): void {
@@ -2481,31 +2566,14 @@ export class MetaclawSession {
   }
 
   private resumeUnfinishedTasksOnStartup(recoveredRunningTasks: Task[]): void {
-    const startupCandidates = this.buildStartupResumeCandidates(recoveredRunningTasks);
-    if (startupCandidates.length === 0) {
+    if (this.buildStartupResumeCandidates(recoveredRunningTasks).length === 0) {
       return;
     }
 
     const startupPromise = (async () => {
-      for (const task of startupCandidates) {
-        const latestTask = this.deps.taskEngine['taskRepo'].findById(task.id);
-        if (!latestTask || !['created', 'ready', 'parked'].includes(latestTask.status)) {
-          continue;
-        }
-
-        this.appendOutput(
-          latestTask.status === 'parked'
-            ? `→ 启动后继续未完成任务 #${latestTask.id}`
-            : `→ 启动后恢复待执行任务 #${latestTask.id}`,
-        );
-        await this.submitScheduledTask(latestTask.id, {
-          userPrompt: latestTask.goal,
-          contextTaskId: latestTask.id,
-          executionMode: latestTask.status === 'parked' ? 'resume-parked' : 'fresh',
-          schedulingReason: latestTask.status === 'parked'
-            ? 'Metaclaw 重启后自动恢复未完成任务'
-            : 'Metaclaw 重启后继续待执行任务',
-        });
+      const taskId = await this.scheduler.scheduleNext();
+      if (taskId) {
+        this.appendStartupResumeLine(taskId);
       }
     })();
 
@@ -2539,6 +2607,19 @@ export class MetaclawSession {
 
       return right.updatedAt.localeCompare(left.updatedAt);
     });
+  }
+
+  private appendStartupResumeLine(taskId: string): void {
+    const task = this.deps.taskEngine['taskRepo'].findById(taskId);
+    if (!task) {
+      return;
+    }
+
+    this.appendOutput(
+      task.snapshots.length > 0 || task.lastInterruptionReason
+        ? `→ 启动后继续未完成任务 #${task.id}`
+        : `→ 启动后恢复待执行任务 #${task.id}`,
+    );
   }
 }
 

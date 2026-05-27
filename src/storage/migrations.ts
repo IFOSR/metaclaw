@@ -388,6 +388,9 @@ const MIGRATIONS: Migration[] = [
         output_types_json TEXT NOT NULL DEFAULT '[]',
         strengths_json TEXT NOT NULL DEFAULT '[]',
         weaknesses_json TEXT NOT NULL DEFAULT '[]',
+        primary_use_cases_json TEXT NOT NULL DEFAULT '[]',
+        avoid_use_cases_json TEXT NOT NULL DEFAULT '[]',
+        intent_affinity_json TEXT NOT NULL DEFAULT '{}',
         risk_level TEXT NOT NULL DEFAULT 'medium',
         availability TEXT NOT NULL DEFAULT 'available',
         historical_success REAL NOT NULL DEFAULT 0.5,
@@ -402,6 +405,9 @@ const MIGRATIONS: Migration[] = [
         selected_executor TEXT NOT NULL,
         action TEXT NOT NULL,
         candidates_json TEXT NOT NULL DEFAULT '[]',
+        primary_intent TEXT NOT NULL DEFAULT 'general',
+        matched_boundary_json TEXT NOT NULL DEFAULT '[]',
+        rejected_json TEXT NOT NULL DEFAULT '[]',
         reason TEXT NOT NULL DEFAULT '',
         confirmed_by_user INTEGER NOT NULL DEFAULT 0,
         result TEXT,
@@ -453,4 +459,11 @@ export function runMigrations(db: Database.Database): void {
       db.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (?)').run(migration.version);
     }
   }
+
+  addColumnIfMissing(db, 'executor_profiles', 'primary_use_cases_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'executor_profiles', 'avoid_use_cases_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'executor_profiles', 'intent_affinity_json', "TEXT NOT NULL DEFAULT '{}'");
+  addColumnIfMissing(db, 'executor_route_events', 'primary_intent', "TEXT NOT NULL DEFAULT 'general'");
+  addColumnIfMissing(db, 'executor_route_events', 'matched_boundary_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'executor_route_events', 'rejected_json', "TEXT NOT NULL DEFAULT '[]'");
 }

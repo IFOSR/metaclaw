@@ -29,16 +29,17 @@ describe('seedDefaultExecutorProfiles', () => {
 
     seedDefaultExecutorProfiles(repo, {
       defaultExecutorName: 'codex-cli',
-      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw']),
+      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui']),
     });
     seedDefaultExecutorProfiles(repo, {
       defaultExecutorName: 'codex-cli',
-      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw']),
+      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui']),
     });
 
     const profiles = repo.findAll();
     expect(profiles.map(profile => profile.name).sort()).toEqual([
       'codex-cli',
+      'deepseek-tui',
       'hermes-agent',
     ]);
     expect(profiles.some(profile => profile.name === 'openclaw')).toBe(false);
@@ -51,6 +52,11 @@ describe('seedDefaultExecutorProfiles', () => {
     expect(profiles.find(profile => profile.name === 'hermes-agent')).toEqual(expect.objectContaining({
       domains: expect.arrayContaining(['personal_assistant', 'research', 'automation', 'messaging', 'memory']),
       capabilities: expect.arrayContaining(['persistent_memory', 'multi_tool', 'skill_runtime', 'messaging_gateway']),
+    }));
+    expect(profiles.find(profile => profile.name === 'deepseek-tui')).toEqual(expect.objectContaining({
+      availability: 'available',
+      domains: expect.arrayContaining(['software', 'repo', 'reasoning', 'algorithm', 'chinese_analysis']),
+      capabilities: expect.arrayContaining(['coding', 'code_review', 'deepseek_reasoning', 'agentic_tui']),
     }));
   });
 });

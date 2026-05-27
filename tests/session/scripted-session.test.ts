@@ -336,4 +336,50 @@ describe('scripted session', () => {
     expect(result.output.join('\n')).not.toContain('<!DOCTYPE html>');
     expect(result.output.join('\n')).not.toContain('<html><body>');
   });
+
+  it('writes a fallback Markdown artifact for Feishu document delivery when executor only returns text', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '# 调研报告\n\n正文内容。不要误报缺少飞书云文档 API。',
+        exitCode: 0,
+        durationMs: 200,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '明确工作任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const result = await runScriptedSession({
+      inputs: [
+        '请产出飞书云文档和在线预览',
+      ],
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_scripted_feishu_doc_fallback',
+      contextRecaller,
+      llmBridge,
+    });
+
+    const doneTask = taskEngine.list().find(task => task.status === 'done');
+    const fallbackArtifact = resolve(process.cwd(), 'metaclaw-tasks', doneTask!.id, 'feishu-document.md');
+    expect(doneTask?.artifacts).toContain(fallbackArtifact);
+    expect(result.output.join('\n')).toContain('已记录 1 个任务产物');
+  });
 });

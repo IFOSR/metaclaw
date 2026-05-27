@@ -113,6 +113,29 @@ describe('LlmBridge', () => {
     });
   });
 
+  describe('resolveTaskPriority', () => {
+    it('asks for semantic priority instead of keyword-only matching', () => {
+      const bridge = new LlmBridge('claude');
+      const prompt = (bridge as any).buildTaskPriorityPrompt('这个客户今晚要看，先处理一下 harness 对比');
+
+      expect(prompt).toContain('必须做语义判断，不要只看关键词');
+      expect(prompt).toContain('插队');
+      expect(prompt).toContain('顺序执行即可');
+    });
+
+    it('parses semantic priority json', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parseTaskPriorityResult(
+        '{"priority":"urgent","reason":"用户语义上要求先处理临时任务"}'
+      );
+
+      expect(result).toEqual({
+        priority: 'urgent',
+        reason: '用户语义上要求先处理临时任务',
+      });
+    });
+  });
+
   describe('rankInteractions', () => {
     it('应构造包含候选列表的 prompt', () => {
       const bridge = new LlmBridge('claude');

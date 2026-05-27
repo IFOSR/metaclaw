@@ -28,6 +28,7 @@ const EMPTY_SNAPSHOT: SessionSnapshot = {
   currentTaskId: null,
   runtimeState: {
     runningTaskId: null,
+    runningExecutorName: null,
     readyTaskIds: [],
     blockedTaskIds: [],
     parkedTaskIds: [],
@@ -207,13 +208,13 @@ function hasPendingConfirmation(lines: string[]): boolean {
     || recentOutput.includes('输入“取消执行”放弃');
 }
 
-function getComposerStatus(snapshot: SessionSnapshot, lines: string[], executorName: string): string {
+function getComposerStatus(snapshot: SessionSnapshot, lines: string[], defaultExecutorName: string): string {
   if (hasPendingConfirmation(lines)) {
     return 'waiting_confirm';
   }
 
   if (snapshot.runtimeState.runningTaskId) {
-    return `running ${executorName}`;
+    return `running ${snapshot.runtimeState.runningExecutorName ?? defaultExecutorName}`;
   }
 
   if (snapshot.runtimeState.blockedTaskIds.length > 0) {

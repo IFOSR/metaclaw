@@ -27,6 +27,11 @@ export interface RouteResult {
   reason: string;
 }
 
+export interface TaskPriorityResult {
+  priority: 'normal' | 'high' | 'urgent';
+  reason: string;
+}
+
 export interface PreferenceRecallSummary {
   id: string;
   scope: string;
@@ -121,6 +126,15 @@ export class LlmBridge {
     }
   }
 
+  async resolveTaskPriority(userInput: string): Promise<TaskPriorityResult> {
+    try {
+      const raw = await this.query(this.buildTaskPriorityPrompt(userInput));
+      return this.parseTaskPriorityResult(raw);
+    } catch {
+      return this.fallbackTaskPriorityResult(userInput);
+    }
+  }
+
   async rankInteractions(userInput: string, candidates: InteractionSummary[]): Promise<string[]> {
     if (candidates.length === 0) return [];
 
@@ -212,6 +226,20 @@ export class LlmBridge {
       taskList,
       '',
       '返回格式：{"route":"conversation"|"task_control"|"durable_task","reason":"简短原因"}',
+    ].join('\n');
+  }
+
+  private buildTaskPriorityPrompt(userInput: string): string {
+    return [
+      '判断这个任务的调度优先级。必须做语义判断，不要只看关键词。',
+      'urgent: 用户语义上是在插队、临时紧急处理、要求打断当前队列、马上/立即处理，或任务本身有明显时间压力。',
+      'high: 比普通任务更重要或更希望优先，但不一定要插队打断。',
+      'normal: 顺序执行即可，没有紧急或优先语义。',
+      '只返回 JSON，不要其他内容。',
+      '',
+      `用户输入：${userInput}`,
+      '',
+      '返回格式：{"priority":"normal"|"high"|"urgent","reason":"简短语义依据"}',
     ].join('\n');
   }
 
@@ -350,6 +378,28 @@ export class LlmBridge {
     } catch {}
 
     return { route: 'unknown', reason: 'route 解析失败，fallback' };
+  }
+
+  private parseTaskPriorityResult(raw: string): TaskPriorityResult {
+    try {
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed.priority === 'normal' || parsed.priority === 'high' || parsed.priority === 'urgent') {
+        return {
+          priority: parsed.priority,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : 'LLM 语义优先级判断',
+        };
+      }
+    } catch {}
+
+    return { priority: 'normal', reason: 'priority 解析失败，fallback normal' };
+  }
+
+  private fallbackTaskPriorityResult(userInput: string): TaskPriorityResult {
+    if (/紧急|急|插入|插队|优先|马上|立刻|立即|urgent|asap/i.test(userInput)) {
+      return { priority: 'urgent', reason: 'LLM 不可用，规则兜底识别到紧急/插队表达' };
+    }
+    return { priority: 'normal', reason: 'LLM 不可用，未识别到明确优先级信号' };
   }
 
   private normalizeIntentResult(result: IntentResult, candidates: TaskSummary[]): IntentResult {

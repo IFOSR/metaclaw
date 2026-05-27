@@ -11,7 +11,7 @@ import { filterDurableTasks } from './task-routing.js';
 import { GuidancePolicyEngine } from './guidance-policy-engine.js';
 import { TaskSignalService } from './task-signal-service.js';
 
-const AUTO_RESUME_READY_REASON = '高优任务完成，恢复进入待调度队列';
+const AUTO_RESUME_READY_REASON = '挂起任务满足执行条件，恢复进入待调度队列';
 
 const WEIGHTS = {
   urgency: 3,
@@ -192,6 +192,13 @@ export class OrchestrationEngine {
   }
 
   private scoreUrgency(task: Task): number {
+    if (task.prioritySignals.semanticPriority === 'urgent') {
+      return 8;
+    }
+    if (task.prioritySignals.semanticPriority === 'high') {
+      return 5;
+    }
+
     if (!task.prioritySignals.dueAt) return 0;
     const hoursLeft = dayjs(task.prioritySignals.dueAt).diff(dayjs(), 'hour');
     if (hoursLeft < 0) return 10;
@@ -231,14 +238,16 @@ export class OrchestrationEngine {
   private generateReasons(task: Task, score: PriorityScore): string[] {
     const reasons: string[] = [];
     if (this.isRecoveredPreemptedTask(task)) {
-      reasons.push('刚被高优任务打断，恢复连续性收益最高');
+      reasons.push('挂起任务已满足执行条件，恢复连续性收益最高');
     }
     if (score.continuityBenefit >= 7)
       reasons.push(`已完成 ${Math.round(task.prioritySignals.progressRatio * 100)}%，继续成本最低`);
     if (score.readiness >= 8)
       reasons.push('所有输入材料已齐全');
     if (score.urgency >= 7)
-      reasons.push('截止时间临近');
+      reasons.push(task.prioritySignals.semanticPriorityReason
+        ? `语义优先级：${task.prioritySignals.semanticPriorityReason}`
+        : '截止时间临近');
     if (score.downstreamImpact >= 8)
       reasons.push('阻塞了其他任务');
     if (score.staleness >= 5) {
@@ -250,7 +259,6 @@ export class OrchestrationEngine {
 
   private isRecoveredPreemptedTask(task: Task): boolean {
     return task.status === 'ready'
-      && /抢占/.test(task.lastInterruptionReason)
       && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
   }
 

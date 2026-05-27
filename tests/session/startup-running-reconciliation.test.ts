@@ -82,6 +82,7 @@ describe('session startup running-task reconciliation', () => {
       sessionId: 'sess_startup_reconcile',
       contextRecaller,
       llmBridge,
+      executorFactory: () => executor,
     });
 
     session.initialize();

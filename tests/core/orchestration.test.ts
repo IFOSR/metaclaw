@@ -82,8 +82,8 @@ describe('OrchestrationEngine', () => {
     expect(suggestion!.taskId).toBe(t1.id);
   });
 
-  it('prioritizes a preempted-and-resumed ready task ahead of a later normal ready task', () => {
-    const resumedTask = taskEngine.create({ title: '被抢占后恢复的任务', goal: '继续主线任务' });
+  it('prioritizes an auto-resumed ready task ahead of a later normal ready task', () => {
+    const resumedTask = taskEngine.create({ title: '自动恢复的挂起任务', goal: '继续主线任务' });
     taskEngine['taskRepo'].update(resumedTask.id, {
       prioritySignals: {
         dueAt: null,
@@ -92,8 +92,8 @@ describe('OrchestrationEngine', () => {
         blocksOthers: false,
         idleHours: 0,
       },
-      lastInterruptionReason: '被更高优先级任务抢占：插入紧急任务',
-      lastSchedulingReason: '高优任务完成，恢复进入待调度队列',
+      lastInterruptionReason: '等待恢复',
+      lastSchedulingReason: '挂起任务满足执行条件，恢复进入待调度队列',
     });
     taskEngine.transition(resumedTask.id, 'ready');
 
@@ -112,6 +112,46 @@ describe('OrchestrationEngine', () => {
     const prioritized = orchestration.getPrioritizedTasks();
 
     expect(prioritized[0]?.task.id).toBe(resumedTask.id);
-    expect(prioritized[0]?.reasons).toContain('刚被高优任务打断，恢复连续性收益最高');
+    expect(prioritized[0]?.reasons).toContain('挂起任务已满足执行条件，恢复连续性收益最高');
+  });
+
+  it('prioritizes semantically urgent tasks ahead of other auto-resumed parked tasks', () => {
+    const normalParked = taskEngine.create({ title: '中国谁做 harness 做的最好？', goal: '调研中国 harness 项目' });
+    taskEngine['taskRepo'].update(normalParked.id, {
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0.1,
+        blocksOthers: false,
+        idleHours: 0,
+        semanticPriority: 'normal',
+        semanticPriorityReason: '顺序执行即可',
+      },
+      lastSchedulingReason: '挂起任务满足执行条件，恢复进入待调度队列',
+    });
+    taskEngine.transition(normalParked.id, 'ready');
+
+    const urgentInserted = taskEngine.create({
+      title: '插入一个紧急任务啊，美国有没有 harness 做的比较好的项目？',
+      goal: '插入一个紧急任务啊，美国有没有 harness 做的比较好的项目？',
+    });
+    taskEngine['taskRepo'].update(urgentInserted.id, {
+      prioritySignals: {
+        dueAt: null,
+        isReady: true,
+        progressRatio: 0.1,
+        blocksOthers: false,
+        idleHours: 0,
+        semanticPriority: 'urgent',
+        semanticPriorityReason: '用户语义上要求插队处理临时紧急任务',
+      },
+      lastSchedulingReason: '挂起任务满足执行条件，恢复进入待调度队列',
+    });
+    taskEngine.transition(urgentInserted.id, 'ready');
+
+    const prioritized = orchestration.getPrioritizedTasks();
+
+    expect(prioritized[0]?.task.id).toBe(urgentInserted.id);
+    expect(prioritized[0]?.reasons).toContain('语义优先级：用户语义上要求插队处理临时紧急任务');
   });
 });

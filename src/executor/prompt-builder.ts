@@ -25,12 +25,24 @@ function renderReferenceRelevanceReason(userInput: string): string {
   return `历史用户意图提到“${renderTurnOutput(normalizedInput, 80)}”，只可作为相似任务参考`;
 }
 
+function buildSystemBoundary(allowFilesystem: boolean): string {
+  const localBoundary = allowFilesystem
+    ? '可以访问当前项目工作目录，但仅限完成本次明确要求的文件写入任务。'
+    : '不要读取或访问本地文件系统和工作目录。';
+  return [
+    '[系统边界] 你是 Metaclaw 调度的执行器。',
+    '优先基于以下注入的上下文理解任务边界。',
+    localBoundary,
+    '如果用户询问最新版本、最近更新、发布日期、价格、新闻、公告、release notes、GitHub commit 或其他时效性事实，默认需要联网搜索或访问官方/可信来源核验；不要仅因注入上下文缺少信息就拒答。',
+    '如果无法联网或缺少访问权限，请明确说明限制，并给出需要用户授权的下一步。',
+    '使用与用户相同的语言回复。',
+  ].join('');
+}
+
 export function buildExecutorContextPrompt(input: ExecutorInput): string {
   if (input.executionContextBundle) {
     const bundle = input.executionContextBundle;
-    const systemBoundary = bundle.workspaceContext?.allowFilesystem
-      ? `[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答。可以访问当前项目工作目录，但仅限完成本次明确要求的文件写入任务。使用与用户相同的语言回复。`
-      : `[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。`;
+    const systemBoundary = buildSystemBoundary(Boolean(bundle.workspaceContext?.allowFilesystem));
     const lines = [
       '[Metaclaw 执行上下文]',
       systemBoundary,
@@ -190,7 +202,7 @@ export function buildExecutorContextPrompt(input: ExecutorInput): string {
 
   const lines = [
     '[Metaclaw 上下文注入]',
-    '[系统边界] 你是 Metaclaw 调度的执行器。只基于以下注入的上下文回答，不要读取或访问本地文件系统和工作目录。使用与用户相同的语言回复。',
+    buildSystemBoundary(false),
     '',
     `任务：${input.task.title}`,
     `目标：${input.task.goal}`,

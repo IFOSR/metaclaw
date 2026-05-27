@@ -536,25 +536,36 @@ export async function handleFeishuMessageEvent(
           })
       );
     };
+    let progressTargetTaskId: string | null = null;
     let unsubscribe: (() => void) | undefined;
     unsubscribe = deps.session.subscribe?.((snapshot) => {
       const newLines = snapshot.output.slice(observedOutputLength);
       observedOutputLength = snapshot.output.length;
-      for (const progressOutput of formatFeishuStreamingProgressReplies(newLines, sentProgressSteps)) {
+      const allMessageLines = snapshot.output.slice(before);
+      progressTargetTaskId = progressTargetTaskId ?? extractFeishuReplyTargetTaskId(allMessageLines);
+      const progressLines = progressTargetTaskId
+        ? filterFeishuOutputLinesForTask(allMessageLines, progressTargetTaskId)
+        : newLines;
+      for (const progressOutput of formatFeishuStreamingProgressReplies(progressLines, sentProgressSteps)) {
         enqueueProgress(progressOutput);
       }
     });
+    let outputLines: string[];
     try {
-      await deps.session.submit(text, { awaitAsyncWork: true });
+      const submitPromise = deps.session.submit(text, { awaitAsyncWork: false });
+      outputLines = await waitForFeishuReplyOutputLines(deps.session, before, submitPromise);
     } finally {
       unsubscribe?.();
     }
-    const outputLines = deps.session.getSnapshot().output.slice(before);
+    const targetTaskId = extractFeishuReplyTargetTaskId(outputLines);
+    const replyOutputLines = targetTaskId
+      ? filterFeishuOutputLinesForTask(outputLines, targetTaskId)
+      : outputLines;
     const progressOutput = deps.session.subscribe
       ? ''
-      : formatFeishuProgressReply(outputLines);
-    const output = formatFeishuReply(outputLines) || formatFeishuPendingReply(outputLines);
-    const reply = appendMarkdownPreviewLinks(output, outputLines, deps.markdownPreview);
+      : formatFeishuProgressReply(replyOutputLines);
+    const output = formatFeishuReply(replyOutputLines) || formatFeishuPendingReply(replyOutputLines);
+    const reply = appendMarkdownPreviewLinks(output, replyOutputLines, deps.markdownPreview);
     if (!reply) {
       return true;
     }
@@ -563,10 +574,16 @@ export async function handleFeishuMessageEvent(
         enqueueProgress(progressOutput);
       }
       await progressSendQueue;
-      for (const chunk of splitForFeishu(reply)) {
-        await deps.client.sendMarkdownCardToChat(chatId, chunk);
+      const chunks = splitForFeishu(reply);
+      const suppressFinalReply = deps.session.subscribe
+        && chunks.length === 1
+        && sentProgressSteps.has(chunks[0] ?? '');
+      if (!suppressFinalReply) {
+        for (const chunk of chunks) {
+          await deps.client.sendMarkdownCardToChat(chatId, chunk);
+        }
       }
-      await sendArtifactFilesToFeishu(chatId, outputLines, deps);
+      await sendArtifactFilesToFeishu(chatId, replyOutputLines, deps);
     } catch (error) {
       deps.session.appendSystemMessage(`⚠️ 飞书消息回发失败: ${(error as Error).message}`);
     }
@@ -1044,6 +1061,11 @@ export function parseFeishuTextContent(content: unknown): string | null {
 }
 
 export function formatFeishuReply(outputLines: string[]): string {
+  const appendedResultOutput = extractAppendedTaskResultOutput(outputLines);
+  if (appendedResultOutput) {
+    return appendedResultOutput;
+  }
+
   const executorAnswer = extractLatestExecutorAnswer(outputLines);
   if (executorAnswer) {
     return executorAnswer;
@@ -1054,6 +1076,131 @@ export function formatFeishuReply(outputLines: string[]): string {
     .filter((line): line is string => Boolean(line))
     .join('\n')
     .trim();
+}
+
+function extractFeishuReplyTargetTaskId(outputLines: string[]): string | null {
+  for (const rawLine of outputLines) {
+    const line = rawLine.trim();
+    const created = line.match(/^任务\s+#(task_[^\s]+)\s+已创建：/)?.[1];
+    if (created) {
+      return created;
+    }
+
+    const referenced = line.match(/^→\s+(?:关联到任务|命中上次任务指针)\s+#(task_[^\s]+)/)?.[1];
+    if (referenced) {
+      return referenced;
+    }
+
+    const queued = line.match(/^→\s+任务\s+#(task_[^\s]+)\s+已进入待执行队列/)?.[1];
+    if (queued) {
+      return queued;
+    }
+  }
+
+  return null;
+}
+
+function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): string[] {
+  const filtered: string[] = [];
+  let currentCompletionTaskId: string | null = null;
+  let includeCurrentCompletion = false;
+  let inResultBlock = false;
+  let requestScopeActive = false;
+
+  for (const rawLine of outputLines) {
+    const line = rawLine.trim();
+    const createdMatch = line.match(/^任务\s+#(task_[^\s]+)\s+已创建：/);
+    if (createdMatch) {
+      if (createdMatch[1] === taskId) {
+        requestScopeActive = true;
+        filtered.push(rawLine);
+      } else {
+        requestScopeActive = false;
+      }
+      continue;
+    }
+
+    const referencedMatch = line.match(/^→\s+(?:关联到任务|命中上次任务指针)\s+#(task_[^\s]+)/);
+    if (referencedMatch) {
+      requestScopeActive = referencedMatch[1] === taskId;
+      if (requestScopeActive) {
+        filtered.push(rawLine);
+      }
+      continue;
+    }
+
+    const taskPrefixed = line.match(/^[+·•]\s+#(task_[^\s]+)(?:\s|$)/);
+    if (taskPrefixed) {
+      currentCompletionTaskId = taskPrefixed[1] ?? null;
+      includeCurrentCompletion = currentCompletionTaskId === taskId;
+      if (includeCurrentCompletion) {
+        filtered.push(rawLine);
+      }
+      continue;
+    }
+
+    const executingMatch = line.match(/^→\s+正在执行任务\s+#(task_[^\s]+)[.。]{3}$/);
+    if (executingMatch) {
+      currentCompletionTaskId = executingMatch[1] ?? null;
+      includeCurrentCompletion = currentCompletionTaskId === taskId;
+      if (includeCurrentCompletion) {
+        filtered.push(rawLine);
+      }
+      continue;
+    }
+
+    const routedTaskLine = line.match(/^→\s+任务\s+#(task_[^\s]+)\s+已进入待执行队列$/);
+    if (routedTaskLine) {
+      if (routedTaskLine[1] === taskId) {
+        requestScopeActive = true;
+        filtered.push(rawLine);
+      }
+      continue;
+    }
+
+    if (requestScopeActive && (
+      normalizeFeishuProgressContextStep(line)
+      || /^→\s+派发给\s+[^.。]+[.。]{3}$/.test(line)
+      || line.startsWith('→ 路由决策：')
+      || line.startsWith('→ 原因：')
+      || line.startsWith('→ 抢占当前任务')
+      || line.startsWith('→ 已自动关联')
+    )) {
+      filtered.push(rawLine);
+      continue;
+    }
+
+    if (line.startsWith('┌─ 任务结果')) {
+      inResultBlock = includeCurrentCompletion;
+      if (includeCurrentCompletion) {
+        filtered.push(rawLine);
+      }
+      continue;
+    }
+
+    if (inResultBlock) {
+      filtered.push(rawLine);
+      if (line.startsWith('└')) {
+        inResultBlock = false;
+      }
+      continue;
+    }
+
+    if (includeCurrentCompletion && (
+      /^✓\s+任务完成/.test(line)
+      || line === ''
+      || line.startsWith('→ 文件输出目录:')
+      || line.startsWith('→ 已省略文件正文输出')
+      || /^→\s+已记录\s+\d+\s+个任务产物/.test(line)
+      || line.startsWith('- ')
+      || line.startsWith('   - ')
+      || (!line.startsWith('> ') && !line.startsWith('任务 #') && !line.startsWith('→ 任务 #'))
+    )) {
+      filtered.push(rawLine);
+    }
+  }
+
+  return filtered.length > 0 ? filtered : outputLines;
 }
 
 export function appendMarkdownPreviewLinks(
@@ -1160,6 +1307,77 @@ function formatFeishuPendingReply(outputLines: string[]): string {
     : '任务已进入待执行队列，等待当前任务完成后会继续执行。';
 }
 
+async function waitForFeishuReplyOutputLines(
+  session: FeishuMessageSession,
+  before: number,
+  submitPromise: Promise<{ exitRequested: boolean }>,
+  timeoutMs = 10 * 60 * 1000,
+): Promise<string[]> {
+  if (!session.subscribe) {
+    await submitPromise;
+    return session.getSnapshot().output.slice(before);
+  }
+
+  let targetTaskId: string | null = null;
+  let lastLines = session.getSnapshot().output.slice(before);
+  let resolved = false;
+  let unsubscribe: (() => void) | undefined;
+  let timer: NodeJS.Timeout | null = null;
+
+  return await new Promise<string[]>(resolve => {
+    const finish = (lines: string[]) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      unsubscribe?.();
+      resolve(lines);
+    };
+
+    const inspect = (lines: string[]) => {
+      lastLines = lines;
+      targetTaskId = targetTaskId ?? extractFeishuReplyTargetTaskId(lines);
+      const scopedLines = targetTaskId
+        ? filterFeishuOutputLinesForTask(lines, targetTaskId)
+        : lines;
+      if (isFeishuReplyTerminal(scopedLines)) {
+        finish(scopedLines);
+      }
+    };
+
+    unsubscribe = session.subscribe?.(snapshot => {
+      inspect(snapshot.output.slice(before));
+    });
+
+    void submitPromise
+      .then(() => {
+        inspect(session.getSnapshot().output.slice(before));
+        if (!resolved && !targetTaskId) {
+          finish(session.getSnapshot().output.slice(before));
+        }
+      })
+      .catch(() => {
+        finish(session.getSnapshot().output.slice(before));
+      });
+
+    timer = setTimeout(() => {
+      const scopedLines = targetTaskId
+        ? filterFeishuOutputLinesForTask(lastLines, targetTaskId)
+        : lastLines;
+      finish(scopedLines);
+    }, timeoutMs);
+  });
+}
+
+function isFeishuReplyTerminal(outputLines: string[]): boolean {
+  return outputLines.some(line => /^✓\s+任务完成/.test(line.trim()))
+    || outputLines.some(line => /^✗\s+执行/.test(line.trim()))
+    || Boolean(formatFeishuPendingReply(outputLines));
+}
+
 function cleanFeishuReplyLine(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -1205,6 +1423,14 @@ export function formatFeishuStreamingProgressReplies(
   sentSteps = new Set<string>(),
 ): string[] {
   const replies: string[] = [];
+  for (const block of extractFeishuGuidanceProgressBlocks(outputLines)) {
+    if (sentSteps.has(block)) {
+      continue;
+    }
+    sentSteps.add(block);
+    replies.push(block);
+  }
+
   for (const rawLine of outputLines) {
     const step = extractFeishuProgressStep(rawLine);
     if (!step || sentSteps.has(step)) {
@@ -1214,6 +1440,54 @@ export function formatFeishuStreamingProgressReplies(
     replies.push(`**处理步骤**\n${step}`);
   }
   return replies;
+}
+
+function extractFeishuGuidanceProgressBlocks(outputLines: string[]): string[] {
+  const blocks: string[] = [];
+  let collecting: string[] | null = null;
+
+  for (const rawLine of outputLines) {
+    const line = rawLine.trim();
+    if (line.startsWith('┌─ 操作指引')) {
+      collecting = [];
+      continue;
+    }
+    if (!collecting) {
+      continue;
+    }
+    if (line.startsWith('└')) {
+      const block = formatFeishuGuidanceProgressBlock(collecting);
+      if (block) {
+        blocks.push(block);
+      }
+      collecting = null;
+      continue;
+    }
+    collecting.push(line);
+  }
+
+  return blocks;
+}
+
+function formatFeishuGuidanceProgressBlock(lines: string[]): string | null {
+  const scene = lines.find(line => line.startsWith('│ 场景：'))?.replace(/^│\s*场景：/, '').trim();
+  if (scene !== '恢复已挂起任务' && scene !== '解除阻塞后恢复') {
+    return null;
+  }
+
+  const action = lines.find(line => line.startsWith('│ 推荐动作：'))?.replace(/^│\s*推荐动作：/, '').trim();
+  const task = lines.find(line => line.startsWith('│ 目标任务：'))?.replace(/^│\s*目标任务：/, '').trim();
+  const reasons = lines
+    .filter(line => line.startsWith('│ 原因：') || line.startsWith('│       '))
+    .map(line => line.replace(/^│\s*(?:原因：)?\s*/, '').trim())
+    .filter(Boolean);
+
+  return [
+    `**${scene}**`,
+    action ? `→ ${action}` : null,
+    task ? `任务：${task}` : null,
+    ...reasons.map(reason => `- ${reason}`),
+  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 function extractFeishuProgressSummary(outputLines: string[]): string {
@@ -1339,7 +1613,11 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
   }
 
   const answer = trimBlankLines(answerLines).join('\n').trim();
+  const taskResultBody = extractLatestTaskResultBody(outputLines);
   const taskSummary = extractLatestTaskSummary(outputLines);
+  if (taskResultBody && (!answer || answer === taskSummary || taskResultBody.includes(answer))) {
+    return taskResultBody;
+  }
   if (answer && !taskSummary) {
     return answer;
   }
@@ -1401,6 +1679,144 @@ function trimBlankLines(lines: string[]): string[] {
     end -= 1;
   }
   return lines.slice(start, end);
+}
+
+function extractLatestTaskResultBody(outputLines: string[]): string | null {
+  let resultIndex = -1;
+  for (let index = outputLines.length - 1; index >= 0; index -= 1) {
+    if (outputLines[index]?.trim().startsWith('┌─ 任务结果')) {
+      resultIndex = index;
+      break;
+    }
+  }
+  if (resultIndex === -1) {
+    return null;
+  }
+
+  const answerLines: string[] = [];
+  let activeTaskId: string | null = null;
+  let collecting = false;
+  let skippingHistory = false;
+  let sawUsageMarker = false;
+  for (let index = 0; index < resultIndex; index += 1) {
+    const trimmed = outputLines[index]?.trim() ?? '';
+    const taskLine = trimmed.match(/^[+·•]\s+(#task_[^\s]+)\s*(.*)$/);
+    if (!taskLine) {
+      if (!trimmed) {
+        if (collecting && !skippingHistory && answerLines.length > 0) {
+          answerLines.push('');
+        }
+        continue;
+      }
+      if (/^✓\s+任务完成/.test(trimmed)) {
+        continue;
+      }
+      if (collecting && !skippingHistory) {
+        const cleaned = cleanExecutorAnswerLine(outputLines[index]);
+        if (cleaned !== null) {
+          if (sawUsageMarker) {
+            answerLines.length = 0;
+            sawUsageMarker = false;
+          }
+          answerLines.push(cleaned);
+        } else if (trimmed === 'tokens used') {
+          sawUsageMarker = true;
+        }
+      }
+      continue;
+    }
+
+    const [, taskId, rest = ''] = taskLine;
+    const taskOutput = rest.trimEnd();
+    if (!activeTaskId || isExecutorStartLine(taskOutput)) {
+      activeTaskId = taskId;
+      answerLines.length = 0;
+      collecting = true;
+      skippingHistory = false;
+      sawUsageMarker = false;
+      if (isExecutorStartLine(taskOutput)) {
+        continue;
+      }
+    }
+    if (taskId !== activeTaskId || !collecting) {
+      continue;
+    }
+
+    if (isHistoryStartLine(taskOutput)) {
+      skippingHistory = true;
+      continue;
+    }
+    if (skippingHistory) {
+      if (taskOutput.trim() === 'tokens used') {
+        skippingHistory = false;
+        sawUsageMarker = true;
+      }
+      continue;
+    }
+    if (taskOutput.trim() === 'tokens used') {
+      sawUsageMarker = true;
+      continue;
+    }
+    if (/^\d[\d,]*$/.test(taskOutput.trim())) {
+      continue;
+    }
+
+    const cleaned = cleanExecutorAnswerLine(taskOutput);
+    if (cleaned !== null) {
+      if (sawUsageMarker) {
+        answerLines.length = 0;
+        sawUsageMarker = false;
+      }
+      answerLines.push(cleaned);
+    }
+  }
+
+  const body = trimBlankLines(answerLines).join('\n').trim();
+  return body || null;
+}
+
+function extractAppendedTaskResultOutput(outputLines: string[]): string | null {
+  let resultBlockEnd = -1;
+  for (let index = outputLines.length - 1; index >= 0; index -= 1) {
+    const line = outputLines[index]?.trim() ?? '';
+    if (line.startsWith('└') && index > 0) {
+      const hasTaskResultStart = outputLines
+        .slice(0, index)
+        .some(candidate => candidate.trim().startsWith('┌─ 任务结果'));
+      if (hasTaskResultStart) {
+        resultBlockEnd = index;
+        break;
+      }
+    }
+  }
+  if (resultBlockEnd === -1) {
+    return null;
+  }
+
+  const answerLines: string[] = [];
+  for (let index = resultBlockEnd + 1; index < outputLines.length; index += 1) {
+    const rawLine = outputLines[index] ?? '';
+    const trimmed = rawLine.trim();
+    if (!trimmed && answerLines.length === 0) {
+      continue;
+    }
+    if (
+      trimmed.startsWith('┌─ 操作指引')
+      || /^→\s+文件输出目录:/.test(trimmed)
+      || /^→\s+已省略文件正文输出/.test(trimmed)
+      || /^→\s+已记录\s+\d+\s+个任务产物/.test(trimmed)
+    ) {
+      break;
+    }
+
+    const cleaned = cleanFeishuReplyLine(rawLine);
+    if (cleaned !== null) {
+      answerLines.push(cleaned);
+    }
+  }
+
+  const answer = trimBlankLines(answerLines).join('\n').trim();
+  return answer || null;
 }
 
 function extractLatestTaskSummary(outputLines: string[]): string | null {

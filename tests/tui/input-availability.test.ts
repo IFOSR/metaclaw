@@ -284,4 +284,76 @@ describe('App input availability', () => {
     app.unmount();
     app.cleanup();
   });
+
+  it('shows the routed executor in the composer status while a task is running', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-routed-executor-status');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const hermesDeferred = createDeferredResult();
+    const defaultExecutor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'default should not run',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const hermesExecutor: ExecutorAdapter = {
+      name: 'hermes-agent',
+      execute: vi.fn().mockImplementation(() => hermesDeferred.promise),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: 'research automation' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: 'new task' }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor: defaultExecutor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_routed_executor_status',
+        contextRecaller,
+        llmBridge,
+        executorFactory: (name: string) => name === 'hermes-agent' ? hermesExecutor : null,
+        availableExecutorCommands: new Set(['codex', 'hermes']),
+      })
+    );
+
+    for (const char of '请调研这个方案并进行自动化分析，输出报告') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('status: running hermes-agent');
+    expect(app.lastFrame()).not.toContain('status: running codex-cli');
+    expect(defaultExecutor.execute).not.toHaveBeenCalled();
+    expect(hermesExecutor.execute).toHaveBeenCalledTimes(1);
+
+    hermesDeferred.resolve({
+      success: true,
+      output: 'Hermes done',
+      exitCode: 0,
+      durationMs: 100,
+    });
+    await flushUpdates();
+
+    app.unmount();
+    app.cleanup();
+  });
 });

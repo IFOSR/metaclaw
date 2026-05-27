@@ -36,6 +36,15 @@ describe('CodexCliAdapter', () => {
       expect(prompt).toContain('不要读取或访问本地文件系统和工作目录');
     });
 
+    it('time-sensitive update questions should default to online verification', () => {
+      const prompt = getPrompt(adapter, makeInput({
+        userPrompt: 'Hermes Agent 最近是否有更新？',
+      }));
+
+      expect(prompt).toContain('默认需要联网搜索或访问官方/可信来源核验');
+      expect(prompt).toContain('不要仅因注入上下文缺少信息就拒答');
+    });
+
     it('file-generation tasks should force file output and ban full content echoing', () => {
       const prompt = getPrompt(adapter, makeInput({
         executionContextBundle: {

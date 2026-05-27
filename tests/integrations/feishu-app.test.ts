@@ -409,7 +409,7 @@ describe('Feishu app helpers', () => {
     });
 
     expect(client.addReactionToMessage).toHaveBeenCalledWith('om_message', 'Typing');
-    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: true });
+    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: false });
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'metaclaw reply');
     expect(client.removeReactionFromMessage).toHaveBeenCalledWith('om_message', 'reaction_typing');
     expect(client.addReactionToMessage.mock.invocationCallOrder[0]).toBeLessThan(
@@ -672,6 +672,68 @@ describe('Feishu app helpers', () => {
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', fullAnswer);
   });
 
+  it('extracts the urgent task final answer before auto-resumed task progress in Feishu replies', () => {
+    const urgentAnswer = [
+      '紧急任务最终结果正文',
+      '',
+      '这里是紧急任务的完整结论，飞书最终回复必须展示这一段。',
+    ].join('\n');
+    const reply = formatFeishuReply([
+      '→ 高优任务到达，抢占当前任务 #task_old',
+      '→ 原因：用户插入紧急任务',
+      '→ 任务 #task_old 已挂起，开始执行 #task_urgent',
+      '→ 派发给 codex-cli...',
+      '→ 正在执行任务 #task_urgent...',
+      '+ #task_urgent 已启动 codex-cli 执行器',
+      ...urgentAnswer.split('\n'),
+      '+ #task_urgent tokens used',
+      '+ #task_urgent 1,234',
+      '✓ 任务完成 (17.2s)',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: 紧急任务最终结果正文',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '→ 正在执行任务 #task_old...',
+      '+ #task_old 已启动 codex-cli 执行器',
+    ]);
+
+    expect(reply).toBe(urgentAnswer);
+    expect(reply).not.toContain('→ 正在执行任务 #task_old...');
+  });
+
+  it('extracts a resumed task final answer once and preserves the full markdown body', () => {
+    const resumedAnswer = [
+      '恢复后的调研结论如下：AI agent 的未来不是“一个万能助手”，而是“可治理、可编排、可审计、可交易的数字劳动力网络”。',
+      '# AI Agent 未来发展趋势深度调研',
+      '一、总判断',
+      'AI agent 正在从三个阶段演进：',
+      '1. 聊天助手阶段',
+      '代表：ChatGPT、Claude、Copilot。',
+      '特点是回答、总结、写作、辅助决策。',
+      '2. **工具执行阶段**',
+      '代表：Manus、Devin、Claude Code、Codex。',
+      '特点是可调用工具、读写文件、执行复杂任务。',
+    ].join('\n');
+    const reply = formatFeishuReply([
+      '→ 正在执行任务 #task_old...',
+      '+ #task_old 已启动 codex-cli 执行器',
+      ...resumedAnswer.split('\n'),
+      'tokens used',
+      '2,468',
+      ...resumedAnswer.split('\n'),
+      '✓ 任务完成 (18.4s)',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: 恢复后的调研结论如下：AI agent 的未来不是“一个万能助手”，而是“可治理、可编排、可审计、可交易的数字劳动力网络”。',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(reply).toBe(resumedAnswer);
+    expect(reply?.match(/恢复后的调研结论如下/g)).toHaveLength(1);
+    expect(reply).toContain('2. **工具执行阶段**');
+    expect(reply).toContain('特点是可调用工具、读写文件、执行复杂任务。');
+  });
+
   it('appends Markdown preview links for generated task artifacts', () => {
     const outputLines = [
       '✓ 任务完成 (3.1s)',
@@ -887,6 +949,182 @@ describe('Feishu app helpers', () => {
     expect(sentTexts.join('')).not.toContain('[已截断]');
   });
 
+  it('keeps Feishu replies scoped to the submitted task across urgent preemption and resume', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 紧急优先处理客户问题',
+            '任务 #task_urgent 已创建：紧急优先处理客户问题',
+            '→ 抢占当前任务 #task_main',
+            '→ 正在执行任务 #task_urgent...',
+            '+ #task_urgent 已启动 codex-cli 执行器',
+            '+ #task_urgent urgent raw should be ignored because appended result is complete',
+            '✓ 任务完成 (0.4s)',
+            '',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: urgent summary only',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+            '',
+            'urgent full line 1',
+            'urgent full line 2',
+            '→ 正在执行任务 #task_main...',
+            '+ #task_main 已启动 codex-cli 执行器',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_urgent',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"紧急优先处理客户问题"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('urgent full line 1\nurgent full line 2');
+    expect(sentTexts.join('\n')).not.toContain('urgent summary only');
+    expect(sentTexts.join('\n')).not.toContain('task_main');
+  });
+
+  it('replies as soon as the urgent Feishu task completes without waiting for resumed original output', async () => {
+    let listener: ((snapshot: { output: string[] }) => void) | undefined;
+    const output = ['before'];
+    let resolveSubmit!: () => void;
+    const submitPromise = new Promise<{ exitRequested: false }>(resolve => {
+      resolveSubmit = () => resolve({ exitRequested: false });
+    });
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((callback: (snapshot: { output: string[] }) => void) => {
+        listener = callback;
+        callback({ output: [...output] });
+        return vi.fn();
+      }),
+      submit: vi.fn().mockImplementation(() => submitPromise),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const handled = handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_urgent_async',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"紧急优先处理客户问题"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    await Promise.resolve();
+    output.push(
+      '> 紧急优先处理客户问题',
+      '任务 #task_urgent 已创建：紧急优先处理客户问题',
+      '→ 抢占当前任务 #task_main',
+      '→ 正在执行任务 #task_urgent...',
+      '✓ 任务完成 (0.4s)',
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: urgent summary only',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '',
+      'urgent full line 1',
+      'urgent full line 2',
+      '→ 正在执行任务 #task_main...',
+    );
+    listener?.({ output: [...output] });
+    resolveSubmit();
+    await handled;
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('urgent full line 1\nurgent full line 2');
+    expect(sentTexts.join('\n')).not.toContain('urgent summary only');
+    expect(sentTexts.join('\n')).not.toContain('task_main');
+
+    output.push('main result should arrive too late for urgent reply');
+    listener?.({ output: [...output] });
+    expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
+      .not.toContain('main result should arrive too late');
+  });
+
+  it('keeps resumed Feishu replies scoped to the resumed task instead of the later latest task', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 继续刚才主线任务',
+            '→ 命中上次任务指针 #task_main',
+            '→ 正在执行任务 #task_main...',
+            '+ #task_main 已启动 codex-cli 执行器',
+            '✓ 任务完成 (0.8s)',
+            '',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: main summary only',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+            '',
+            'main full line 1',
+            'main full line 2',
+            '任务 #task_later 已创建：后续排队任务',
+            '→ 正在执行任务 #task_later...',
+            '+ #task_later 已启动 codex-cli 执行器',
+            '+ #task_later later output must not leak',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_resume',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"继续刚才主线任务"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('main full line 1\nmain full line 2');
+    expect(sentTexts.join('\n')).not.toContain('main summary only');
+    expect(sentTexts.join('\n')).not.toContain('later output must not leak');
+  });
+
   it('continues processing when the typing reaction cannot be added', async () => {
     const session = {
       getSnapshot: vi.fn()
@@ -915,7 +1153,7 @@ describe('Feishu app helpers', () => {
     });
 
     expect(session.appendSystemMessage).toHaveBeenCalledWith('⚠️ 飞书 Typing 表情添加失败: missing reaction permission');
-    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: true });
+    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: false });
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'metaclaw reply');
     expect(client.removeReactionFromMessage).not.toHaveBeenCalled();
   });
@@ -1042,5 +1280,28 @@ describe('Feishu app helpers', () => {
     ], sent)).toEqual([
       '**处理步骤**\n→ 派发给 codex-cli...',
     ]);
+  });
+
+  it('streams resumed task guidance blocks to Feishu before the final result', () => {
+    const sent = new Set<string>();
+    const replies = formatFeishuStreamingProgressReplies([
+      '┌─ 操作指引 ───────────────────────────────────────┐',
+      '│ 场景：恢复已挂起任务',
+      '│ 推荐动作：继续处理任务 #task_main: DeepSeek 最近更新汇总',
+      '│ 目标任务：#task_main DeepSeek 最近更新汇总',
+      '│ 原因：刚被高优任务打断，恢复连续性收益最高',
+      '│       下一步已明确：恢复后继续当前未完成步骤',
+      '└──────────────────────────────────────────────────┘',
+      '【提取最近历史记录上下文】',
+    ], sent);
+
+    expect(replies[0]).toBe([
+      '**恢复已挂起任务**',
+      '→ 继续处理任务 #task_main: DeepSeek 最近更新汇总',
+      '任务：#task_main DeepSeek 最近更新汇总',
+      '- 刚被高优任务打断，恢复连续性收益最高',
+      '- 下一步已明确：恢复后继续当前未完成步骤',
+    ].join('\n'));
+    expect(replies[1]).toBe('**处理步骤**\n【提取最近历史记录上下文】');
   });
 });

@@ -28,6 +28,8 @@ export interface PrioritySignals {
   progressRatio: number;    // 完成比例 0-1
   blocksOthers: boolean;    // 是否阻塞其他任务
   idleHours: number;        // 搁置时长
+  semanticPriority?: 'normal' | 'high' | 'urgent';
+  semanticPriorityReason?: string;
 }
 
 // ─── 任务对象 ───
@@ -160,6 +162,7 @@ export interface Dashboard {
 // ─── 调度运行态 ───
 export interface RuntimeState {
   runningTaskId: string | null;
+  runningExecutorName: string | null;
   readyTaskIds: string[];
   blockedTaskIds: string[];
   parkedTaskIds: string[];

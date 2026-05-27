@@ -30,7 +30,6 @@ export type QueuedExecutionRequest = {
   contextTaskId: string;
   executionMode: 'fresh' | 'resume-parked' | 'resume-blocked' | 'follow-up';
   schedulingReason?: string;
-  priorityHint?: 'normal' | 'high' | 'urgent';
   newlyProvidedResources?: string[];
   includeRecentConversationContext?: boolean;
 };

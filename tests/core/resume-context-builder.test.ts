@@ -280,6 +280,53 @@ describe('ResumeContextBuilder', () => {
     expect(bundle.executionInstructions.some(line => line.includes('不要在回复中粘贴或打印完整文件内容'))).toBe(true);
   });
 
+  it('maps Feishu document delivery requests to local Markdown artifacts handled by MetaClaw', async () => {
+    const task = taskEngine.create({ title: '整理调研报告', goal: '产出飞书云文档和在线预览' });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '请把这份调研报告产出飞书云文档，并生成在线预览',
+      sessionId: 'sess_feishu_doc_delivery',
+    });
+
+    expect(bundle.workspaceContext?.allowFilesystem).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('不要调用飞书/云文档 API'))).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('不要因为缺少飞书权限而拒绝任务'))).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('MetaClaw 后端会负责把任务产物同步到飞书'))).toBe(true);
+  });
+
+  it('applies Feishu document delivery instructions from recalled preferences', async () => {
+    const task = taskEngine.create({ title: '输出调研报告', goal: '输出调研报告' });
+    insertPreference({
+      id: 'pref_feishu_docs',
+      type: 'delivery',
+      scope: 'global',
+      subject: null,
+      content: '调研报告要生成飞书云文档和在线预览',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 1,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-27T00:00:00Z',
+      createdAt: '2026-05-27T00:00:00Z',
+      updatedAt: '2026-05-27T00:00:00Z',
+    });
+
+    const bundle = await builder.build({
+      taskId: task.id,
+      mode: 'fresh',
+      userInput: '请输出一份调研报告',
+      sessionId: 'sess_feishu_doc_preference',
+    });
+
+    expect(bundle.workspaceContext?.allowFilesystem).toBe(true);
+    expect(bundle.memoryContext.resolvedPreferences.map(preference => preference.id)).toContain('pref_feishu_docs');
+    expect(bundle.executionInstructions.some(line => line.includes('不要调用飞书/云文档 API'))).toBe(true);
+    expect(bundle.executionInstructions.some(line => line.includes('Markdown 产物追加在线预览链接'))).toBe(true);
+  });
+
   it('injects task memory cards into the execution bundle before weak related history is rendered', async () => {
     const task = taskEngine.create({ title: '历史任务核对', goal: '确认今天早上是否做过 Palantir 分析' });
 

@@ -121,7 +121,7 @@ describe('executor router command acceptance', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('routes research automation tasks to Hermes instead of the default executor', async () => {
+  it('routes research automation tasks to Hermes and exposes the running executor in state', async () => {
     const db = createDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-hermes');
@@ -137,14 +137,23 @@ describe('executor router command acceptance', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
+    let resolveHermes!: (value: {
+      success: true;
+      output: string;
+      exitCode: number;
+      durationMs: number;
+    }) => void;
+    const hermesResult = new Promise<{
+      success: true;
+      output: string;
+      exitCode: number;
+      durationMs: number;
+    }>(resolve => {
+      resolveHermes = resolve;
+    });
     const hermesExecutor: ExecutorAdapter = {
       name: 'hermes-agent',
-      execute: vi.fn().mockResolvedValue({
-        success: true,
-        output: 'Hermes 已完成研究自动化任务',
-        exitCode: 0,
-        durationMs: 50,
-      }),
+      execute: vi.fn().mockImplementation(() => hermesResult),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -169,7 +178,17 @@ describe('executor router command acceptance', () => {
     });
 
     session.initialize();
-    await session.submit('请调研这个方案并进行自动化分析，输出报告', { awaitAsyncWork: true });
+    const submitPromise = session.submit('请调研这个方案并进行自动化分析，输出报告', { awaitAsyncWork: true });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(session.getSnapshot().runtimeState.runningExecutorName).toBe('hermes-agent');
+
+    resolveHermes({
+      success: true,
+      output: 'Hermes 已完成研究自动化任务',
+      exitCode: 0,
+      durationMs: 50,
+    });
+    await submitPromise;
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;
@@ -190,5 +209,6 @@ describe('executor router command acceptance', () => {
     };
     expect(interaction.executor_used).toBe('hermes-agent');
     expect(interaction.system_output).toContain('Hermes');
+    expect(session.getSnapshot().runtimeState.runningExecutorName).toBeNull();
   });
 });

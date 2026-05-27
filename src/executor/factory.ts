@@ -1,6 +1,7 @@
 import type { ExecutorAdapter } from './adapter.js';
 import { ClaudeCodeAdapter } from './claude-code.js';
 import { CodexCliAdapter } from './codex-cli.js';
+import { DeepSeekTuiAdapter } from './deepseek-tui.js';
 import { HermesAgentAdapter } from './hermes-agent.js';
 import { OpenClawAdapter } from './openclaw.js';
 
@@ -15,6 +16,10 @@ export function createExecutor(config: { command: string; timeout: number; maxDu
 
   if (config.command === 'hermes') {
     return new HermesAgentAdapter(config);
+  }
+
+  if (config.command === 'deepseek' || config.command === 'deepseek-tui') {
+    return new DeepSeekTuiAdapter({ ...config, command: 'deepseek-tui' });
   }
 
   if (config.command === 'openclaw') {
@@ -38,6 +43,10 @@ export function createExecutorByName(
 
   if (name === 'hermes-agent') {
     return new HermesAgentAdapter({ ...config, command: 'hermes' });
+  }
+
+  if (name === 'deepseek-tui') {
+    return new DeepSeekTuiAdapter({ ...config, command: 'deepseek-tui' });
   }
 
   if (name === 'openclaw') {

@@ -17,7 +17,10 @@ function parseScalarArg(args: string[], flag: string): string | undefined {
 }
 
 function formatProfile(profile: ExecutorProfile): string {
-  return `  ${profile.name} domains=${profile.domains.join(',')} capabilities=${profile.capabilities.join(',')} risk=${profile.riskLevel} success=${profile.historicalSuccess}`;
+  const intents = Object.entries(profile.intentAffinity ?? {})
+    .map(([intent, score]) => `${intent}:${score}`)
+    .join(',');
+  return `  ${profile.name} domains=${profile.domains.join(',')} capabilities=${profile.capabilities.join(',')} intents=${intents || '-'} risk=${profile.riskLevel} success=${profile.historicalSuccess}`;
 }
 
 export const executorCommand: CommandHandler = {
@@ -45,6 +48,9 @@ export const executorCommand: CommandHandler = {
         outputTypes: parseListArg(args, '--outputs'),
         strengths: parseListArg(args, '--strengths'),
         weaknesses: parseListArg(args, '--weaknesses'),
+        primaryUseCases: parseListArg(args, '--primary-use-cases'),
+        avoidUseCases: parseListArg(args, '--avoid-use-cases'),
+        intentAffinity: {},
         riskLevel: risk,
         availability: 'available',
         historicalSuccess: Number.parseFloat(parseScalarArg(args, '--success') ?? '0.5'),
@@ -79,6 +85,9 @@ export const executorCommand: CommandHandler = {
             outputTypes: ['code'],
             strengths: [],
             weaknesses: [],
+            primaryUseCases: [],
+            avoidUseCases: [],
+            intentAffinity: { repo_execution: 1 },
             riskLevel: 'medium' as const,
             availability: 'available' as const,
             historicalSuccess: 0.5,
@@ -91,6 +100,9 @@ export const executorCommand: CommandHandler = {
         selectedExecutor: decision.selectedExecutor,
         action: decision.action,
         candidates: decision.candidates,
+        primaryIntent: decision.primaryIntent,
+        matchedBoundary: decision.matchedBoundary,
+        rejected: decision.rejected,
         reason: decision.reason,
         confirmedByUser: false,
         result: null,
@@ -101,6 +113,8 @@ export const executorCommand: CommandHandler = {
         content: [
           `Route Decision：${decision.selectedExecutor}`,
           `action=${decision.action} confidence=${decision.confidence.toFixed(2)}`,
+          `intent=${decision.primaryIntent}`,
+          `boundary=${decision.matchedBoundary.join(',') || '-'}`,
           `reason=${decision.reason}`,
         ].join('\n'),
       };
@@ -114,7 +128,7 @@ export const executorCommand: CommandHandler = {
       return {
         type: 'text',
         content: `Executor Route Feedback：\n${events.map(event =>
-          `  #${event.id} ${event.selectedExecutor} ${event.action} ${event.userInput}`
+          `  #${event.id} ${event.selectedExecutor} ${event.action} ${event.primaryIntent} ${event.userInput}`
         ).join('\n')}`,
       };
     }

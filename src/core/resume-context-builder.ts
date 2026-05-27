@@ -140,12 +140,14 @@ export class ResumeContextBuilder {
 
     const blockedReason = task.dependencies.find(dependency => dependency.status === 'waiting')?.description
       ?? task.dependencies[task.dependencies.length - 1]?.description;
-    const workspaceContext = this.buildWorkspaceContext(task, input.userInput);
+    const needsFeishuDocumentDelivery = this.needsFeishuDocumentDelivery(input.userInput, resolvedPreferences);
+    const workspaceContext = this.buildWorkspaceContext(task, input.userInput, needsFeishuDocumentDelivery);
     const executionInstructions = this.buildExecutionInstructions(
       input.mode,
       input.newlyProvidedResources,
       workspaceContext,
       textSnippets.length > 0,
+      needsFeishuDocumentDelivery,
     );
 
     return {
@@ -215,6 +217,7 @@ export class ResumeContextBuilder {
     newlyProvidedResources?: string[],
     workspaceContext?: WorkspaceContext,
     hasMaterialText = false,
+    needsFeishuDocumentDelivery = false,
   ): string[] {
     const baseInstructions = [
       '使用与用户相同的语言回复',
@@ -228,6 +231,10 @@ export class ResumeContextBuilder {
           `工作目录：${workspaceContext.workingDirectory}`,
           ...workspaceContext.targetPaths.map(path => `目标目录：${path}`),
           '如果目标目录不存在，请先创建目录，再写入一个合适命名的 Markdown 文件',
+          ...(needsFeishuDocumentDelivery ? [
+            '用户提到飞书云文档或在线预览时，不要调用飞书/云文档 API，也不要因为缺少飞书权限而拒绝任务',
+            '请产出 Markdown 文件到目标目录；MetaClaw 后端会负责把任务产物同步到飞书，并为 Markdown 产物追加在线预览链接',
+          ] : []),
           '不要在回复中粘贴或打印完整文件内容，只返回简短摘要和最终文件路径',
           '完成后明确返回保存路径和文件名，优先返回绝对路径',
         ]
@@ -260,8 +267,12 @@ export class ResumeContextBuilder {
     ];
   }
 
-  private buildWorkspaceContext(task: Task, userInput: string): WorkspaceContext | undefined {
-    if (!this.isFileGenerationRequest(userInput)) {
+  private buildWorkspaceContext(
+    task: Task,
+    userInput: string,
+    needsFeishuDocumentDelivery = false,
+  ): WorkspaceContext | undefined {
+    if (!needsFeishuDocumentDelivery && !this.isFileGenerationRequest(userInput)) {
       return undefined;
     }
 
@@ -276,7 +287,12 @@ export class ResumeContextBuilder {
   }
 
   private isFileGenerationRequest(userInput: string): boolean {
-    return /(存档|归档|保存|写入|落盘|导出)|((生成|创建|输出|产出|制作).*(html|HTML|markdown|md|json|csv|txt|yaml|yml|文件))/u.test(userInput);
+    return /(飞书云文档|飞书文档|云文档|在线预览|存档|归档|保存|写入|落盘|导出)|((生成|创建|输出|产出|制作).*(html|HTML|markdown|md|json|csv|txt|yaml|yml|文件|文档))/u.test(userInput);
+  }
+
+  private needsFeishuDocumentDelivery(userInput: string, preferences: ResolvedPreference[]): boolean {
+    return [userInput, ...preferences.map(preference => preference.content)]
+      .some(text => /(飞书云文档|飞书文档|云文档|在线预览)/u.test(text));
   }
 
   private extractKeywords(input: string): string[] {
