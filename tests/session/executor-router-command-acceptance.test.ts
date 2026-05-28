@@ -121,10 +121,10 @@ describe('executor router command acceptance', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('routes research automation tasks to Hermes and exposes the running executor in state', async () => {
+  it('races Pi Agent and Hermes Agent for research tasks and keeps the first result', async () => {
     const db = createDb();
     const taskRepo = new TaskRepo(db);
-    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-hermes');
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-pi');
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const defaultExecutor: ExecutorAdapter = {
       name: 'codex-cli',
@@ -134,6 +134,26 @@ describe('executor router command acceptance', () => {
         exitCode: 0,
         durationMs: 50,
       }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    let resolvePi!: (value: {
+      success: true;
+      output: string;
+      exitCode: number;
+      durationMs: number;
+    }) => void;
+    const piResult = new Promise<{
+      success: true;
+      output: string;
+      exitCode: number;
+      durationMs: number;
+    }>(resolve => {
+      resolvePi = resolve;
+    });
+    const piExecutor: ExecutorAdapter = {
+      name: 'pi-agent',
+      execute: vi.fn().mockImplementation(() => piResult),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -170,29 +190,42 @@ describe('executor router command acceptance', () => {
       executor: defaultExecutor,
       db,
       config: createConfig(),
-      sessionId: 'sess_executor_router_hermes',
+      sessionId: 'sess_executor_router_pi',
       contextRecaller: new ContextRecaller(db),
       llmBridge,
-      executorFactory: (name) => name === 'hermes-agent' ? hermesExecutor : null,
-      availableExecutorCommands: new Set(['codex', 'hermes']),
+      executorFactory: (name) => {
+        if (name === 'pi-agent') return piExecutor;
+        if (name === 'hermes-agent') return hermesExecutor;
+        return null;
+      },
+      availableExecutorCommands: new Set(['codex', 'pi', 'hermes']),
     });
 
     session.initialize();
     const submitPromise = session.submit('请调研这个方案并进行自动化分析，输出报告', { awaitAsyncWork: true });
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(session.getSnapshot().runtimeState.runningExecutorName).toBe('hermes-agent');
+    expect(session.getSnapshot().runtimeState.runningExecutorName).toBe('pi-agent+hermes-agent');
 
-    resolveHermes({
+    resolvePi({
       success: true,
-      output: 'Hermes 已完成研究自动化任务',
+      output: 'Pi Agent 已完成研究自动化任务',
       exitCode: 0,
       durationMs: 50,
     });
     await submitPromise;
+    resolveHermes({
+      success: true,
+      output: 'Hermes Agent 慢返回结果',
+      exitCode: 0,
+      durationMs: 500,
+    });
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ 路由决策：hermes-agent (auto_dispatch');
-    expect(output).toContain('→ 原因：');
+    expect(output).toContain('→ 路由决策：调研竞速 (auto_dispatch');
+    expect(output).toContain('→ 执行器：pi-agent + hermes-agent');
+    expect(output).toContain('→ 原始首选：pi-agent；原因：');
     expect(output).toContain('workflow_automation');
+    expect(output).toContain('→ 调研竞速：同时派发给 pi-agent + hermes-agent；谁先返回采用谁的结果，并自动终止其他执行器');
+    expect(output).toContain('→ pi-agent 已先返回，已终止：hermes-agent');
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;
@@ -200,19 +233,146 @@ describe('executor router command acceptance', () => {
       result: string | null;
     };
     expect(route).toEqual(expect.objectContaining({
-      selected_executor: 'hermes-agent',
+      selected_executor: 'pi-agent',
       action: 'auto_dispatch',
       result: 'success',
     }));
     expect(defaultExecutor.execute).not.toHaveBeenCalled();
+    expect(piExecutor.execute).toHaveBeenCalledTimes(1);
     expect(hermesExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(hermesExecutor.abort).toHaveBeenCalledTimes(1);
 
     const interaction = db.prepare('SELECT executor_used, system_output FROM interactions ORDER BY created_at DESC LIMIT 1').get() as {
       executor_used: string;
       system_output: string;
     };
-    expect(interaction.executor_used).toBe('hermes-agent');
-    expect(interaction.system_output).toContain('Hermes');
+    expect(interaction.executor_used).toBe('pi-agent');
+    expect(interaction.system_output).toContain('Pi Agent');
     expect(session.getSnapshot().runtimeState.runningExecutorName).toBeNull();
+  });
+
+  it('falls back to Codex CLI before blocking a failed non-Codex executor task', async () => {
+    const db = createDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-codex-fallback');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const defaultExecutor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'Codex CLI 兜底完成调研报告',
+        exitCode: 0,
+        durationMs: 80,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const piExecutor: ExecutorAdapter = {
+      name: 'pi-agent',
+      execute: vi.fn().mockResolvedValue({
+        success: false,
+        output: '',
+        error: 'executor idle timeout',
+        exitCode: 1,
+        durationMs: 900_000,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: 'research automation task' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: 'new task' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration: new OrchestrationEngine(taskEngine),
+      executor: defaultExecutor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_executor_router_codex_fallback',
+      contextRecaller: new ContextRecaller(db),
+      llmBridge,
+      executorFactory: (name) => {
+        if (name === 'pi-agent') return piExecutor;
+        return null;
+      },
+      availableExecutorCommands: new Set(['codex', 'pi']),
+    });
+
+    session.initialize();
+    await session.submit('请调研 pi agent 并输出 Markdown 报告', { awaitAsyncWork: true });
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('→ pi-agent 执行失败: executor idle timeout');
+    expect(output).toContain('→ 改派给 codex-cli 兜底执行同一任务，不新建任务');
+    expect(output).toContain('Codex CLI 兜底完成调研报告');
+    expect(piExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(defaultExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.findByStatus('blocked')).toHaveLength(0);
+    expect(taskRepo.findByStatus('done')).toHaveLength(1);
+
+    const route = db.prepare('SELECT selected_executor, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
+      selected_executor: string;
+      result: string | null;
+    };
+    expect(route).toEqual(expect.objectContaining({
+      selected_executor: 'pi-agent',
+      result: 'fallback_codex_success',
+    }));
+
+    const interaction = db.prepare('SELECT executor_used, system_output FROM interactions ORDER BY created_at DESC LIMIT 1').get() as {
+      executor_used: string;
+      system_output: string;
+    };
+    expect(interaction.executor_used).toBe('codex-cli');
+    expect(interaction.system_output).toContain('Codex CLI 兜底完成');
+  });
+
+  it('does not fallback recursively when Codex CLI fails', async () => {
+    const db = createDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-codex-no-loop');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: false,
+        output: '',
+        error: 'executor idle timeout',
+        exitCode: 1,
+        durationMs: 900_000,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: 'coding task' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: 'new task' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration: new OrchestrationEngine(taskEngine),
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_executor_router_codex_no_loop',
+      contextRecaller: new ContextRecaller(db),
+      llmBridge,
+    });
+
+    session.initialize();
+    await session.submit('请实现一个 TypeScript 单元测试并修复代码', { awaitAsyncWork: true });
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('改派给 codex-cli 兜底执行同一任务');
+    expect(output).toContain('✗ 执行失败: executor idle timeout');
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(taskRepo.findByStatus('blocked')).toHaveLength(1);
   });
 });

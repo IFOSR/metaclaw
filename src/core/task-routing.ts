@@ -1,6 +1,9 @@
-import type { Task } from './types.js';
+import type { Task, TaskStatus } from './types.js';
 
 export type NaturalLanguageRoute = 'conversation' | 'task_control' | 'durable_task';
+export type TaskClearScope = 'all' | 'parked' | 'blocked';
+
+export const MANAGEABLE_TASK_STATUSES: TaskStatus[] = ['created', 'ready', 'running', 'parked', 'blocked'];
 
 const TASK_CONTROL_PATTERNS = [
   /继续之前挂起的任务/,
@@ -12,6 +15,9 @@ const TASK_CONTROL_PATTERNS = [
   /挂起刚才/,
   /网络恢复了.*继续/,
   /网络好了.*继续/,
+  /清空.*任务/,
+  /取消.*任务/,
+  /删除.*任务/,
 ];
 
 const CONVERSATION_PATTERNS = [
@@ -74,7 +80,34 @@ export function classifyNaturalLanguageInput(input: string, tasks: Task[]): Natu
 
 export function isTaskControlInstruction(input: string): boolean {
   const normalized = input.trim();
-  return TASK_CONTROL_PATTERNS.some(pattern => pattern.test(normalized));
+  return parseTaskClearInstruction(normalized) !== null
+    || TASK_CONTROL_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+export function parseTaskClearInstruction(input: string): TaskClearScope | null {
+  const normalized = input.replace(/\s+/g, '');
+  if (!normalized) {
+    return null;
+  }
+
+  const hasClearVerb = /(清空|清除|清理|全部取消|取消全部|取消所有|删除全部|删除所有)/.test(normalized);
+  if (!hasClearVerb || !/(任务|task|tasks)/i.test(normalized)) {
+    return null;
+  }
+
+  if (/(挂起|暂停|parked)/i.test(normalized)) {
+    return 'parked';
+  }
+
+  if (/(阻塞|blocked)/i.test(normalized)) {
+    return 'blocked';
+  }
+
+  if (/(所有|全部|全部的|所有的|all|active|可执行|待执行|进行中|当前)/i.test(normalized)) {
+    return 'all';
+  }
+
+  return null;
 }
 
 export function isConversationInput(input: string): boolean {
@@ -109,5 +142,5 @@ export function filterDurableTasks(tasks: Task[]): Task[] {
 }
 
 function hasManageableTask(tasks: Task[]): boolean {
-  return tasks.some(task => ['created', 'ready', 'running', 'parked', 'blocked'].includes(task.status));
+  return tasks.some(task => MANAGEABLE_TASK_STATUSES.includes(task.status));
 }

@@ -42,7 +42,7 @@ export function formatExecutorError(raw?: string): string | undefined {
   }
 
   if (/executor max duration exceeded/i.test(normalized)) {
-    return '执行器运行总时长超限，请检查是否出现异常阻塞';
+    return '执行器历史总时长超限，请升级执行器配置并重试';
   }
 
   if (/(timed out|timeout)/i.test(normalized)) {
@@ -76,7 +76,7 @@ export function formatExecutorError(raw?: string): string | undefined {
 export function isRecoverableExecutorFailure(raw?: string): boolean {
   if (!raw) return false;
   return isNetworkFailure(raw)
-    || /(executor idle timeout|executor max duration exceeded|timed out|timeout|执行器调用超时|执行器空闲超时|执行器运行总时长超限)/i.test(raw)
+    || /(executor idle timeout|executor max duration exceeded|timed out|timeout|执行器调用超时|执行器空闲超时|执行器历史总时长超限)/i.test(raw)
     || isPermissionFailure(raw);
 }
 

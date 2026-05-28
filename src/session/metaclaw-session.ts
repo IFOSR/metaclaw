@@ -4,10 +4,10 @@ import { resolve } from 'path';
 import { MemoryApplicabilityAction } from '../core/types.js';
 import type {
   Config,
+  ExecutorResult,
   GuidanceActionType,
   GuidanceProposal,
   PreferenceMemoryCandidate,
-  RecallReviewCard,
   ResolvedPreference,
   RuntimeState,
   Task,
@@ -16,19 +16,18 @@ import type {
 import type { TaskEngine } from '../core/task-engine.js';
 import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
-import type { ExecutorAdapter } from '../executor/adapter.js';
+import type { ExecutorAdapter, ExecutorInput, ExecutorProgressEvent } from '../executor/adapter.js';
 import { createExecutorByName } from '../executor/factory.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
 import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
-import { classifyNaturalLanguageInput, filterDurableTasks } from '../core/task-routing.js';
+import { classifyNaturalLanguageInput, filterDurableTasks, parseTaskClearInstruction } from '../core/task-routing.js';
 import { ResumeContextBuilder } from '../core/resume-context-builder.js';
-import { RecallReviewBuilder } from '../core/recall-review-builder.js';
 import { RecallPolicyService } from '../core/recall-policy-service.js';
 import { CommandRouter } from '../commands/router.js';
-import { tasksCommand, taskCommand } from '../commands/task-commands.js';
+import { cancelTasksByScope, formatTaskClearResult, tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
 import { profileCommand } from '../commands/profile-commands.js';
 import { executorCommand } from '../commands/executor-commands.js';
@@ -37,7 +36,6 @@ import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCom
 import { generateInteractionId } from '../utils/id.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
-import { RecallFeedbackRepo, type RecallFeedbackAction } from '../storage/recall-feedback-repo.js';
 import { MemoryAuditEventRepo } from '../storage/memory-audit-event-repo.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
 import { SkillUsageEventRepo } from '../storage/skill-usage-event-repo.js';
@@ -132,18 +130,23 @@ interface PendingRecallSelection {
 
 interface RoutedExecutorSelection {
   executor: ExecutorAdapter;
+  raceExecutors: ExecutorAdapter[];
   decision: ExecutorRouteDecision;
   eventId: string;
   effectiveAction: ExecutorRouteDecision['action'];
   fallbackReason: string | null;
 }
 
+interface ExecutorRaceResult {
+  executor: ExecutorAdapter;
+  result: ExecutorResult;
+  abortedExecutors: string[];
+}
+
 interface PendingRecallReview {
   taskId: string;
   taskTitle: string;
   request: QueuedExecutionRequest;
-  proposalType: GuidanceActionType | null;
-  card: RecallReviewCard;
   autoAppliedPreferenceCandidates: PreferenceMemoryCandidate[];
   autoAppliedTaskCandidates: TaskMemoryCandidate[];
   preferenceCandidates: PreferenceMemoryCandidate[];
@@ -152,11 +155,11 @@ interface PendingRecallReview {
     | { kind: 'preference'; candidate: PreferenceMemoryCandidate }
     | { kind: 'task'; candidate: TaskMemoryCandidate }
   >;
-  auditId: string | null;
 }
 
 const BUSY_LLM_TIMEOUT_MS = 250;
 const DEFAULT_LLM_TIMEOUT_MS = 5_000;
+const TASK_QUEUE_SNAPSHOT_LIMIT = 5;
 
 export class MetaclawSession {
   private output: string[] = [];
@@ -450,7 +453,7 @@ export class MetaclawSession {
       proposal.taskId ? `│ 目标任务：#${proposal.taskId}${taskTitle ? ` ${taskTitle}` : ''}` : '│ 目标任务：无',
       ...proposal.reasons.map((reason, index) => `${index === 0 ? '│ 理由：' : '│       '}${reason}`),
       `│ 置信度：${proposal.confidence.toFixed(2)}`,
-      '│ 请输入 [y] 接受并继续恢复 / [n] 暂不处理 / [r] 重新查看',
+      '│ 策略：无需用户确认；高置信提案自动执行，低置信提案自动跳过',
       '└──────────────────────────────────────────────────┘',
     );
   }
@@ -458,12 +461,13 @@ export class MetaclawSession {
   private appendRecallReviewBlock(review: PendingRecallReview): void {
     const lines = [
       '',
-      '┌─ 记忆召回确认 ───────────────────────────────────┐',
+      '┌─ 记忆召回自动处理 ───────────────────────────────┐',
       `│ 当前任务：#${review.taskId} ${review.taskTitle}`,
+      '│ 策略：无需用户确认；明确适用的记忆自动采用，不确定的记忆默认跳过',
     ];
 
     if (review.selectionItems.length === 0) {
-      lines.push('│ 没有可确认的召回项，将直接继续执行');
+      lines.push('│ 没有待处理的召回项，将直接继续执行');
     } else {
       review.selectionItems.forEach((item, index) => {
         const label = item.kind === 'preference'
@@ -475,14 +479,14 @@ export class MetaclawSession {
     }
 
     lines.push(
-      '│ 请输入 [y] 全部采用 / [n] 全部忽略 / [s 编号...] 部分采用 / [i 编号...] 标记不相关 / [h 编号...] 隐藏 / [m] 查看更多 / [a] 后续同类自动采用 / [r] 重新查看',
+      '│ 当前通道不等待人工选择；如果需要调整长期偏好，可稍后使用 /memory 管理',
       '└──────────────────────────────────────────────────┘',
     );
 
     this.appendOutput(...lines);
   }
 
-  private appendLastTaskConfirmationBlock(pending: PendingLastTaskConfirmation): void {
+  private appendLastTaskAutoDecisionBlock(pending: PendingLastTaskConfirmation, decision: 'resume-unfinished' | 'follow-up'): void {
     const completedTask = this.deps.taskEngine['taskRepo'].findById(pending.completedTaskId);
     if (!completedTask) {
       return;
@@ -494,16 +498,13 @@ export class MetaclawSession {
 
     const lines = [
       '',
-      '┌─ 上次任务确认 ───────────────────────────────────┐',
+      '┌─ 上次任务自动处理 ───────────────────────────────┐',
       `│ 上一个任务：#${completedTask.id} ${completedTask.title}`,
       '│ 上一个任务已完成。',
-      '│ 请选择如何继续：',
-      '│ [f] 基于该任务创建 follow-up',
-      unfinishedTask
-        ? `│ [u] 改为恢复最近未完成任务 #${unfinishedTask.id} ${unfinishedTask.title}`
-        : '│ [u] 当前没有可恢复的未完成任务',
-      '│ [n] 本次不自动关联',
-      '│ [r] 重新查看',
+      decision === 'resume-unfinished' && unfinishedTask
+        ? `│ 自动决策：恢复最近未完成任务 #${unfinishedTask.id} ${unfinishedTask.title}`
+        : '│ 自动决策：基于上一个任务创建 follow-up',
+      '│ 策略：无需用户确认；优先恢复未完成任务，否则创建跟进任务',
       '└──────────────────────────────────────────────────┘',
     ];
 
@@ -515,11 +516,8 @@ export class MetaclawSession {
       return;
     }
 
-    this.pendingProposalConfirmation = {
-      scene,
-      proposal,
-    };
     this.appendProposalBlock(scene, proposal);
+    this.appendOutput('→ 操作提案已记录，不等待用户确认；满足执行条件的任务由调度器自动处理');
   }
 
   private createRecallPolicyService(): RecallPolicyService {
@@ -563,6 +561,7 @@ export class MetaclawSession {
       routeEventRepo.updateResult(eventId, 'fallback_default:unsupported_executor');
       return {
         executor: this.deps.executor,
+        raceExecutors: [this.deps.executor],
         decision,
         eventId,
         effectiveAction: 'fallback_default',
@@ -570,24 +569,53 @@ export class MetaclawSession {
       };
     }
 
-    if (decision.action === 'ask_review') {
-      routeEventRepo.updateResult(eventId, 'fallback_default:review_required');
-      return {
-        executor: this.deps.executor,
-        decision,
-        eventId,
-        effectiveAction: 'fallback_default',
-        fallbackReason: `Executor ${decision.selectedExecutor} 需要人工确认，当前回退 ${defaultExecutorName}`,
-      };
-    }
-
+    const raceExecutors = this.resolveRaceExecutors(decision, selectedExecutor, defaultExecutorName, profiles);
     return {
       executor: selectedExecutor,
+      raceExecutors,
       decision,
       eventId,
       effectiveAction: decision.action,
       fallbackReason: null,
     };
+  }
+
+  private resolveRaceExecutors(
+    decision: ExecutorRouteDecision,
+    selectedExecutor: ExecutorAdapter,
+    defaultExecutorName: string,
+    profiles: import('../core/executor-router.js').ExecutorProfile[],
+  ): ExecutorAdapter[] {
+    if (
+      decision.action !== 'auto_dispatch'
+      || (decision.primaryIntent !== 'research_workflow' && !decision.matchedBoundary.includes('research'))
+    ) {
+      return [selectedExecutor];
+    }
+
+    const availableResearchExecutors = new Set<string>(
+      profiles
+        .filter(profile => profile.availability === 'available')
+        .map(profile => profile.name)
+        .filter(name => name === 'pi-agent' || name === 'hermes-agent'),
+    );
+
+    const candidates = ['pi-agent', 'hermes-agent']
+      .filter(name => availableResearchExecutors.has(name))
+      .map(name => this.resolveExecutorAdapterByName(name, defaultExecutorName))
+      .filter((executor): executor is ExecutorAdapter => Boolean(executor));
+    const byName = new Map<string, ExecutorAdapter>();
+    for (const executor of [...candidates, selectedExecutor]) {
+      byName.set(executor.name, executor);
+    }
+    return Array.from(byName.values());
+  }
+
+  private resolveExecutorAdapterByName(name: string, defaultExecutorName: string): ExecutorAdapter | null {
+    if (name === defaultExecutorName) {
+      return this.deps.executor;
+    }
+    return this.createExecutorForRoute(name);
   }
 
   private createExecutorForRoute(name: string): ExecutorAdapter | null {
@@ -601,6 +629,149 @@ export class MetaclawSession {
       maxDuration: this.deps.config.executor.max_duration,
       workspaceRoot: process.cwd(),
     });
+  }
+
+  private formatExecutorRunLabel(executors: ExecutorAdapter[]): string {
+    return executors.map(executor => executor.name).join('+');
+  }
+
+  private appendExecutorRoutingDecision(routedExecutor: RoutedExecutorSelection): void {
+    const reason = `${routedExecutor.decision.primaryIntent} / ${routedExecutor.decision.matchedBoundary.join(' + ') || routedExecutor.decision.reason}`;
+    if (routedExecutor.raceExecutors.length > 1) {
+      this.appendOutput(
+        `→ 路由决策：调研竞速 (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+        `→ 执行器：${routedExecutor.raceExecutors.map(executor => executor.name).join(' + ')}`,
+        `→ 原始首选：${routedExecutor.decision.selectedExecutor}；原因：${reason}`,
+      );
+      return;
+    }
+
+    this.appendOutput(
+      `→ 路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+      `→ 原因：${reason}`,
+    );
+  }
+
+  private async executeWithOptionalRace(
+    executors: ExecutorAdapter[],
+    input: Omit<ExecutorInput, 'onProgress'> & {
+      onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
+    },
+  ): Promise<ExecutorRaceResult> {
+    if (executors.length <= 1) {
+      const executor = executors[0] ?? this.deps.executor;
+      return {
+        executor,
+        result: await executor.execute({
+          ...input,
+          onProgress: event => input.onProgress(event, executor),
+        }),
+        abortedExecutors: [],
+      };
+    }
+
+    let settled = false;
+    const running = new Set(executors);
+    return new Promise<ExecutorRaceResult>((resolve) => {
+      for (const executor of executors) {
+        executor.execute({
+          ...input,
+          onProgress: event => input.onProgress(event, executor),
+        }).then((result) => {
+          running.delete(executor);
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          const abortedExecutors = Array.from(running)
+            .filter(other => other !== executor)
+            .map(other => {
+              other.abort();
+              return other.name;
+            });
+          resolve({ executor, result, abortedExecutors });
+        }).catch((error: Error) => {
+          running.delete(executor);
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          const abortedExecutors = Array.from(running)
+            .filter(other => other !== executor)
+            .map(other => {
+              other.abort();
+              return other.name;
+            });
+          resolve({
+            executor,
+            result: {
+              success: false,
+              output: '',
+              error: error.message,
+              exitCode: 1,
+              durationMs: 0,
+            },
+            abortedExecutors,
+          });
+        });
+      }
+    });
+  }
+
+  private async executeCodexFallbackOnFailure(input: {
+    taskId: string;
+    failedExecutor: ExecutorAdapter;
+    failedResult: ExecutorResult;
+    input: Omit<ExecutorInput, 'onProgress'>;
+    onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
+  }): Promise<ExecutorRaceResult | null> {
+    if (input.failedExecutor.name === 'codex-cli') {
+      return null;
+    }
+
+    const currentTask = this.deps.taskEngine['taskRepo'].findById(input.taskId);
+    if (!currentTask || currentTask.status !== 'running') {
+      return null;
+    }
+
+    const codexExecutor = this.resolveExecutorAdapterByName('codex-cli', this.deps.executor.name);
+    if (!codexExecutor) {
+      this.appendOutput(
+        `→ ${input.failedExecutor.name} 执行失败: ${input.failedResult.error || '未知错误'}`,
+        '→ codex-cli 兜底执行器不可用，按原失败结果处理',
+      );
+      return null;
+    }
+
+    this.runningExecutorNameByTask.set(input.taskId, codexExecutor.name);
+    this.refreshRuntimeState();
+    this.appendOutput(
+      `→ ${input.failedExecutor.name} 执行失败: ${input.failedResult.error || '未知错误'}`,
+      '→ 改派给 codex-cli 兜底执行同一任务，不新建任务',
+    );
+
+    try {
+      const result = await codexExecutor.execute({
+        ...input.input,
+        task: this.deps.taskEngine['taskRepo'].findById(input.taskId) ?? input.input.task,
+        onProgress: event => input.onProgress(event, codexExecutor),
+      });
+      return { executor: codexExecutor, result, abortedExecutors: [] };
+    } catch (error) {
+      return {
+        executor: codexExecutor,
+        result: {
+          success: false,
+          output: '',
+          error: (error as Error).message,
+          exitCode: 1,
+          durationMs: 0,
+        },
+        abortedExecutors: [],
+      };
+    }
   }
 
   private async prepareTaskExecution(
@@ -634,75 +805,46 @@ export class MetaclawSession {
       taskCandidates: reviewTaskCandidates,
       preferenceCandidates: reviewPreferenceCandidates,
     });
+    const policyApplied = !decision.requiresReview || proposalType !== null;
+    const acceptedPreferenceCandidates = policyApplied
+      ? [...autoAppliedPreferenceCandidates, ...reviewPreferenceCandidates]
+      : autoAppliedPreferenceCandidates;
+    const acceptedTaskCandidates = policyApplied
+      ? [...autoAppliedTaskCandidates, ...reviewTaskCandidates]
+      : autoAppliedTaskCandidates;
 
-    if (reviewPreferenceCandidates.length === 0 && reviewTaskCandidates.length === 0) {
-      if (autoAppliedPreferenceCandidates.length > 0 || autoAppliedTaskCandidates.length > 0) {
-        this.approvedRecallSelections.set(
-          taskId,
-          this.buildAcceptedRecallSelection(autoAppliedPreferenceCandidates, autoAppliedTaskCandidates),
-        );
-        this.appendAutoAppliedMemoryBlock(taskId, task.title, autoAppliedPreferenceCandidates, autoAppliedTaskCandidates);
-      }
-      await this.submitScheduledTask(taskId, request);
-      return;
-    }
+    this.approvedRecallSelections.set(
+      taskId,
+      this.buildAcceptedRecallSelection(acceptedPreferenceCandidates, acceptedTaskCandidates),
+    );
 
-    if (!decision.requiresReview) {
-      this.approvedRecallSelections.set(
-        taskId,
-        this.buildAcceptedRecallSelection(
-          [...autoAppliedPreferenceCandidates, ...reviewPreferenceCandidates],
-          [...autoAppliedTaskCandidates, ...reviewTaskCandidates],
-        ),
-      );
+    if (acceptedPreferenceCandidates.length > 0 || acceptedTaskCandidates.length > 0) {
       this.appendAutoAppliedMemoryBlock(
         taskId,
         task.title,
-        [...autoAppliedPreferenceCandidates, ...reviewPreferenceCandidates],
-        [...autoAppliedTaskCandidates, ...reviewTaskCandidates],
+        acceptedPreferenceCandidates,
+        acceptedTaskCandidates,
       );
-      await this.submitScheduledTask(taskId, request);
-      return;
     }
 
-    const reviewBuilder = new RecallReviewBuilder();
-    const card = reviewBuilder.build({
-      taskCandidates: reviewTaskCandidates,
-      preferenceCandidates: reviewPreferenceCandidates,
-    });
-    const selectionItems = [
-      ...reviewPreferenceCandidates.map(candidate => ({ kind: 'preference' as const, candidate })),
-      ...reviewTaskCandidates.map(candidate => ({ kind: 'task' as const, candidate })),
-    ];
-
-    this.pendingRecallReview = {
-      taskId,
-      taskTitle: task.title,
-      request,
-      proposalType,
-      card,
-      autoAppliedPreferenceCandidates,
-      autoAppliedTaskCandidates,
-      preferenceCandidates: reviewPreferenceCandidates,
-      taskCandidates: reviewTaskCandidates,
-      selectionItems,
-      auditId: recallResult.auditId,
-    };
-    if (autoAppliedPreferenceCandidates.length > 0 || autoAppliedTaskCandidates.length > 0) {
-      this.appendAutoAppliedMemoryBlock(taskId, task.title, autoAppliedPreferenceCandidates, autoAppliedTaskCandidates);
+    const skippedPreferenceCandidates = policyApplied ? [] : reviewPreferenceCandidates;
+    const skippedTaskCandidates = policyApplied ? [] : reviewTaskCandidates;
+    if (skippedPreferenceCandidates.length > 0 || skippedTaskCandidates.length > 0) {
+      this.recordSuppressedRecallMemoryAuditEvents(taskId, skippedPreferenceCandidates);
+      this.appendSuppressedRecallBlock(taskId, task.title, skippedPreferenceCandidates, skippedTaskCandidates);
     }
-    this.recordAskReviewMemoryAuditEvents(taskId, reviewPreferenceCandidates);
-    this.appendRecallReviewBlock(this.pendingRecallReview);
+
+    await this.submitScheduledTask(taskId, request);
   }
 
-  private recordAskReviewMemoryAuditEvents(taskId: string, preferenceCandidates: PreferenceMemoryCandidate[]): void {
+  private recordSuppressedRecallMemoryAuditEvents(taskId: string, preferenceCandidates: PreferenceMemoryCandidate[]): void {
     for (const candidate of preferenceCandidates) {
       this.recordMemoryAuditEvent({
         taskId,
         memoryId: candidate.preferenceId,
-        action: 'ask_review',
+        action: 'suppress',
         score: candidate.applicabilityScore ?? Math.min(1, candidate.score / 100),
-        reason: candidate.applicabilityReason ?? candidate.reason,
+        reason: `不确定是否适用，默认不召回：${candidate.applicabilityReason ?? candidate.reason}`,
         judgeSource: candidate.judgeSource ?? 'rule',
         evidence: [{ reason: candidate.reason, source: candidate.source }],
       });
@@ -744,6 +886,22 @@ export class MetaclawSession {
 
     lines.push('└──────────────────────────────────────────────────┘');
     this.appendOutput(...lines);
+  }
+
+  private appendSuppressedRecallBlock(
+    taskId: string,
+    taskTitle: string,
+    preferenceCandidates: PreferenceMemoryCandidate[],
+    taskCandidates: TaskMemoryCandidate[],
+  ): void {
+    this.appendOutput(
+      '',
+      '┌─ 已跳过不确定记忆 ───────────────────────────────┐',
+      `│ 当前任务：#${taskId} ${taskTitle}`,
+      '│ 策略：无需用户确认；无法确定适用的召回默认不注入执行上下文',
+      `│ 跳过：${preferenceCandidates.length} 条偏好，${taskCandidates.length} 条任务记忆`,
+      '└──────────────────────────────────────────────────┘',
+    );
   }
 
   private buildAcceptedRecallSelection(
@@ -858,7 +1016,7 @@ export class MetaclawSession {
     const pending = this.pendingLastTaskConfirmation;
 
     if (/^r$/iu.test(trimmed)) {
-      this.appendLastTaskConfirmationBlock(pending);
+      this.appendLastTaskAutoDecisionBlock(pending, pending.unfinishedTaskId ? 'resume-unfinished' : 'follow-up');
       return true;
     }
 
@@ -880,7 +1038,7 @@ export class MetaclawSession {
 
     if (/^u$/iu.test(trimmed)) {
       if (!pending.unfinishedTaskId) {
-        this.appendOutput('→ 当前没有可恢复的未完成任务，请输入 `f` / `n` / `r`。');
+        this.appendOutput('→ 当前没有可恢复的未完成任务，已保留自动 follow-up 策略。');
         return true;
       }
 
@@ -893,7 +1051,7 @@ export class MetaclawSession {
       return true;
     }
 
-    this.appendOutput('→ 当前有待确认的上次任务恢复，可输入 `f` / `u` / `n` / `r`。');
+    this.appendOutput('→ 当前没有待确认步骤；上次任务处理已自动决策。');
     return true;
   }
 
@@ -986,227 +1144,23 @@ export class MetaclawSession {
     });
   }
 
-  private handlePendingRecallReview(userInput: string): boolean {
+  private handlePendingRecallReview(): boolean {
     if (!this.pendingRecallReview) {
       return false;
     }
 
-    const trimmed = userInput.trim();
     const pending = this.pendingRecallReview;
-
-    if (/^r$/iu.test(trimmed)) {
-      this.appendRecallReviewBlock(pending);
-      return true;
-    }
-
-    if (/^y$/iu.test(trimmed)) {
-      this.pendingRecallReview = null;
-      const selection = this.buildRecallSelectionWithAutoApplied(
-        pending,
-        pending.preferenceCandidates,
-        pending.taskCandidates,
-      );
-      this.approvedRecallSelections.set(pending.taskId, selection);
-      void this.submitScheduledTask(pending.taskId, pending.request);
-      return true;
-    }
-
-    if (/^n$/iu.test(trimmed)) {
-      this.recordRecallFeedback(pending, 'reject', pending.selectionItems.map((_, index) => index + 1));
-      this.pendingRecallReview = null;
-      this.approvedRecallSelections.set(
-        pending.taskId,
-        this.buildAcceptedRecallSelection(
-          pending.autoAppliedPreferenceCandidates,
-          pending.autoAppliedTaskCandidates,
-        ),
-      );
-      void this.submitScheduledTask(pending.taskId, pending.request);
-      return true;
-    }
-
-    if (/^(?:m|more)$/iu.test(trimmed)) {
-      this.recordMoreRecallFeedback(pending);
-      this.appendOutput('→ 已记录“需要更多候选”的召回反馈；当前确认项保持不变。');
-      this.appendRecallReviewBlock(pending);
-      return true;
-    }
-
-    const feedbackInput = this.parseRecallFeedbackInput(trimmed, pending.selectionItems.length);
-    if (feedbackInput) {
-      if (feedbackInput.indexes.length === 0) {
-        this.appendOutput('→ 未识别有效编号，请输入如 `i 1` 或 `h 2`。');
-        return true;
-      }
-
-      this.recordRecallFeedback(pending, feedbackInput.action, feedbackInput.indexes);
-      this.appendOutput(feedbackInput.action === 'hide'
-        ? '→ 已记录隐藏反馈；后续召回将过滤这些记忆项。'
-        : '→ 已记录不相关反馈；后续召回将降低这些记忆项权重。');
-      return true;
-    }
-
-    if (/^a$/iu.test(trimmed)) {
-      this.persistAutoApplyPolicies(pending);
-      this.pendingRecallReview = null;
-      const selection = this.buildRecallSelectionWithAutoApplied(
-        pending,
-        pending.preferenceCandidates,
-        pending.taskCandidates,
-      );
-      this.approvedRecallSelections.set(pending.taskId, selection);
-      this.appendOutput('→ 已记录后续自动采用策略，本次也将直接采用当前召回内容');
-      void this.submitScheduledTask(pending.taskId, pending.request);
-      return true;
-    }
-
-    const indexes = this.parseRecallSelectionInput(trimmed, pending.selectionItems.length);
-    if (indexes) {
-      const selectedPreferences: PreferenceMemoryCandidate[] = [];
-      const selectedTasks: TaskMemoryCandidate[] = [];
-
-      for (const index of indexes) {
-        const item = pending.selectionItems[index - 1];
-        if (!item) {
-          continue;
-        }
-
-        if (item.kind === 'preference') {
-          selectedPreferences.push(item.candidate);
-        } else {
-          selectedTasks.push(item.candidate);
-        }
-      }
-
-      this.pendingRecallReview = null;
-      this.recordRecallFeedback(pending, 'select', indexes);
-      this.approvedRecallSelections.set(
-        pending.taskId,
-        this.buildRecallSelectionWithAutoApplied(pending, selectedPreferences, selectedTasks),
-      );
-      void this.submitScheduledTask(pending.taskId, pending.request);
-      return true;
-    }
-
-    this.appendOutput('→ 当前有待确认的记忆召回，可输入 `y` / `n` / `s 编号...` / `a` / `r`。');
+    this.pendingRecallReview = null;
+    this.approvedRecallSelections.set(
+      pending.taskId,
+      this.buildAcceptedRecallSelection(
+        pending.autoAppliedPreferenceCandidates,
+        pending.autoAppliedTaskCandidates,
+      ),
+    );
+    this.appendOutput('→ 已清理遗留记忆召回选择状态；当前通道不等待用户确认，不确定召回已默认跳过。');
+    void this.submitScheduledTask(pending.taskId, pending.request);
     return true;
-  }
-
-  private recordRecallFeedback(
-    pending: PendingRecallReview,
-    action: RecallFeedbackAction,
-    indexes: number[],
-  ): void {
-    if (indexes.length === 0) {
-      return;
-    }
-
-    const repo = new RecallFeedbackRepo(this.deps.db);
-    const now = new Date().toISOString();
-
-    for (const index of indexes) {
-      const item = pending.selectionItems[index - 1];
-      if (!item) {
-        continue;
-      }
-
-      repo.insert({
-        id: `recall_feedback_${generateInteractionId()}`,
-        auditId: pending.auditId,
-        queryTaskId: pending.taskId,
-        targetKind: item.kind,
-        targetId: item.kind === 'preference' ? item.candidate.preferenceId : item.candidate.taskId,
-        action,
-        note: `recall-review:${action}`,
-        createdAt: now,
-      });
-    }
-  }
-
-  private recordMoreRecallFeedback(pending: PendingRecallReview): void {
-    const repo = new RecallFeedbackRepo(this.deps.db);
-    repo.insert({
-      id: `recall_feedback_${generateInteractionId()}`,
-      auditId: pending.auditId,
-      queryTaskId: pending.taskId,
-      targetKind: 'task',
-      targetId: pending.taskId,
-      action: 'more',
-      note: 'recall-review:more',
-      createdAt: new Date().toISOString(),
-    });
-  }
-
-  private persistAutoApplyPolicies(pending: PendingRecallReview): void {
-    const repo = new RecallReviewPolicyRepo(this.deps.db);
-    const now = new Date().toISOString();
-    const seenKeys = new Set<string>();
-
-    const upsertPolicy = (policy: {
-      id: string;
-      policyType: 'task_memory' | 'project_preference' | 'contact_preference' | 'proposal_type';
-      scope: string | null;
-      subject: string | null;
-      proposalType: GuidanceActionType | null;
-    }) => {
-      if (seenKeys.has(policy.id)) {
-        return;
-      }
-      seenKeys.add(policy.id);
-      repo.upsert({
-        id: policy.id,
-        policyType: policy.policyType,
-        scope: policy.scope,
-        subject: policy.subject,
-        proposalType: policy.proposalType,
-        autoApply: true,
-        createdAt: now,
-        updatedAt: now,
-      });
-    };
-
-    if (pending.proposalType) {
-      upsertPolicy({
-        id: `policy:proposal:${pending.proposalType}`,
-        policyType: 'proposal_type',
-        scope: null,
-        subject: null,
-        proposalType: pending.proposalType,
-      });
-      return;
-    }
-
-    if (pending.taskCandidates.length > 0) {
-      upsertPolicy({
-        id: 'policy:task_memory:default',
-        policyType: 'task_memory',
-        scope: null,
-        subject: null,
-        proposalType: null,
-      });
-    }
-
-    for (const candidate of pending.preferenceCandidates) {
-      if (candidate.scope === 'project' && candidate.subject) {
-        upsertPolicy({
-          id: `policy:project:${candidate.subject}`,
-          policyType: 'project_preference',
-          scope: candidate.scope,
-          subject: candidate.subject,
-          proposalType: null,
-        });
-      }
-
-      if (candidate.scope === 'contact' && candidate.subject) {
-        upsertPolicy({
-          id: `policy:contact:${candidate.subject}`,
-          policyType: 'contact_preference',
-          scope: candidate.scope,
-          subject: candidate.subject,
-          proposalType: null,
-        });
-      }
-    }
   }
 
   private extractRecallKeywords(userPrompt: string): string[] {
@@ -1293,6 +1247,135 @@ export class MetaclawSession {
     this.notify();
   }
 
+  private appendTaskQueueSnapshot(trigger: string): void {
+    const entries = this.buildTaskQueueSnapshotEntries();
+    if (entries.length === 0) {
+      return;
+    }
+
+    const state = this.runtimeState;
+    const lines = [
+      '',
+      '┌─ 任务队列前五 ───────────────────────────────────┐',
+      `│ 触发：${trigger}`,
+      `│ 总览：执行中 ${state.runningTaskId ? 1 : 0} / 待执行 ${state.readyTaskIds.length} / 挂起 ${state.parkedTaskIds.length} / 阻塞 ${state.blockedTaskIds.length}`,
+      ...entries.map((entry, index) => this.formatTaskQueueSnapshotEntry(entry, index + 1)),
+      '└──────────────────────────────────────────────────┘',
+    ];
+
+    this.appendOutput(...lines);
+  }
+
+  private buildTaskQueueSnapshotEntries(): Array<{
+    task: Task;
+    score: number;
+    reason: string;
+    executionOrder: string;
+  }> {
+    const tasks = filterDurableTasks(this.deps.taskEngine.list())
+      .filter(task => ['created', 'ready', 'running', 'parked', 'blocked'].includes(task.status));
+    const runningTaskId = this.runtimeState.runningTaskId;
+    const scored = tasks.map(task => {
+      const evaluated = this.deps.orchestration.evaluateTask(task);
+      return {
+        task,
+        score: evaluated.score.total,
+        reason: evaluated.reasons[0] ?? this.defaultQueueSnapshotReason(task),
+      };
+    });
+
+    scored.sort((a, b) => {
+      const statusDelta = this.queueSnapshotStatusRank(b.task, runningTaskId) - this.queueSnapshotStatusRank(a.task, runningTaskId);
+      if (statusDelta !== 0) {
+        return statusDelta;
+      }
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return new Date(a.task.createdAt).getTime() - new Date(b.task.createdAt).getTime();
+    });
+
+    let runnableOrder = 0;
+    return scored.slice(0, TASK_QUEUE_SNAPSHOT_LIMIT).map(item => {
+      const executable = ['running', 'ready', 'created'].includes(item.task.status)
+        || (item.task.status === 'parked' && item.task.prioritySignals.isReady);
+      let executionOrder = '-';
+      if (item.task.id === runningTaskId) {
+        executionOrder = '正在执行';
+      } else if (executable) {
+        runnableOrder += 1;
+        executionOrder = `第 ${runnableOrder} 顺位`;
+      } else if (item.task.status === 'parked') {
+        executionOrder = '挂起待恢复';
+      } else if (item.task.status === 'blocked') {
+        executionOrder = '阻塞待解除';
+      }
+
+      return {
+        ...item,
+        executionOrder,
+      };
+    });
+  }
+
+  private queueSnapshotStatusRank(task: Task, runningTaskId: string | null): number {
+    if (task.id === runningTaskId || task.status === 'running') {
+      return 5;
+    }
+    if (task.status === 'ready' || task.status === 'created') {
+      return 4;
+    }
+    if (task.status === 'parked' && task.prioritySignals.isReady) {
+      return 3;
+    }
+    if (task.status === 'parked') {
+      return 2;
+    }
+    if (task.status === 'blocked') {
+      return 1;
+    }
+    return 0;
+  }
+
+  private defaultQueueSnapshotReason(task: Task): string {
+    if (task.status === 'running') {
+      return '当前正在执行';
+    }
+    if (task.status === 'parked') {
+      return task.lastInterruptionReason || '任务已挂起';
+    }
+    if (task.status === 'blocked') {
+      return task.dependencies.find(dependency => dependency.status === 'waiting')?.description || '等待解除阻塞';
+    }
+    if (task.prioritySignals.semanticPriorityReason) {
+      return `语义优先级：${task.prioritySignals.semanticPriorityReason}`;
+    }
+    return task.lastSchedulingReason || '等待调度';
+  }
+
+  private formatTaskQueueSnapshotEntry(
+    entry: {
+      task: Task;
+      score: number;
+      reason: string;
+      executionOrder: string;
+    },
+    index: number,
+  ): string {
+    const marker = entry.task.status === 'running'
+      ? '执行中'
+      : entry.task.status === 'parked'
+        ? '挂起'
+        : entry.task.status === 'blocked'
+          ? '阻塞'
+          : entry.task.status === 'ready'
+            ? '待执行'
+            : '已创建';
+    const progress = Math.round(entry.task.prioritySignals.progressRatio * 100);
+    return `│ ${index}. [${marker}] #${entry.task.id} ${entry.task.title} | 优先级 ${entry.score.toFixed(1)} | ${entry.executionOrder} | 进度 ${progress}% | ${entry.reason}`;
+  }
+
   private persistSessionState(changes: {
     lastFocusedTaskId?: string | null;
     lastCompletedTaskId?: string | null;
@@ -1368,12 +1451,88 @@ export class MetaclawSession {
     }
 
     const unfinishedTask = this.findMostRecentUnfinishedTask([completedTask.id]);
-    this.pendingLastTaskConfirmation = {
+    const pending: PendingLastTaskConfirmation = {
       originalInput: userInput,
       completedTaskId: completedTask.id,
       unfinishedTaskId: unfinishedTask?.id ?? null,
     };
-    this.appendLastTaskConfirmationBlock(this.pendingLastTaskConfirmation);
+    if (unfinishedTask) {
+      this.appendLastTaskAutoDecisionBlock(pending, 'resume-unfinished');
+      await this.resumeUnfinishedTaskFromConfirmation(pending);
+    } else {
+      this.appendLastTaskAutoDecisionBlock(pending, 'follow-up');
+      await this.createFollowUpFromCompletedTask(pending);
+    }
+    return true;
+  }
+
+  private async maybeHandleNaturalLanguageTaskResume(userInput: string): Promise<boolean> {
+    if (typeof this.deps.llmBridge.resolveTaskResumeIntent !== 'function') {
+      return false;
+    }
+
+    const candidates = filterDurableTasks(this.deps.taskEngine.list())
+      .filter(task => task.status === 'parked' || task.status === 'blocked');
+    if (candidates.length === 0) {
+      return false;
+    }
+
+    const decision = await this.awaitWithTimeout(
+      Promise.resolve(this.deps.llmBridge.resolveTaskResumeIntent(userInput, candidates.map(task => ({
+        id: task.id,
+        title: task.title,
+        goal: task.goal,
+        summary: task.summary || task.snapshots.at(-1)?.nextStep || task.lastInterruptionReason,
+        status: task.status,
+      })))),
+      this.getLlmTimeoutMs(),
+      { action: 'none' as const, taskId: null, reason: 'LLM resume intent 超时，fallback', confidence: 0 },
+    );
+
+    if (decision.action !== 'resume' || !decision.taskId || decision.confidence < 0.6) {
+      return false;
+    }
+
+    const targetTask = this.deps.taskEngine['taskRepo'].findById(decision.taskId);
+    if (!targetTask || (targetTask.status !== 'parked' && targetTask.status !== 'blocked')) {
+      return false;
+    }
+
+    const plan = planTaskExecution(targetTask, userInput);
+    if (plan.mode === 'blocked') {
+      this.deps.taskEngine.unblock(targetTask.id);
+      this.setCurrentTaskId(targetTask.id);
+      this.setFocusContext({ kind: 'task', taskId: targetTask.id });
+      this.appendOutput(
+        `→ 命中已有阻塞任务 #${targetTask.id}`,
+        `→ 语义判断：${decision.reason} (confidence=${decision.confidence.toFixed(2)})`,
+        `→ 任务 #${targetTask.id} 已解除阻塞，继续执行`,
+      );
+      await this.prepareTaskExecution(targetTask.id, {
+        userPrompt: userInput,
+        contextTaskId: targetTask.id,
+        executionMode: 'resume-blocked',
+        schedulingReason: '自然语言恢复阻塞任务',
+      });
+      return true;
+    }
+
+    if (plan.mode === 'fork-follow-up') {
+      return false;
+    }
+
+    this.setCurrentTaskId(plan.executionTaskId);
+    this.setFocusContext({ kind: 'task', taskId: plan.executionTaskId });
+    this.appendOutput(
+      `→ 命中已有${targetTask.status === 'parked' ? '挂起' : '未完成'}任务 #${targetTask.id}`,
+      `→ 语义判断：${decision.reason} (confidence=${decision.confidence.toFixed(2)})`,
+    );
+    await this.prepareTaskExecution(plan.executionTaskId, {
+      userPrompt: userInput,
+      contextTaskId: plan.contextTaskId,
+      executionMode: targetTask.status === 'parked' ? 'resume-parked' : 'fresh',
+      schedulingReason: targetTask.status === 'parked' ? '自然语言恢复挂起任务' : '自然语言继续已有任务',
+    });
     return true;
   }
 
@@ -1425,6 +1584,14 @@ export class MetaclawSession {
     userInput: string,
     options: { skipRiskConfirmation?: boolean } = {},
   ): Promise<void> {
+    if (this.maybeHandleNaturalLanguageTaskClear(userInput)) {
+      return;
+    }
+
+    if (await this.maybeHandleNaturalLanguageTaskResume(userInput)) {
+      return;
+    }
+
     if (await this.maybeHandlePersistedLastTaskContinuation(userInput)) {
       return;
     }
@@ -1444,7 +1611,7 @@ export class MetaclawSession {
     }
 
     if (this.pendingRecallReview) {
-      const handled = this.handlePendingRecallReview(userInput);
+      const handled = this.handlePendingRecallReview();
       if (handled) {
         return;
       }
@@ -1462,7 +1629,9 @@ export class MetaclawSession {
         const pendingPrompt = this.pendingRiskConfirmation.prompt;
         this.pendingRiskConfirmation = null;
         this.appendOutput('→ 已确认高风险动作，继续执行原请求');
-        await this.handleNaturalLanguageInput(pendingPrompt, { skipRiskConfirmation: true });
+        await this.handleNaturalLanguageInput(pendingPrompt, {
+          skipRiskConfirmation: true,
+        });
         return;
       }
 
@@ -1472,7 +1641,8 @@ export class MetaclawSession {
         return;
       }
 
-      this.appendOutput('⚠️ 当前有待确认的高风险动作。输入“确认执行”继续，或输入“取消执行”放弃。');
+      this.pendingRiskConfirmation = null;
+      this.appendOutput('⚠️ 已清理遗留高风险确认状态；当前通道不再等待用户确认。');
       return;
     }
 
@@ -1505,12 +1675,10 @@ export class MetaclawSession {
     }
 
     if (!options.skipRiskConfirmation && isRiskyExternalActionInstruction(userInput)) {
-      this.pendingRiskConfirmation = { prompt: userInput };
       this.appendOutput(
-        '⚠️ 这是高风险动作，默认不会直接执行。',
-        '→ 输入“确认执行”后继续，或输入“取消执行”放弃。',
+        '⚠️ 检测到高风险外部动作。',
+        '→ 当前通道不等待用户确认，已按原请求继续执行；执行器仍需遵守系统安全边界。',
       );
-      return;
     }
 
     const durableTasks = filterDurableTasks(this.deps.taskEngine.list());
@@ -1656,6 +1824,33 @@ export class MetaclawSession {
     });
   }
 
+  private maybeHandleNaturalLanguageTaskClear(userInput: string): boolean {
+    const scope = parseTaskClearInstruction(userInput);
+    if (!scope) {
+      return false;
+    }
+
+    const result = cancelTasksByScope(
+      {
+        taskEngine: this.deps.taskEngine,
+        memoryEngine: this.deps.memoryEngine,
+        orchestration: this.deps.orchestration,
+        executor: this.deps.executor,
+        currentTaskId: this.currentTaskId,
+        db: this.deps.db,
+        config: this.deps.config,
+      },
+      scope,
+    );
+    if (result.cancelled.some(task => task.id === this.currentTaskId)) {
+      this.setCurrentTaskId(null);
+      this.setFocusContext(null);
+    }
+    this.refreshRuntimeState();
+    this.appendOutput(formatTaskClearResult(scope, result.cancelled, result.runningCancelled));
+    return true;
+  }
+
   private async resolveRouteDecision(
     userInput: string,
     recentTasks: Array<{ id: string; title: string; goal: string; summary: string; status: Task['status'] }>,
@@ -1673,15 +1868,17 @@ export class MetaclawSession {
 
   private async applySemanticPriority(taskId: string, userInput: string): Promise<void> {
     const task = this.deps.taskEngine['taskRepo'].findById(taskId);
-    if (!task || typeof this.deps.llmBridge.resolveTaskPriority !== 'function') {
+    if (!task) {
       return;
     }
 
-    const priority = await this.awaitWithTimeout(
-      Promise.resolve(this.deps.llmBridge.resolveTaskPriority(userInput)),
-      this.getLlmTimeoutMs(),
-      { priority: parsePriorityHint(userInput), reason: 'LLM priority 超时，fallback' },
-    );
+    const priority = typeof this.deps.llmBridge.resolveTaskPriority === 'function'
+      ? await this.awaitWithTimeout(
+          Promise.resolve(this.deps.llmBridge.resolveTaskPriority(userInput)),
+          this.getLlmTimeoutMs(),
+          { priority: parsePriorityHint(userInput), reason: 'LLM priority 超时，fallback' },
+        )
+      : { priority: parsePriorityHint(userInput), reason: '规则识别语义优先级' };
 
     this.deps.taskEngine['taskRepo'].update(taskId, {
       prioritySignals: {
@@ -1770,7 +1967,7 @@ export class MetaclawSession {
     if (editMatch) {
       const editedContent = editMatch[1]?.trim();
       if (!editedContent) {
-        this.appendOutput('请输入 `e <新内容>` 完成编辑后确认');
+        this.appendOutput('→ 当前通道不进入编辑确认流程；请稍后用 `/memory add <内容>` 或 `/memory candidates` 管理。');
         return true;
       }
 
@@ -1785,7 +1982,7 @@ export class MetaclawSession {
       return true;
     }
 
-    this.appendOutput('→ 保留该候选偏好，稍后可输入 `y` / `n` / `e <新内容>`，或用 `/memory candidates` 管理');
+    this.appendOutput('→ 当前通道不等待用户确认；候选偏好已保留，稍后可用 `/memory candidates` 管理。');
     return false;
   }
 
@@ -1823,28 +2020,17 @@ export class MetaclawSession {
         continue;
       }
 
-      if (!this.pendingPreferenceConfirmation) {
-        this.pendingPreferenceConfirmation = {
-          observationId: observation.id,
-          pattern: candidate,
-        };
-      }
-
       if (isHighRiskMemoryCandidate(candidate)) {
         outputLines.push(
           '',
           `⚠️ 高风险偏好不会静默写入："${candidate}"`,
-          '   请确认后再保存为长期记忆。',
-          '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
-          `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
+          `   已保留为候选，不等待确认；如需保存，可稍后用 /memory confirm ${observation.id} 手动确认`,
         );
       } else {
         outputLines.push(
         '',
         `💡 检测到可能的长期偏好："${candidate}"`,
-        '   要把它记为长期偏好吗？',
-        '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
-        `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
+        `   已保留为候选，不等待确认；如需保存，可稍后用 /memory confirm ${observation.id} 手动确认`,
         );
       }
       this.notifyMemoryCandidate(observation.id, candidate, 'high-confidence');
@@ -1858,7 +2044,7 @@ export class MetaclawSession {
   private recordMemoryAuditEvent(input: {
     taskId: string | null;
     memoryId: string;
-    action: 'auto_capture' | 'auto_apply' | 'ask_review';
+    action: 'auto_capture' | 'auto_apply' | 'ask_review' | 'suppress';
     score: number | null;
     reason: string;
     judgeSource: string;
@@ -1967,6 +2153,7 @@ export class MetaclawSession {
 
     if (result.action === 'queued') {
       this.appendOutput(`→ 任务 #${taskId} 已进入待执行队列`);
+      this.appendTaskQueueSnapshot('任务进入待执行队列');
       return;
     }
 
@@ -1975,12 +2162,14 @@ export class MetaclawSession {
         `→ 高优任务到达，抢占当前任务 #${result.preemptedTaskId}`,
         `→ 原因：${request.schedulingReason || '用户显式要求优先处理'}`,
         `→ 任务 #${result.preemptedTaskId} 已挂起，开始执行 #${taskId}`,
-        `→ 派发给 ${this.deps.executor.name}...`,
+        `→ 执行准备：先由 ${this.deps.executor.name} 解析意图与构建上下文，随后按路由派发到具体 Executor`,
       );
+      this.appendTaskQueueSnapshot('高优任务抢占，队列已重排');
       return;
     }
 
-    this.appendOutput(`→ 派发给 ${this.deps.executor.name}...`);
+    this.appendOutput(`→ 执行准备：先由 ${this.deps.executor.name} 解析意图与构建上下文，随后按路由派发到具体 Executor`);
+    this.appendTaskQueueSnapshot('任务开始执行');
   }
 
   private dispatchTask(taskId: string, context?: DispatchContext): Promise<void> {
@@ -2036,12 +2225,15 @@ export class MetaclawSession {
 
   private async executeTask(taskId: string, request: QueuedExecutionRequest): Promise<void> {
     const { userPrompt, contextTaskId, executionMode, schedulingReason, newlyProvidedResources } = request;
-    const finishExecution = async (lines: string[]) => {
+    const finishExecution = async (lines: string[], options: { scheduleNext?: boolean } = {}) => {
       this.runningExecutorNameByTask.delete(taskId);
       this.refreshRuntimeState();
       this.appendOutput(...lines);
-      await this.scheduler.scheduleNext();
+      if (options.scheduleNext ?? true) {
+        await this.scheduler.scheduleNext();
+      }
       this.refreshRuntimeState();
+      this.appendTaskQueueSnapshot('任务状态变更');
     };
 
     const task = this.deps.taskEngine['taskRepo'].findById(taskId);
@@ -2108,13 +2300,13 @@ export class MetaclawSession {
 
     this.refreshRuntimeState();
     const routedExecutor = this.resolveExecutorForTask(taskId, userPrompt);
-    this.runningExecutorNameByTask.set(taskId, routedExecutor.executor.name);
-    this.appendOutput(
-      `→ 路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
-      `→ 原因：${routedExecutor.decision.primaryIntent} / ${routedExecutor.decision.matchedBoundary.join(' + ') || routedExecutor.decision.reason}`,
-    );
+    this.runningExecutorNameByTask.set(taskId, this.formatExecutorRunLabel(routedExecutor.raceExecutors));
+    this.appendExecutorRoutingDecision(routedExecutor);
     if (routedExecutor.fallbackReason) {
       this.appendOutput(`→ ${routedExecutor.fallbackReason}`);
+    }
+    if (routedExecutor.raceExecutors.length > 1) {
+      this.appendOutput(`→ 调研竞速：同时派发给 ${routedExecutor.raceExecutors.map(executor => executor.name).join(' + ')}；谁先返回采用谁的结果，并自动终止其他执行器`);
     }
 
     this.refreshRuntimeState();
@@ -2138,43 +2330,72 @@ export class MetaclawSession {
       const executionId = `exec_${generateInteractionId()}`;
       const skillUsageEventRepo = new SkillUsageEventRepo(this.deps.db);
 
-      const executor = routedExecutor.executor;
-      const result = await executor.execute({
+      const executorInput = {
         task: this.deps.taskEngine['taskRepo'].findById(taskId)!,
         preferences,
         userPrompt,
         conversationHistory,
         executionContextBundle,
-        onProgress: (event) => {
-          const parsedSkillEvent = event.skillEvent ?? parseSkillUsageEventLine(event.text);
-          const progressText = parsedSkillEvent
-            ? `Skill ${parsedSkillEvent.skillName}: ${parsedSkillEvent.message}`
-            : event.text;
-          const progressLine = `${parsedSkillEvent ? '🛠️' : '·'} #${taskId} ${progressText}`;
-          if (parsedSkillEvent) {
-            skillUsageEventRepo.insert({
-              id: `sue_${generateInteractionId()}`,
-              taskId,
-              executionId,
-              executorName: executor.name,
-              skillName: parsedSkillEvent.skillName,
-              skillVersion: parsedSkillEvent.skillVersion,
-              eventType: parsedSkillEvent.eventType,
-              message: parsedSkillEvent.message,
-              payload: parsedSkillEvent.payload,
-              createdAt: new Date().toISOString(),
-            });
-          }
-          if (this.lastProgressLineByTask.get(taskId) === progressLine) {
-            return;
-          }
-          this.lastProgressLineByTask.set(taskId, progressLine);
-          this.appendOutput(progressLine);
-        },
+      };
+      const onProgress = (event: ExecutorProgressEvent, executor: ExecutorAdapter) => {
+        const parsedSkillEvent = event.skillEvent ?? parseSkillUsageEventLine(event.text);
+        const progressText = parsedSkillEvent
+          ? `Skill ${parsedSkillEvent.skillName}: ${parsedSkillEvent.message}`
+          : event.text;
+        const progressLine = `${parsedSkillEvent ? '🛠️' : '·'} #${taskId} [${executor.name}] ${progressText}`;
+        if (parsedSkillEvent) {
+          skillUsageEventRepo.insert({
+            id: `sue_${generateInteractionId()}`,
+            taskId,
+            executionId,
+            executorName: executor.name,
+            skillName: parsedSkillEvent.skillName,
+            skillVersion: parsedSkillEvent.skillVersion,
+            eventType: parsedSkillEvent.eventType,
+            message: parsedSkillEvent.message,
+            payload: parsedSkillEvent.payload,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        if (this.lastProgressLineByTask.get(taskId) === progressLine) {
+          return;
+        }
+        this.lastProgressLineByTask.set(taskId, progressLine);
+        this.appendOutput(progressLine);
+      };
+
+      const raceResult = await this.executeWithOptionalRace(routedExecutor.raceExecutors, {
+        ...executorInput,
+        onProgress,
       });
+      let { executor, result } = raceResult;
+      if (raceResult.abortedExecutors.length > 0) {
+        this.appendOutput(`→ ${executor.name} 已先返回，已终止：${raceResult.abortedExecutors.join('、')}`);
+      }
 
       const latestTask = this.deps.taskEngine['taskRepo'].findById(taskId);
       if (!latestTask || latestTask.status !== 'running') {
+        this.runningExecutorNameByTask.delete(taskId);
+        this.refreshRuntimeState();
+        return;
+      }
+
+      if (!result.success) {
+        const fallbackResult = await this.executeCodexFallbackOnFailure({
+          taskId,
+          failedExecutor: executor,
+          failedResult: result,
+          input: executorInput,
+          onProgress,
+        });
+        if (fallbackResult) {
+          executor = fallbackResult.executor;
+          result = fallbackResult.result;
+        }
+      }
+
+      const taskAfterFallback = this.deps.taskEngine['taskRepo'].findById(taskId);
+      if (!taskAfterFallback || taskAfterFallback.status !== 'running') {
         this.runningExecutorNameByTask.delete(taskId);
         this.refreshRuntimeState();
         return;
@@ -2198,12 +2419,17 @@ export class MetaclawSession {
           await finishExecution([
             '✗ 执行未完成: 执行器返回了未交付结果，未生成任务产物',
             this.buildUndeliverableOutputHint(taskId),
-          ]);
+          ], { scheduleNext: false });
           this.lastProgressLineByTask.delete(taskId);
           return;
         }
 
-        new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'success');
+        new ExecutorRouteEventRepo(this.deps.db).updateResult(
+          routedExecutor.eventId,
+          executor.name === 'codex-cli' && routedExecutor.decision.selectedExecutor !== 'codex-cli'
+            ? 'fallback_codex_success'
+            : 'success',
+        );
         const workspaceContext = executionContextBundle.workspaceContext;
         let artifactPaths = this.collectArtifactPaths(
           result.output,
@@ -2229,16 +2455,10 @@ export class MetaclawSession {
         for (const pattern of patterns) {
           const { observation, shouldPromptConfirm } = this.deps.memoryEngine.observe(pattern, taskId);
           if (shouldPromptConfirm) {
-            this.pendingPreferenceConfirmation = {
-              observationId: observation.id,
-              pattern,
-            };
             completionLines.push(
               '',
               `💡 检测到重复模式（${observation.occurrenceCount}次）："${pattern}"`,
-              '   要把它记为长期偏好吗？',
-              '   [y] 确认  [n] 忽略  [e <新内容>] 编辑后确认',
-              `   也可以稍后用 /memory confirm ${observation.id} 手动确认`,
+              `   已保留为候选，不等待确认；如需保存，可稍后用 /memory confirm ${observation.id} 手动确认`,
             );
             this.notifyMemoryCandidate(observation.id, pattern, 'repeated-pattern');
           }
@@ -2314,7 +2534,7 @@ export class MetaclawSession {
         await finishExecution([
           `✗ 执行失败: ${errorMessage}`,
           this.buildRecoverableFailureHint(taskId, errorMessage),
-        ]);
+        ], { scheduleNext: false });
         this.lastProgressLineByTask.delete(taskId);
         return;
       }
@@ -2331,7 +2551,7 @@ export class MetaclawSession {
           await finishExecution([
             `✗ 执行异常: ${errorMessage}`,
             this.buildRecoverableFailureHint(taskId, errorMessage),
-          ]);
+          ], { scheduleNext: false });
           this.lastProgressLineByTask.delete(taskId);
           return;
         }
@@ -2397,10 +2617,6 @@ export class MetaclawSession {
 
     if (/执行器空闲超时|executor idle timeout/i.test(errorMessage)) {
       return `→ 任务 #${taskId} 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。请检查执行器是否仍在正常推进，必要时补充信息后执行 /task ${taskId} unblock 继续`;
-    }
-
-    if (/执行器运行总时长超限|executor max duration exceeded/i.test(errorMessage)) {
-      return `→ 任务 #${taskId} 已转为阻塞；任务运行时间已超过总时长上限。若确认仍应继续，可调大 executor.max_duration 后执行 /task ${taskId} unblock 重试`;
     }
 
     return `→ 任务 #${taskId} 已转为阻塞，排除问题后执行 /task ${taskId} unblock 继续`;
@@ -2626,6 +2842,14 @@ export class MetaclawSession {
 
     for (const task of filterDurableTasks(this.deps.taskEngine.list())) {
       if (['created', 'ready'].includes(task.status) && !byId.has(task.id)) {
+        byId.set(task.id, task);
+      }
+      if (
+        task.status === 'parked'
+        && task.prioritySignals.isReady
+        && task.dependencies.every(dependency => dependency.status === 'resolved')
+        && !byId.has(task.id)
+      ) {
         byId.set(task.id, task);
       }
     }

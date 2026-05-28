@@ -81,6 +81,23 @@ export class TaskEngine {
   }
 
   /**
+   * 取消任务。用于批量清理时保留任务审计记录，同时阻止后续调度继续执行。
+   */
+  cancel(taskId: string, reason = '用户取消任务'): Task {
+    const task = this.taskRepo.findById(taskId);
+    if (!task) throw new Error(`任务不存在: ${taskId}`);
+    if (['done', 'archived', 'cancelled'].includes(task.status)) {
+      throw new Error(`只能取消未完成任务，当前状态: ${task.status}`);
+    }
+
+    this.taskRepo.update(taskId, {
+      status: 'cancelled',
+      lastInterruptionReason: reason,
+    });
+    return this.taskRepo.findById(taskId)!;
+  }
+
+  /**
    * 挂起任务：RUNNING → PARKED
    */
   park(taskId: string, reason: string, snapshot: Omit<TaskSnapshot, 'createdAt'>): Task {

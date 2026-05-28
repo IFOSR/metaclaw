@@ -30,25 +30,21 @@ export abstract class CommandLineExecutorAdapter implements ExecutorAdapter {
       let stdoutBuffer = '';
       let stderrBuffer = '';
       let idleTimer: NodeJS.Timeout | null = null;
-      let maxTimer: NodeJS.Timeout | null = null;
       let forceKillTimer: NodeJS.Timeout | null = null;
-      let timeoutReason: 'idle' | 'max' | null = null;
+      let timeoutReason: 'idle' | null = null;
 
       const idleTimeoutMs = Math.max(this.config.timeout, 1) * 1000;
-      const maxDurationSeconds = this.config.maxDuration ?? Math.max(this.config.timeout * 6, 3600);
-      const maxDurationMs = Math.max(maxDurationSeconds, this.config.timeout) * 1000;
 
       const clearTimers = () => {
         if (idleTimer) clearTimeout(idleTimer);
-        if (maxTimer) clearTimeout(maxTimer);
         if (forceKillTimer) clearTimeout(forceKillTimer);
       };
 
-      const terminateForTimeout = (reason: 'idle' | 'max') => {
+      const terminateForIdleTimeout = () => {
         if (!this.process || this.abortRequested || timeoutReason) {
           return;
         }
-        timeoutReason = reason;
+        timeoutReason = 'idle';
         this.process.kill('SIGTERM');
         forceKillTimer = setTimeout(() => {
           this.process?.kill('SIGKILL');
@@ -57,10 +53,9 @@ export abstract class CommandLineExecutorAdapter implements ExecutorAdapter {
 
       const resetIdleTimer = () => {
         if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => terminateForTimeout('idle'), idleTimeoutMs);
+        idleTimer = setTimeout(terminateForIdleTimeout, idleTimeoutMs);
       };
 
-      maxTimer = setTimeout(() => terminateForTimeout('max'), maxDurationMs);
       resetIdleTimer();
 
       this.process.stdout?.on('data', (chunk: Buffer) => {
@@ -88,9 +83,7 @@ export abstract class CommandLineExecutorAdapter implements ExecutorAdapter {
             ? 'execution interrupted'
             : timeoutReason === 'idle'
               ? 'executor idle timeout'
-              : timeoutReason === 'max'
-                ? 'executor max duration exceeded'
-                : formatExecutorError(stderr);
+              : formatExecutorError(stderr);
         resolve({
           success,
           output: stdout.trim(),

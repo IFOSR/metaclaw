@@ -55,8 +55,8 @@ function createDurableRouteBridge(): LlmBridge {
   } as unknown as LlmBridge;
 }
 
-describe('Phase E8 TaskMemoryCard recall review integration', () => {
-  it('shows relevant task memory cards in Recall Review and injects them only after user adoption', async () => {
+describe('Phase E8 TaskMemoryCard recall integration', () => {
+  it('skips uncertain task memory cards instead of asking for recall confirmation', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -115,16 +115,13 @@ describe('Phase E8 TaskMemoryCard recall review integration', () => {
     session.initialize();
     await session.submit('整理 Phoenix 本周周报，补齐经营数据栏目');
 
-    const reviewOutput = session.getSnapshot().output.join('\n');
-    expect(reviewOutput).toContain('记忆召回确认');
-    expect(reviewOutput).toContain('Phoenix 周报整理');
-    expect(reviewOutput).toContain('参考型召回');
-    expect(executor.execute).not.toHaveBeenCalled();
-
-    await session.submit('y', { awaitAsyncWork: true });
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).toContain('已跳过不确定记忆');
+    expect(output).toContain('跳过：0 条偏好，1 条任务记忆');
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
     const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(executionInput.executionContextBundle.materialContext.resources).toContain('docs/phoenix-weekly-output.md');
+    expect(executionInput.executionContextBundle.materialContext.resources).not.toContain('docs/phoenix-weekly-output.md');
   });
 });

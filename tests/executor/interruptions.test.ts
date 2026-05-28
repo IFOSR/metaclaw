@@ -150,11 +150,10 @@ describe('executor interruption semantics', () => {
       conversationHistory: [],
     });
 
-    await vi.advanceTimersByTimeAsync(900);
-    child.stdout.emit('data', Buffer.from('working\n'));
-    await vi.advanceTimersByTimeAsync(900);
-    child.stderr.emit('data', Buffer.from('still running\n'));
-    await vi.advanceTimersByTimeAsync(900);
+    for (let i = 0; i < 12; i += 1) {
+      await vi.advanceTimersByTimeAsync(900);
+      child.stdout.emit('data', Buffer.from(`working ${i}\n`));
+    }
     child.emit('close', 0);
 
     const result = await resultPromise;

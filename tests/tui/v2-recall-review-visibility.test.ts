@@ -88,8 +88,8 @@ afterEach(() => {
   inputCapture.handler = undefined;
 });
 
-describe('App V2 recall review visibility', () => {
-  it('shows proposal and recall review blocks before execution', async () => {
+describe('App V2 recall handling visibility', () => {
+  it('shows proposal and then continues without recall confirmation', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const prefRepo = new PreferenceRepo(db);
@@ -172,15 +172,13 @@ describe('App V2 recall review visibility', () => {
 
     await waitFor(() => {
       expect(app.lastFrame()).toContain('操作提案');
-      expect(app.lastFrame()).toContain('继续恢复');
+      expect(app.lastFrame()).toContain('恢复');
     });
 
-    await submitLine('y');
-
     await waitFor(() => {
-      expect(app.lastFrame()).toContain('记忆召回确认');
-      expect(app.lastFrame()).toContain('Phoenix 周报统一保留风险栏目和经营数据栏目');
-      expect(executor.execute).not.toHaveBeenCalled();
+      expect(app.lastFrame()).not.toContain('记忆召回确认');
+      expect(app.lastFrame()).toContain('已注入 1 条偏好');
+      expect(executor.execute).toHaveBeenCalledTimes(1);
     });
 
     app.unmount();

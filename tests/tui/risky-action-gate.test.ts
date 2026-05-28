@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe('App risky action gate', () => {
-  it('requires confirmation before executing a risky external action prompt', async () => {
+  it('warns but does not wait for confirmation before executing a risky external action prompt', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -115,15 +115,16 @@ describe('App risky action gate', () => {
 
     await submitLine('直接把邮件发给客户');
 
-    expect(executor.execute).not.toHaveBeenCalled();
-    expect(app.lastFrame()).toContain('⚠️ 这是高风险动作');
-    expect(app.lastFrame()).toContain('确认执行');
+    await flushUpdates();
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(app.lastFrame()).toContain('⚠️ 检测到高风险外部动作');
+    expect(app.lastFrame()).not.toContain('确认执行');
 
     app.unmount();
     app.cleanup();
   });
 
-  it('executes the pending risky action after explicit confirmation', async () => {
+  it('treats later confirmation text as a normal input because no confirmation is pending', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -165,7 +166,7 @@ describe('App risky action gate', () => {
     await submitLine('直接把邮件发给客户');
     await submitLine('确认执行');
 
-    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(executor.execute).toHaveBeenCalledTimes(2);
     expect(app.lastFrame()).toContain('已发送给客户');
 
     app.unmount();

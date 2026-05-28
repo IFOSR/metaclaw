@@ -1169,6 +1169,7 @@ function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): 
       || line.startsWith('→ 原因：')
       || line.startsWith('→ 抢占当前任务')
       || line.startsWith('→ 已自动关联')
+      || isTaskBlockedAfterFailureLine(line)
     )) {
       filtered.push(rawLine);
       continue;
@@ -1192,6 +1193,7 @@ function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): 
 
     if (includeCurrentCompletion && (
       /^✓\s+任务完成/.test(line)
+      || isExecutorFailureLine(line)
       || line === ''
       || line.startsWith('→ 文件输出目录:')
       || line.startsWith('→ 已省略文件正文输出')
@@ -1452,8 +1454,8 @@ function extractFeishuGuidanceProgressBlocks(outputLines: string[]): string[] {
 
   for (const rawLine of outputLines) {
     const line = rawLine.trim();
-    if (line.startsWith('┌─ 操作指引')) {
-      collecting = [];
+    if (isFeishuProgressBlockStart(line)) {
+      collecting = [line];
       continue;
     }
     if (!collecting) {
@@ -1479,7 +1481,7 @@ function extractFeishuGuidanceProgressLines(outputLines: string[]): string[] {
 
   for (const rawLine of outputLines) {
     const line = rawLine.trim();
-    if (line.startsWith('┌─ 操作指引')) {
+    if (isFeishuProgressBlockStart(line)) {
       collecting = true;
       lines.push(rawLine);
       continue;
@@ -1496,7 +1498,27 @@ function extractFeishuGuidanceProgressLines(outputLines: string[]): string[] {
   return lines;
 }
 
+function isFeishuProgressBlockStart(line: string): boolean {
+  return line.startsWith('┌─ 操作指引')
+    || line.startsWith('┌─ 已自动采用记忆')
+    || line.startsWith('┌─ 已跳过不确定记忆')
+    || line.startsWith('┌─ 任务队列前五');
+}
+
 function formatFeishuGuidanceProgressBlock(lines: string[]): string | null {
+  const title = lines[0] ?? '';
+  if (title.startsWith('┌─ 任务队列前五')) {
+    return formatFeishuTaskQueueBlock(lines);
+  }
+
+  if (title.startsWith('┌─ 已自动采用记忆')) {
+    return formatFeishuMemoryDecisionBlock('记忆召回自动采用', lines);
+  }
+
+  if (title.startsWith('┌─ 已跳过不确定记忆')) {
+    return formatFeishuMemoryDecisionBlock('记忆召回已跳过', lines);
+  }
+
   const scene = lines.find(line => line.startsWith('│ 场景：'))?.replace(/^│\s*场景：/, '').trim();
   if (scene !== '恢复已挂起任务' && scene !== '解除阻塞后恢复') {
     return null;
@@ -1517,6 +1539,42 @@ function formatFeishuGuidanceProgressBlock(lines: string[]): string | null {
   ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
+function formatFeishuTaskQueueBlock(lines: string[]): string | null {
+  const trigger = lines.find(line => line.startsWith('│ 触发：'))?.replace(/^│\s*触发：/, '').trim();
+  const summary = lines.find(line => line.startsWith('│ 总览：'))?.replace(/^│\s*总览：/, '').trim();
+  const entries = lines
+    .filter(line => /^│\s*\d+\.\s+/.test(line))
+    .map(line => line.replace(/^│\s*/, '').trim());
+
+  return [
+    '**任务队列前五**',
+    trigger ? `触发：${trigger}` : null,
+    summary ? `总览：${summary}` : null,
+    ...entries.map(entry => `- ${entry}`),
+  ].filter((line): line is string => Boolean(line)).join('\n') || null;
+}
+
+function formatFeishuMemoryDecisionBlock(title: string, lines: string[]): string | null {
+  const task = lines.find(line => line.startsWith('│ 当前任务：'))?.replace(/^│\s*当前任务：/, '').trim();
+  const strategy = lines.find(line => line.startsWith('│ 策略：'))?.replace(/^│\s*策略：/, '').trim();
+  const skipped = lines.find(line => line.startsWith('│ 跳过：'))?.replace(/^│\s*跳过：/, '').trim();
+  const adoptedItems = lines
+    .filter(line => /^│\s*-\s+/.test(line))
+    .map(line => line.replace(/^│\s*-\s*/, '').trim());
+  const reasons = lines
+    .filter(line => line.startsWith('│   reason='))
+    .map(line => line.replace(/^│\s*reason=/, '').trim());
+
+  return [
+    `**${title}**`,
+    task ? `任务：${task}` : null,
+    strategy ? `- ${strategy}` : null,
+    skipped ? `- 跳过：${skipped}` : null,
+    ...adoptedItems.map(item => `- ${item}`),
+    ...reasons.map(reason => `  原因：${reason}`),
+  ].filter((line): line is string => Boolean(line)).join('\n') || null;
+}
+
 function extractFeishuProgressSummary(outputLines: string[]): string {
   const steps: string[] = [];
   const seen = new Set<string>();
@@ -1526,6 +1584,10 @@ function extractFeishuProgressSummary(outputLines: string[]): string {
       steps.push(step);
     }
   };
+
+  for (const block of extractFeishuGuidanceProgressBlocks(outputLines)) {
+    addStep(block);
+  }
 
   for (const rawLine of outputLines) {
     const step = extractFeishuProgressStep(rawLine);
@@ -1583,7 +1645,23 @@ function extractFeishuProgressStep(rawLine: string): string | null {
     return line;
   }
 
+  if (isExecutorFailureLine(line)) {
+    return line;
+  }
+
+  if (isTaskBlockedAfterFailureLine(line)) {
+    return line;
+  }
+
   return null;
+}
+
+function isExecutorFailureLine(line: string): boolean {
+  return /^✗\s+执行(?:失败|异常|未完成)\s*:/.test(line);
+}
+
+function isTaskBlockedAfterFailureLine(line: string): boolean {
+  return /^→\s+任务\s+#task_[^\s]+\s+已转为阻塞/.test(line);
 }
 
 function normalizeFeishuProgressContextStep(line: string): string | null {
@@ -1658,6 +1736,9 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
   const answer = trimBlankLines(answerLines).join('\n').trim();
   const taskResultBody = extractLatestTaskResultBody(outputLines);
   const taskSummary = extractLatestTaskSummary(outputLines);
+  if (answer && containsInternalExecutorContext(answer)) {
+    return taskResultBody || taskSummary;
+  }
   if (taskResultBody && (!answer || answer === taskSummary || taskResultBody.includes(answer))) {
     return taskResultBody;
   }
@@ -1703,6 +1784,7 @@ function cleanExecutorAnswerLine(line: string): string | null {
     /^\d[\d,]*$/.test(trimmed) ||
     trimmed === 'tokens used' ||
     trimmed.includes('关联历史') ||
+    isInternalExecutorContextLine(trimmed) ||
     /^(thinking|reasoning|analyzing|chain of thought)/i.test(trimmed) ||
     trimmed === '执行器正在分析问题'
   ) {
@@ -1710,6 +1792,38 @@ function cleanExecutorAnswerLine(line: string): string | null {
   }
 
   return line;
+}
+
+function containsInternalExecutorContext(text: string): boolean {
+  return text
+    .split(/\r?\n/)
+    .some(line => isInternalExecutorContextLine(line.trim()));
+}
+
+function isInternalExecutorContextLine(line: string): boolean {
+  if (!line) {
+    return false;
+  }
+
+  return /^工作目录\s*[:：]/.test(line)
+    || /^文件输出目标\s*[:：]/.test(line)
+    || /^会话近期上下文\s*[:：]/.test(line)
+    || /^相似历史参考\b/.test(line)
+    || /Reference Context Pack\b/i.test(line)
+    || /^Minimal Reference Cards\b/i.test(line)
+    || /^\[?任务#task_[^\s\]]+\]?/.test(line)
+    || /^用户意图\s*[:：]/.test(line)
+    || /^相关性原因\s*[:：]/.test(line)
+    || /^可复用内容\s*[:：]/.test(line)
+    || /^边界声明\s*[:：]/.test(line)
+    || /^输出处理\s*[:：]/.test(line)
+    || /^参考来源\s*[:：]/.test(line)
+    || /^必须把结果写入本地文件系统/.test(line)
+    || /^所有本次任务生成的文件/.test(line)
+    || /^目标目录\s*[:：]/.test(line)
+    || /^如果目标目录不存在/.test(line)
+    || /^请按用户意图判断/.test(line)
+    || /^\/home\/[^ \t]+/.test(line);
 }
 
 function trimBlankLines(lines: string[]): string[] {
@@ -1815,7 +1929,10 @@ function extractLatestTaskResultBody(outputLines: string[]): string | null {
   }
 
   const body = trimBlankLines(answerLines).join('\n').trim();
-  return body || null;
+  if (!body || containsInternalExecutorContext(body)) {
+    return null;
+  }
+  return body;
 }
 
 function extractAppendedTaskResultOutput(outputLines: string[]): string | null {
@@ -1845,6 +1962,7 @@ function extractAppendedTaskResultOutput(outputLines: string[]): string | null {
     }
     if (
       trimmed.startsWith('┌─ 操作指引')
+      || trimmed.startsWith('┌─ 任务队列前五')
       || /^→\s+文件输出目录:/.test(trimmed)
       || /^→\s+已省略文件正文输出/.test(trimmed)
       || /^→\s+已记录\s+\d+\s+个任务产物/.test(trimmed)

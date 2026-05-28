@@ -56,7 +56,7 @@ function createDurableRouteBridge(overrides: Partial<LlmBridge> = {}) {
 }
 
 describe('cross-session last-task continuation', () => {
-  it('asks for confirmation instead of silently guessing another old task when the last focused task is already done', async () => {
+  it('auto-creates a follow-up instead of asking for confirmation when the last focused task is done', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -85,6 +85,7 @@ describe('cross-session last-task continuation', () => {
       sessionId: 'sess_round12_a',
       contextRecaller,
       llmBridge: createDurableRouteBridge(),
+      availableExecutorCommands: new Set(['codex']),
     });
 
     session1.initialize();
@@ -113,20 +114,18 @@ describe('cross-session last-task continuation', () => {
       sessionId: 'sess_round12_b',
       contextRecaller,
       llmBridge: llmBridge2,
+      availableExecutorCommands: new Set(['codex']),
     });
 
     session2.initialize();
-    await session2.submit('继续之前的任务');
+    await session2.submit('继续之前的任务', { awaitAsyncWork: true });
 
     const output = session2.getSnapshot().output.join('\n');
-    expect(output).toContain('上次任务确认');
+    expect(output).toContain('上次任务自动处理');
     expect(output).toContain('上一个任务已完成');
-    expect(output).toContain('[f] 基于该任务创建 follow-up');
-    expect(executor2.execute).not.toHaveBeenCalled();
+    expect(output).toContain('自动决策：基于上一个任务创建 follow-up');
     expect(llmBridge2.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge2.resolveIntent).not.toHaveBeenCalled();
-
-    await session2.submit('f', { awaitAsyncWork: true });
 
     expect(executor2.execute).toHaveBeenCalledTimes(1);
     const followUpInput = (executor2.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -162,6 +161,7 @@ describe('cross-session last-task continuation', () => {
       sessionId: 'sess_round12_c',
       contextRecaller,
       llmBridge: createDurableRouteBridge(),
+      availableExecutorCommands: new Set(['codex']),
     });
 
     session1.initialize();
@@ -203,16 +203,15 @@ describe('cross-session last-task continuation', () => {
       sessionId: 'sess_round12_d',
       contextRecaller,
       llmBridge: llmBridge2,
+      availableExecutorCommands: new Set(['codex']),
     });
 
     session2.initialize();
-    await session2.submit('继续之前的任务');
+    await session2.submit('继续之前的任务', { awaitAsyncWork: true });
 
     const output = session2.getSnapshot().output.join('\n');
-    expect(output).toContain('上次任务确认');
-    expect(output).toContain(`[u] 改为恢复最近未完成任务 #${unfinishedTask.id}`);
-
-    await session2.submit('u', { awaitAsyncWork: true });
+    expect(output).toContain('上次任务自动处理');
+    expect(output).toContain(`自动决策：恢复最近未完成任务 #${unfinishedTask.id}`);
 
     expect(executor2.execute).toHaveBeenCalledTimes(1);
     const resumedInput = (executor2.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -275,6 +274,7 @@ describe('cross-session last-task continuation', () => {
       sessionId: 'sess_round12_e',
       contextRecaller,
       llmBridge,
+      availableExecutorCommands: new Set(['codex']),
     });
 
     session.initialize();

@@ -27,7 +27,7 @@ describe('GuidancePolicyEngine', () => {
     ]);
 
     expect(proposals[0]?.actionType).toBe('resume_task');
-    expect(proposals[0]?.requiresConfirmation).toBe(true);
+    expect(proposals[0]?.requiresConfirmation).toBe(false);
   });
 
   it('proposes unblock_and_resume when a blocked task has new materials', () => {

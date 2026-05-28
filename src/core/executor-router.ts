@@ -79,6 +79,7 @@ const TOKEN_MAP: Record<string, string[]> = {
   finance: ['财务', '投资', '估值', '收入', '利润'],
   analysis: ['分析', '评审', '风险', 'review', 'analysis'],
   research: ['调研', '研究', '报告', 'research', '市场', '竞品', '公司', '产品分析'],
+  reporting: ['报告', 'report', '调研报告', '研究报告'],
   personal_assistant: ['助手', 'assistant', '个人助理'],
   automation: ['自动化', 'automation', 'workflow', '工作流'],
   messaging: ['消息', '通知', 'message', 'messaging'],
@@ -93,6 +94,8 @@ const TOKEN_MAP: Record<string, string[]> = {
   workflow_automation: ['workflow', '工作流', '自动化'],
   persistent_memory: ['长期记忆', 'persistent memory', '记忆'],
   code_execution: ['执行代码', '运行代码', '代码执行'],
+  agentic_cli: ['agent cli', 'agentic cli', 'coding agent', '智能体 cli'],
+  report_generation: ['生成报告', '输出报告', '产出报告', 'report generation'],
   subagents: ['subagent', '子代理', '子智能体'],
   ci_noninteractive: ['ci', '非交互', 'pipeline'],
   long_context_analysis: ['长上下文', 'large context', '大代码库'],
@@ -106,6 +109,7 @@ const EXECUTOR_ALIASES: Record<string, string[]> = {
   'codex-cli': ['codex-cli', 'codex cli', 'codex'],
   'deepseek-tui': ['deepseek-tui', 'deepseek tui', 'deepseek', '深度求索'],
   'hermes-agent': ['hermes-agent', 'hermes agent', 'hermes'],
+  'pi-agent': ['pi-agent', 'pi agent', 'piagent', 'pi'],
   'claude-code': ['claude-code', 'claude code', 'claude'],
 };
 
@@ -130,6 +134,13 @@ const DEFAULT_INTENT_AFFINITY: Record<string, Partial<Record<TaskRouteIntent, nu
     research_workflow: 1,
     memory_agent_ops: 1,
     general: 0.3,
+  },
+  'pi-agent': {
+    repo_execution: 0.2,
+    technical_reasoning: 0.45,
+    research_workflow: 1,
+    memory_agent_ops: 0.65,
+    general: 0.35,
   },
   'claude-code': {
     repo_execution: 0.7,
@@ -158,6 +169,9 @@ const SPECIALIZED_TOKENS = new Set([
   'messaging_gateway',
   'workflow_automation',
   'personal_assistant',
+  'reporting',
+  'report_generation',
+  'agentic_cli',
 ]);
 
 const REPO_MUTATION_TOKENS = [
@@ -261,7 +275,7 @@ function classifyIntent(userInput: string, profiles: ExecutorProfile[]): IntentC
 
 function ownershipExecutorForIntent(intent: TaskRouteIntent): string | null {
   if (intent === 'repo_execution') return 'codex-cli';
-  if (intent === 'research_workflow' || intent === 'memory_agent_ops') return 'hermes-agent';
+  if (intent === 'research_workflow') return 'pi-agent';
   return null;
 }
 
@@ -285,11 +299,13 @@ function buildRejectedCandidates(
     .map(candidate => {
       const affinity = candidate.primaryIntent ? intentAffinityForCandidate(candidate) : 0;
       let reason = 'lower intent-aware score';
-      if (classification.primaryIntent === 'repo_execution' && candidate.executorName === 'hermes-agent') {
+      if (classification.primaryIntent === 'repo_execution' && (candidate.executorName === 'hermes-agent' || candidate.executorName === 'pi-agent')) {
         reason = 'task requires deterministic repo mutation';
       } else if ((classification.primaryIntent === 'research_workflow' || classification.primaryIntent === 'memory_agent_ops') && candidate.executorName === 'codex-cli') {
         reason = 'task is research, memory, tool orchestration, or gateway workflow rather than repo mutation';
-      } else if (classification.primaryIntent === 'technical_reasoning' && candidate.executorName === 'hermes-agent') {
+      } else if (classification.primaryIntent === 'research_workflow' && candidate.executorName === 'hermes-agent') {
+        reason = 'research workflow can race Pi Agent and Hermes Agent; lower primary score';
+      } else if (classification.primaryIntent === 'technical_reasoning' && (candidate.executorName === 'hermes-agent' || candidate.executorName === 'pi-agent')) {
         reason = 'no multi-tool research, memory, or gateway requirement';
       } else if (classification.primaryIntent === 'technical_reasoning' && candidate.executorName === 'codex-cli') {
         reason = classification.requiresRepoMutation ? 'repo mutation owned by selected executor' : 'task does not require deterministic repo mutation';
@@ -370,12 +386,9 @@ export class ExecutorRouter {
     }
 
     const profile = availableProfiles.find(item => item.name === selected.executorName);
-    const mediumConfidenceRisk = selected.score < 0.75 && (classification.riskyAction || profile?.riskLevel === 'medium');
-    const action: ExecutorRouteAction = profile?.riskLevel === 'high' || mediumConfidenceRisk
-      ? 'ask_review'
-      : selected.score >= 0.75
-        ? 'auto_dispatch'
-        : 'ask_review';
+    const action: ExecutorRouteAction = profile?.riskLevel === 'high'
+      ? 'fallback_default'
+      : 'auto_dispatch';
 
     return {
       selectedExecutor: selected.executorName,
@@ -418,8 +431,14 @@ export class ExecutorRouter {
         ?? null;
     }
 
-    if (classification.primaryIntent === 'research_workflow' || classification.primaryIntent === 'memory_agent_ops') {
-      return candidates.find(candidate => candidate.executorName === 'hermes-agent') ?? null;
+    if (classification.primaryIntent === 'research_workflow') {
+      return candidates.find(candidate => candidate.executorName === 'pi-agent') ?? null;
+    }
+
+    if (classification.primaryIntent === 'memory_agent_ops') {
+      return candidates.find(candidate => candidate.executorName === 'pi-agent')
+        ?? candidates.find(candidate => candidate.executorName === 'codex-cli')
+        ?? null;
     }
 
     if (classification.primaryIntent === 'technical_reasoning') {

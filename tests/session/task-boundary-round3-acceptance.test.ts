@@ -114,6 +114,10 @@ describe('Round 3 task boundary acceptance', () => {
     taskRepo.update(parkedTask.id, {
       lastInterruptionReason: '用户手动暂停',
       summary: '已整理 memory 分类',
+      prioritySignals: {
+        ...parkedTask.prioritySignals,
+        isReady: false,
+      },
     });
     parkedTaskId = parkedTask.id;
 
@@ -130,5 +134,285 @@ describe('Round 3 task boundary acceptance', () => {
     const snapshot = session.getSnapshot().output.join('\n');
     expect(snapshot).not.toContain(`关联到任务 #${parkedTaskId}`);
     expect(snapshot).toContain('任务 #');
+  });
+
+  it('handles natural language clearing of blocked tasks without creating a new task', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_clear_blocked_tasks',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    const blockedTask = taskEngine.create({ title: '被阻塞任务', goal: '等待补材料' });
+    taskEngine.transition(blockedTask.id, 'ready');
+    taskEngine.transition(blockedTask.id, 'running');
+    taskEngine.block(blockedTask.id, {
+      taskId: blockedTask.id,
+      type: 'manual',
+      description: '等待材料',
+      status: 'waiting',
+    });
+
+    const readyTask = taskEngine.create({ title: '待执行任务', goal: '继续排队' });
+    taskEngine.transition(readyTask.id, 'ready');
+
+    await session.submit('清空阻塞的任务', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('已清空阻塞任务：取消 1 个任务');
+    expect(snapshot).toContain(blockedTask.id);
+    expect(taskRepo.findById(blockedTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(readyTask.id)?.status).toBe('ready');
+    expect(taskRepo.findAll()).toHaveLength(2);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('handles natural language clearing of all manageable tasks and aborts running work', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_clear_all_tasks',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    const runningTask = taskEngine.create({ title: '执行中的任务', goal: '执行中' });
+    taskEngine.transition(runningTask.id, 'ready');
+    taskEngine.transition(runningTask.id, 'running');
+
+    const parkedTask = taskEngine.create({ title: '挂起任务', goal: '挂起中' });
+    taskEngine.transition(parkedTask.id, 'ready');
+    taskEngine.transition(parkedTask.id, 'running');
+    taskEngine.park(parkedTask.id, '用户暂停', {
+      done: [],
+      pending: ['继续'],
+      nextStep: '继续',
+      pauseReason: '用户暂停',
+    });
+
+    const doneTask = taskEngine.create({ title: '已完成任务', goal: '已完成' });
+    taskEngine.transition(doneTask.id, 'ready');
+    taskEngine.transition(doneTask.id, 'running');
+    taskEngine.transition(doneTask.id, 'done');
+
+    await session.submit('清空所有任务', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('已清空所有未完成任务：取消 2 个任务');
+    expect(snapshot).toContain('已中止当前执行器');
+    expect(taskRepo.findById(runningTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(parkedTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(doneTask.id)?.status).toBe('done');
+    expect(executor.abort).toHaveBeenCalledTimes(1);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+  });
+
+  it('resumes an explicitly requested parked task instead of creating a new task when intent is misclassified', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '挂起任务已恢复',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    let parkedTaskId = '';
+    const llmBridge = {
+      resolveTaskResumeIntent: vi.fn().mockImplementation(async () => ({
+        action: 'resume',
+        taskId: parkedTaskId,
+        reason: '用户语义上要求重启这个已挂起任务',
+        confidence: 0.94,
+      })),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '误判为新工作' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '误判为新建任务' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_resume_parked_without_new_task',
+      contextRecaller,
+      llmBridge,
+      availableExecutorCommands: new Set(['codex']),
+    });
+
+    session.initialize();
+
+    const parkedTask = taskEngine.create({ title: 'Pi Agent 调研任务', goal: '继续调研 Pi Agent 能力' });
+    parkedTaskId = parkedTask.id;
+    taskEngine.transition(parkedTask.id, 'ready');
+    taskEngine.transition(parkedTask.id, 'running');
+    taskEngine.park(parkedTask.id, '用户暂停', {
+      done: ['已经完成初步资料整理'],
+      pending: ['补齐 npm 和 GitHub 信息'],
+      nextStep: '继续搜索资料',
+      pauseReason: '用户暂停',
+    });
+
+    const beforeCount = taskRepo.findAll().length;
+    await session.submit(`重启挂起任务 ${parkedTask.id}`, { awaitAsyncWork: true });
+
+    expect(taskRepo.findAll()).toHaveLength(beforeCount);
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(executionInput.task.id).toBe(parkedTask.id);
+    expect(executionInput.executionContextBundle.mode).toBe('resume-parked');
+    expect(session.getSnapshot().output.join('\n')).toContain(`命中已有挂起任务 #${parkedTask.id}`);
+    expect(llmBridge.resolveTaskResumeIntent).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('unblocks and resumes an explicitly requested blocked task instead of creating a new task', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '阻塞任务已恢复',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    let blockedTaskId = '';
+    const llmBridge = {
+      resolveTaskResumeIntent: vi.fn().mockImplementation(async () => ({
+        action: 'resume',
+        taskId: blockedTaskId,
+        reason: '用户语义上要求执行这个已阻塞任务',
+        confidence: 0.93,
+      })),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '误判为新工作' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '误判为新建任务' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_resume_blocked_without_new_task',
+      contextRecaller,
+      llmBridge,
+      availableExecutorCommands: new Set(['codex']),
+    });
+
+    session.initialize();
+
+    const blockedTask = taskEngine.create({ title: '飞书云文档调研', goal: '继续调研飞书云文档能力' });
+    blockedTaskId = blockedTask.id;
+    taskEngine.transition(blockedTask.id, 'ready');
+    taskEngine.transition(blockedTask.id, 'running');
+    taskEngine.block(blockedTask.id, {
+      taskId: blockedTask.id,
+      type: 'manual',
+      description: '执行器权限受限，请确认已授予所需目录访问权限后重试',
+      status: 'waiting',
+    });
+
+    const beforeCount = taskRepo.findAll().length;
+    await session.submit(`执行阻塞任务 ${blockedTask.id}`, { awaitAsyncWork: true });
+
+    expect(taskRepo.findAll()).toHaveLength(beforeCount);
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(executionInput.task.id).toBe(blockedTask.id);
+    expect(executionInput.executionContextBundle.mode).toBe('resume-blocked');
+    expect(session.getSnapshot().output.join('\n')).toContain(`任务 #${blockedTask.id} 已解除阻塞`);
+    expect(llmBridge.resolveTaskResumeIntent).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
 });

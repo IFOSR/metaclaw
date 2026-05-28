@@ -52,8 +52,8 @@ describe('formatExecutorError', () => {
     expect(isRecoverableExecutorFailure('executor idle timeout')).toBe(true);
   });
 
-  it('maps executor max duration timeout to a distinct user-facing message', () => {
-    expect(formatExecutorError('executor max duration exceeded')).toBe('执行器运行总时长超限，请检查是否出现异常阻塞');
+  it('maps legacy executor max duration timeout to a compatibility message', () => {
+    expect(formatExecutorError('executor max duration exceeded')).toBe('执行器历史总时长超限，请升级执行器配置并重试');
     expect(isRecoverableExecutorFailure('executor max duration exceeded')).toBe(true);
   });
 });

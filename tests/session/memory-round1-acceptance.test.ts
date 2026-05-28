@@ -100,14 +100,11 @@ describe('Round 1 memory acceptance', () => {
 
     await session.submit(`/memory confirm ${candidates[0].id} --scope contact --subject 张总`, { awaitAsyncWork: true });
     await session.submit('给张总再起草一封邮件，内容是提醒确认预算');
-
-    const reviewOutput = session.getSnapshot().output.join('\n');
-    expect(reviewOutput).toContain('记忆召回确认');
-    expect(reviewOutput).toContain('[contact] 用正式语气');
-
-    await session.submit('y', { awaitAsyncWork: true });
+    await session.waitForAsyncWork();
 
     const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).toContain('已自动采用记忆');
     expect(output).toContain('已确认偏好');
     expect(output).toContain('→ 已注入 1 条偏好');
     expect(output).toContain('[contact] 用正式语气');
@@ -167,34 +164,32 @@ describe('Round 1 memory acceptance', () => {
 
     session.initialize();
     await session.submit('给张总整理一份 Phoenix 项目周报，今天明确要求先保留表格格式');
+    await session.waitForAsyncWork();
 
-    const reviewOutput = session.getSnapshot().output.join('\n');
-    expect(reviewOutput).toContain('记忆召回确认');
-    expect(reviewOutput).toContain('Phoenix 项目材料统一使用 Phoenix 术语');
-    expect(reviewOutput).toContain('给张总的邮件使用正式语气');
-    expect(reviewOutput).not.toContain('输出尽量简洁');
-
-    await session.submit('y', { awaitAsyncWork: true });
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).toContain('已自动采用记忆');
+    expect(output).toContain('Phoenix 项目材料统一使用 Phoenix 术语');
+    expect(output).toContain('已跳过不确定记忆');
+    expect(output).toContain('跳过：1 条偏好，0 条任务记忆');
+    expect(output).not.toContain('输出尽量简洁');
 
     const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvedPreferences = executionInput.executionContextBundle.memoryContext.resolvedPreferences;
 
     expect(resolvedPreferences.map((preference: { id: string }) => preference.id)).toEqual([
       expect.any(String),
-      expect.any(String),
     ]);
     expect(resolvedPreferences[0].scope).toBe('project');
-    expect(resolvedPreferences[1].scope).toBe('contact');
 
-    const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('今天明确要求先保留表格格式');
-    expect(output.indexOf('[project] Phoenix 项目材料统一使用 Phoenix 术语')).toBeLessThan(
-      output.indexOf('[contact] 给张总的邮件使用正式语气'),
-    );
-    expect(output).not.toContain('[global] 输出尽量简洁');
+    const finalOutput = session.getSnapshot().output.join('\n');
+    expect(finalOutput).toContain('今天明确要求先保留表格格式');
+    expect(finalOutput).toContain('[project] Phoenix 项目材料统一使用 Phoenix 术语');
+    expect(finalOutput).not.toContain('[contact] 给张总的邮件使用正式语气');
+    expect(finalOutput).not.toContain('[global] 输出尽量简洁');
   });
 
-  it('supports inline y confirmation for a pending preference candidate', async () => {
+  it('keeps preference candidates non-blocking without inline confirmation', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -231,19 +226,16 @@ describe('Round 1 memory acceptance', () => {
     await session.submit('再给张总写一封邮件，内容是同步项目风险，用正式语气', { awaitAsyncWork: true });
     await session.submit('继续给张总准备一封邮件，内容是安排下周会议，用正式语气', { awaitAsyncWork: true });
 
-    const executorCallsBeforeConfirm = (executor.execute as ReturnType<typeof vi.fn>).mock.calls.length;
-    await session.submit('y', { awaitAsyncWork: true });
-
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('[y] 确认');
-    expect(output).toContain('[n] 忽略');
-    expect(output).toContain('[e <新内容>] 编辑后确认');
-    expect(output).toContain('已确认偏好');
-    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(1);
-    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls.length).toBe(executorCallsBeforeConfirm);
+    expect(output).not.toContain('[y] 确认');
+    expect(output).not.toContain('[n] 忽略');
+    expect(output).not.toContain('[e <新内容>] 编辑后确认');
+    expect(output).toContain('已保留为候选，不等待确认');
+    expect(memoryEngine.list({ status: 'confirmed' })).toHaveLength(0);
+    expect(output).not.toContain('已确认偏好');
   });
 
-  it('supports editing a pending preference candidate before confirmation', async () => {
+  it('does not treat inline edit syntax as preference confirmation when no confirmation is pending', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -282,9 +274,8 @@ describe('Round 1 memory acceptance', () => {
     await session.submit('e 给张总的邮件使用非常正式语气', { awaitAsyncWork: true });
 
     const prefs = memoryEngine.list({ status: 'confirmed' });
-    expect(prefs).toHaveLength(1);
-    expect(prefs[0]?.content).toBe('给张总的邮件使用非常正式语气');
-    expect(session.getSnapshot().output.join('\n')).toContain('已编辑并确认偏好');
+    expect(prefs).toHaveLength(0);
+    expect(session.getSnapshot().output.join('\n')).not.toContain('已编辑并确认偏好');
   });
 
   it('auto-captures a single high-confidence low-risk user preference statement', async () => {
@@ -369,6 +360,7 @@ describe('Round 1 memory acceptance', () => {
       sessionId: 'sess_memory_high_confidence_executor_statement',
       contextRecaller,
       llmBridge: createDurableRouteBridge(),
+      executorFactory: () => executor,
     });
 
     session.initialize();

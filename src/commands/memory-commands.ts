@@ -172,10 +172,10 @@ export const memoryCommand: CommandHandler = {
       case 'candidates': {
         const candidates = context.memoryEngine.getCandidates();
         if (candidates.length === 0) {
-          return { type: 'text', content: '暂无待确认偏好' };
+          return { type: 'text', content: '暂无候选偏好' };
         }
         const lines = candidates.map(c => `  #${c.id} (${c.occurrenceCount}次) ${c.pattern}`);
-        return { type: 'text', content: `待确认偏好：\n${lines.join('\n')}` };
+        return { type: 'text', content: `候选偏好：\n${lines.join('\n')}` };
       }
 
       case 'confirm': {

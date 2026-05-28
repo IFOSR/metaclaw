@@ -22,6 +22,13 @@ export interface IntentResult {
   reason: string;
 }
 
+export interface TaskResumeIntentResult {
+  action: 'resume' | 'none';
+  taskId: string | null;
+  reason: string;
+  confidence: number;
+}
+
 export interface RouteResult {
   route: NaturalLanguageRoute | 'unknown';
   reason: string;
@@ -117,6 +124,22 @@ export class LlmBridge {
     }
   }
 
+  async resolveTaskResumeIntent(userInput: string, candidateTasks: TaskSummary[]): Promise<TaskResumeIntentResult> {
+    const resumableTasks = candidateTasks.filter(task => task.status === 'parked' || task.status === 'blocked');
+    if (resumableTasks.length === 0) {
+      return { action: 'none', taskId: null, reason: '没有 blocked/parked 候选任务', confidence: 0 };
+    }
+
+    try {
+      return this.normalizeTaskResumeIntentResult(
+        this.parseTaskResumeIntentResult(await this.query(this.buildTaskResumeIntentPrompt(userInput, resumableTasks))),
+        resumableTasks,
+      );
+    } catch {
+      return { action: 'none', taskId: null, reason: 'LLM resume intent 调用失败，fallback', confidence: 0 };
+    }
+  }
+
   async resolveRoute(userInput: string, recentTasks: TaskSummary[]): Promise<RouteResult> {
     try {
       const raw = await this.query(this.buildRoutePrompt(userInput, recentTasks));
@@ -180,6 +203,29 @@ export class LlmBridge {
       taskList,
       '',
       '返回格式：{"type":"new"|"reference","taskId":"task_xxx"|null,"reason":"简短原因"}',
+    ].join('\n');
+  }
+
+  private buildTaskResumeIntentPrompt(userInput: string, tasks: TaskSummary[]): string {
+    const taskList = tasks.map(task =>
+      `  ${task.id}: [${task.status}] ${task.title} / ${task.goal}${task.summary ? ` / 进度: ${task.summary.slice(0, 80)}` : ''}`
+    ).join('\n');
+
+    return [
+      '判断用户输入是否是在要求恢复、重启、继续执行下面某个已经 blocked 或 parked 的任务。',
+      '这是语义判断，不要只看关键词；要理解用户真实意图。',
+      '只有当用户明显是在操作已有任务，而不是提出一个全新工作目标时，才返回 action=resume。',
+      '如果用户指定了 task id，且该 id 在候选列表中，通常应选择该任务。',
+      '如果用户只是提出新的调研/分析/实现需求，即使文字里出现“任务”，也返回 action=none。',
+      '如果多个候选都可能匹配，选择语义最贴近用户输入、状态为 blocked/parked、最近上下文最连续的那个。',
+      '只返回 JSON，不要其他内容。',
+      '',
+      `用户输入：${userInput}`,
+      '',
+      '候选 blocked/parked 任务：',
+      taskList,
+      '',
+      '返回格式：{"action":"resume"|"none","taskId":"task_xxx"|null,"confidence":0到1,"reason":"简短原因"}',
     ].join('\n');
   }
 
@@ -278,7 +324,7 @@ export class LlmBridge {
       '这是产品体验关键路径：必须理解用户意图和偏好的适用边界，不要做关键词匹配。',
       '请对每条候选做三态裁决：auto_apply / ask_review / suppress。',
       'auto_apply: 明确相关、低风险、没有当前指令冲突，可静默采用。',
-      'ask_review: 中等相关、不确定、可能改变执行路径或存在高影响，需要用户确认。',
+      'ask_review: 中等相关、不确定、可能改变执行路径或存在高影响；系统会默认跳过，不会询问用户确认。',
       'suppress: 只有关键词相同、泛词命中、元讨论、纠错/否认、无关场景，静默忽略。',
       '只有当偏好对当前请求的执行方式、输出格式、对象关系或上下文选择有明确帮助时才 auto_apply 或 ask_review。',
       '不要因为共享“内容、分析、相关、报告、图片、文档”等泛词就召回。',
@@ -309,6 +355,34 @@ export class LlmBridge {
       }
     } catch {}
     return { type: 'new', taskId: null, reason: '解析失败，fallback' };
+  }
+
+  private parseTaskResumeIntentResult(raw: string): TaskResumeIntentResult {
+    try {
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      const confidence = typeof parsed.confidence === 'number'
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0;
+      if (parsed.action === 'resume') {
+        return {
+          action: 'resume',
+          taskId: typeof parsed.taskId === 'string' ? parsed.taskId : null,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : 'LLM 语义判断恢复已有任务',
+          confidence,
+        };
+      }
+      if (parsed.action === 'none') {
+        return {
+          action: 'none',
+          taskId: null,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : 'LLM 语义判断不是恢复任务',
+          confidence,
+        };
+      }
+    } catch {}
+
+    return { action: 'none', taskId: null, reason: 'resume intent 解析失败，fallback', confidence: 0 };
   }
 
   private parseRankResult(raw: string): string[] {
@@ -410,6 +484,19 @@ export class LlmBridge {
     return candidates.some(task => task.id === result.taskId)
       ? result
       : { type: 'new', taskId: null, reason: 'LLM 返回了无效任务 ID，fallback' };
+  }
+
+  private normalizeTaskResumeIntentResult(
+    result: TaskResumeIntentResult,
+    candidates: TaskSummary[],
+  ): TaskResumeIntentResult {
+    if (result.action !== 'resume' || !result.taskId) {
+      return { ...result, action: 'none', taskId: null };
+    }
+
+    return candidates.some(task => task.id === result.taskId)
+      ? result
+      : { action: 'none', taskId: null, reason: 'LLM 返回了无效恢复任务 ID，fallback', confidence: 0 };
   }
 
   private shouldRetryWithParkedTasks(

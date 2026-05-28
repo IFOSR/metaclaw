@@ -7,7 +7,7 @@ export interface ExecutorRegistrySeedInput {
   availableCommands?: Set<string>;
 }
 
-const RETIRED_DEFAULT_EXECUTOR_PROFILES = ['openclaw', 'claude-code'];
+const RETIRED_DEFAULT_EXECUTOR_PROFILES = ['openclaw', 'claude-code', 'deepseek-tui'];
 
 function commandExists(command: string): boolean {
   try {
@@ -61,7 +61,7 @@ function knownProfiles(defaultExecutorName: string): Array<ExecutorProfile & { c
       capabilities: ['persistent_memory', 'research', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation', 'session_management', 'code_execution'],
       inputTypes: ['text', 'image'],
       outputTypes: ['markdown', 'report'],
-      strengths: ['cross-session memory', 'toolset orchestration', 'skills', 'messaging gateway workflows', 'self-improving agent workflows'],
+      strengths: ['research workflows', 'cross-session memory', 'toolset orchestration', 'skills', 'messaging gateway workflows', 'self-improving agent workflows'],
       weaknesses: ['not a dedicated coding copilot', 'broad tool surface needs task-specific gating'],
       primaryUseCases: ['调研并输出报告', '整理多份资料', '结合长期记忆', '多工具调用', '自动化工作流', '消息网关', '通知', '跨 session 追踪'],
       avoidUseCases: ['纯本地代码实现', '单仓库 bugfix', '数学推导', '算法推理'],
@@ -75,6 +75,28 @@ function knownProfiles(defaultExecutorName: string): Array<ExecutorProfile & { c
       riskLevel: 'medium',
       availability: 'available',
       historicalSuccess: 0.72,
+    },
+    {
+      command: 'pi',
+      name: 'pi-agent',
+      domains: ['research', 'automation', 'agent_ops', 'reporting', 'analysis'],
+      capabilities: ['research', 'multi_tool', 'workflow_automation', 'agentic_cli', 'report_generation', 'code_execution'],
+      inputTypes: ['text', 'files'],
+      outputTypes: ['markdown', 'report', 'analysis'],
+      strengths: ['research workflows', 'report generation', 'agentic CLI execution', 'multi-step information synthesis'],
+      weaknesses: ['not the default local repo mutation owner', 'requires @earendil-works/pi-coding-agent installation and authentication'],
+      primaryUseCases: ['调研并输出报告', '市场调研', '竞品调研', '公司研究', '产品研究', '整理多份资料', 'research report', 'AI agent 调研'],
+      avoidUseCases: ['纯本地代码实现', '单仓库 bugfix', '消息网关发送', '需要 DeepSeek 指定模型推理'],
+      intentAffinity: {
+        repo_execution: 0.2,
+        technical_reasoning: 0.45,
+        research_workflow: 1,
+        memory_agent_ops: 0.65,
+        conversation_or_control: 0,
+      },
+      riskLevel: 'medium',
+      availability: 'available',
+      historicalSuccess: defaultExecutorName === 'pi-agent' ? 0.85 : 0.78,
     },
     {
       command: 'deepseek-tui',

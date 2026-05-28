@@ -134,6 +134,7 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
 
 任务管理：
   /tasks [active|ready|parked|blocked|done]  查看任务列表
+  /tasks clear [all|parked|blocked]          清空/取消未完成、挂起或阻塞任务
   /task <id>                    查看任务详情
   /task <id> pause              暂停任务
   /task <id> resume             恢复任务
@@ -150,7 +151,7 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
   /memory edit <id> [--scope ...] [--type ...] [--subject ...] <新内容>
                                 修改偏好
   /memory delete <id>           删除偏好
-  /memory candidates            查看待确认偏好
+  /memory candidates            查看候选偏好
   /memory confirm <id> [--scope ...] [--subject ...]
                                 确认偏好
   /memory reject <id>           拒绝偏好
@@ -167,7 +168,7 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
 自然语言：
   直接输入任务描述创建新任务
   "暂停" / "继续" 等关键词会自动识别
-  高风险外发动作会先要求“确认执行”
+  高风险外发动作会输出警示并继续进入执行流程，不在客户端等待确认
   候选偏好可直接输入 y / n / e <新内容>
 `;
     return { type: 'text', content: help.trim() };

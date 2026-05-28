@@ -4,6 +4,7 @@ import { CodexCliAdapter } from './codex-cli.js';
 import { DeepSeekTuiAdapter } from './deepseek-tui.js';
 import { HermesAgentAdapter } from './hermes-agent.js';
 import { OpenClawAdapter } from './openclaw.js';
+import { PiAgentAdapter } from './pi-agent.js';
 
 export function createExecutor(config: { command: string; timeout: number; maxDuration?: number; workspaceRoot?: string }): ExecutorAdapter {
   if (config.command === 'codex') {
@@ -15,7 +16,11 @@ export function createExecutor(config: { command: string; timeout: number; maxDu
   }
 
   if (config.command === 'hermes') {
-    return new HermesAgentAdapter(withHermesTimeoutDefaults(config));
+    return new HermesAgentAdapter(withLongResearchTimeoutDefaults(config));
+  }
+
+  if (config.command === 'pi') {
+    return new PiAgentAdapter(withLongResearchTimeoutDefaults(config));
   }
 
   if (config.command === 'deepseek' || config.command === 'deepseek-tui') {
@@ -29,7 +34,7 @@ export function createExecutor(config: { command: string; timeout: number; maxDu
   return new ClaudeCodeAdapter(config);
 }
 
-function withHermesTimeoutDefaults<T extends { timeout: number; maxDuration?: number }>(config: T): T {
+function withLongResearchTimeoutDefaults<T extends { timeout: number; maxDuration?: number }>(config: T): T {
   return {
     ...config,
     timeout: Math.max(config.timeout, 900),
@@ -50,7 +55,11 @@ export function createExecutorByName(
   }
 
   if (name === 'hermes-agent') {
-    return new HermesAgentAdapter(withHermesTimeoutDefaults({ ...config, command: 'hermes' }));
+    return new HermesAgentAdapter(withLongResearchTimeoutDefaults({ ...config, command: 'hermes' }));
+  }
+
+  if (name === 'pi-agent') {
+    return new PiAgentAdapter(withLongResearchTimeoutDefaults({ ...config, command: 'pi' }));
   }
 
   if (name === 'deepseek-tui') {

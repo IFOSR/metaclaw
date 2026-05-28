@@ -375,7 +375,7 @@ describe('App input availability', () => {
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
-    const hermesDeferred = createDeferredResult();
+    const piDeferred = createDeferredResult();
     const defaultExecutor: ExecutorAdapter = {
       name: 'codex-cli',
       execute: vi.fn().mockResolvedValue({
@@ -387,9 +387,9 @@ describe('App input availability', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
-    const hermesExecutor: ExecutorAdapter = {
-      name: 'hermes-agent',
-      execute: vi.fn().mockImplementation(() => hermesDeferred.promise),
+    const piExecutor: ExecutorAdapter = {
+      name: 'pi-agent',
+      execute: vi.fn().mockImplementation(() => piDeferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -410,8 +410,8 @@ describe('App input availability', () => {
         sessionId: 'sess_routed_executor_status',
         contextRecaller,
         llmBridge,
-        executorFactory: (name: string) => name === 'hermes-agent' ? hermesExecutor : null,
-        availableExecutorCommands: new Set(['codex', 'hermes']),
+        executorFactory: (name: string) => name === 'pi-agent' ? piExecutor : null,
+        availableExecutorCommands: new Set(['codex', 'pi']),
       })
     );
 
@@ -423,14 +423,14 @@ describe('App input availability', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('status: running hermes-agent');
+    expect(app.lastFrame()).toContain('status: running pi-agent');
     expect(app.lastFrame()).not.toContain('status: running codex-cli');
     expect(defaultExecutor.execute).not.toHaveBeenCalled();
-    expect(hermesExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(piExecutor.execute).toHaveBeenCalledTimes(1);
 
-    hermesDeferred.resolve({
+    piDeferred.resolve({
       success: true,
-      output: 'Hermes done',
+      output: 'Pi Agent done',
       exitCode: 0,
       durationMs: 100,
     });

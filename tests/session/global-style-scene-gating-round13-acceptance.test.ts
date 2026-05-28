@@ -102,7 +102,7 @@ describe('global style scene gating', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('filters playful global tone from formal research recall review while keeping formal tone', async () => {
+  it('auto-applies applicable formal tone without recall confirmation', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -143,15 +143,17 @@ describe('global style scene gating', () => {
       sessionId: 'sess_round13_formal_research_style_gate',
       contextRecaller,
       llmBridge: createDurableRouteBridge(),
+      executorFactory: () => executor,
     });
 
     session.initialize();
     await session.submit('帮我写一份正式的行业调研报告', { awaitAsyncWork: true });
 
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('记忆召回确认');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).toContain('已自动采用记忆');
     expect(output).toContain('使用正式严谨的表达');
     expect(output).not.toContain('用活泼欢快的语气');
-    expect(executor.execute).not.toHaveBeenCalled();
+    expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 });

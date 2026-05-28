@@ -1,6 +1,77 @@
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
-import { filterDurableTasks } from '../core/task-routing.js';
+import { filterDurableTasks, MANAGEABLE_TASK_STATUSES, type TaskClearScope } from '../core/task-routing.js';
 import { buildMaterialSummary, extractMaterialTextSnippets, isWebLink, splitTaskResources } from '../core/material-utils.js';
+import type { Task, TaskStatus } from '../core/types.js';
+
+const CLEAR_SCOPE_STATUSES: Record<TaskClearScope, TaskStatus[]> = {
+  all: MANAGEABLE_TASK_STATUSES,
+  parked: ['parked'],
+  blocked: ['blocked'],
+};
+
+const CLEAR_SCOPE_LABELS: Record<TaskClearScope, string> = {
+  all: '所有未完成任务',
+  parked: '挂起任务',
+  blocked: '阻塞任务',
+};
+
+function parseClearScope(value: string | undefined): TaskClearScope | null {
+  if (!value || value === 'all' || value === 'active' || value === 'unfinished') {
+    return 'all';
+  }
+
+  if (value === 'parked' || value === 'paused') {
+    return 'parked';
+  }
+
+  if (value === 'blocked') {
+    return 'blocked';
+  }
+
+  return null;
+}
+
+export function cancelTasksByScope(
+  context: CommandContext,
+  scope: TaskClearScope,
+  reason = `用户清空${CLEAR_SCOPE_LABELS[scope]}`,
+): { cancelled: Task[]; runningCancelled: boolean } {
+  const repo = context.taskEngine['taskRepo'];
+  const statuses = CLEAR_SCOPE_STATUSES[scope];
+  const candidates = filterDurableTasks(repo.findAll())
+    .filter(task => statuses.includes(task.status));
+  const runningCancelled = candidates.some(task => task.status === 'running');
+
+  for (const task of candidates) {
+    context.taskEngine.cancel(task.id, reason);
+  }
+
+  if (runningCancelled) {
+    context.executor.abort();
+  }
+
+  return { cancelled: candidates, runningCancelled };
+}
+
+export function formatTaskClearResult(scope: TaskClearScope, cancelled: Task[], runningCancelled = false): string {
+  const lines = [
+    `已清空${CLEAR_SCOPE_LABELS[scope]}：取消 ${cancelled.length} 个任务`,
+  ];
+
+  if (cancelled.length === 0) {
+    lines.push('→ 没有匹配的可清空任务');
+    return lines.join('\n');
+  }
+
+  if (runningCancelled) {
+    lines.push('→ 已中止当前执行器，避免被取消任务继续输出');
+  }
+
+  lines.push(
+    ...cancelled.map(task => `  - #${task.id} [${task.status.toUpperCase()}] ${task.title}`),
+  );
+  return lines.join('\n');
+}
 
 function formatTaskLine(task: {
   id: string;
@@ -101,11 +172,24 @@ function buildRecoveryAction(task: {
 export const tasksCommand: CommandHandler = {
   name: 'tasks',
   aliases: [],
-  description: '查看任务列表',
+  description: '查看任务列表；/tasks clear [all|parked|blocked] 清空未完成任务',
   async execute(args, context) {
     const filter = args[0];
     const repo = context.taskEngine['taskRepo'];
     let tasks;
+
+    if (filter === 'clear') {
+      const scope = parseClearScope(args[1]);
+      if (!scope) {
+        return { type: 'text', content: '用法: /tasks clear [all|parked|blocked]' };
+      }
+
+      const result = cancelTasksByScope(context, scope);
+      return {
+        type: 'text',
+        content: formatTaskClearResult(scope, result.cancelled, result.runningCancelled),
+      };
+    }
 
     if (filter === 'active') {
       tasks = filterDurableTasks(repo.findActive());
@@ -280,7 +364,7 @@ export const taskCommand: CommandHandler = {
         }
 
         case 'cancel':
-          context.taskEngine.transition(taskId, 'cancelled');
+          context.taskEngine.cancel(taskId);
           return { type: 'text', content: `任务 #${taskId} 已取消` };
 
         case 'done':

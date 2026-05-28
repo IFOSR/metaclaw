@@ -128,14 +128,6 @@ describe('App execution progress', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('记忆召回确认');
-
-    await inputCapture.handler?.('y', {});
-    await flushUpdates();
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
-
     expect(app.lastFrame()).toContain('【提取最近历史记录上下文】');
     expect(app.lastFrame()).toContain('【构建执行上下文】');
     expect(app.lastFrame()).toContain('【执行上下文准备完成】');

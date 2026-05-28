@@ -199,6 +199,11 @@ export class SchedulerEngine {
     }
 
     for (const task of candidates) {
+      const refreshed = repo.findById(task.id);
+      if (!refreshed || refreshed.status !== 'parked') {
+        continue;
+      }
+
       this.taskEngine.transition(task.id, 'ready');
       repo.update(task.id, {
         lastSchedulingReason: AUTO_RESUME_READY_REASON,

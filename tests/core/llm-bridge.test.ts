@@ -113,6 +113,54 @@ describe('LlmBridge', () => {
     });
   });
 
+  describe('resolveTaskResumeIntent', () => {
+    it('builds a semantic resume prompt for blocked and parked tasks only', () => {
+      const bridge = new LlmBridge('claude');
+      const prompt = (bridge as any).buildTaskResumeIntentPrompt('把之前那个卡住的调研继续跑起来', [
+        { id: 'task_blocked', title: '飞书云文档调研', goal: '调研飞书能力', summary: '等待授权', status: 'blocked' },
+        { id: 'task_parked', title: 'Pi Agent 调研', goal: '调研 Pi', summary: '等待恢复', status: 'parked' },
+      ]);
+
+      expect(prompt).toContain('这是语义判断，不要只看关键词');
+      expect(prompt).toContain('action=resume');
+      expect(prompt).toContain('task_blocked');
+      expect(prompt).toContain('[blocked]');
+      expect(prompt).toContain('task_parked');
+      expect(prompt).toContain('[parked]');
+    });
+
+    it('resolves a semantic resume decision against valid candidates', async () => {
+      const bridge = new LlmBridge('claude');
+      const querySpy = vi.spyOn(bridge, 'query')
+        .mockResolvedValue('{"action":"resume","taskId":"task_parked","confidence":0.91,"reason":"用户要求恢复旧调研任务"}');
+
+      const result = await bridge.resolveTaskResumeIntent('继续之前那个调研', [
+        { id: 'task_parked', title: 'Pi Agent 调研', goal: '调研 Pi', summary: '等待恢复', status: 'parked' },
+        { id: 'task_done', title: '已完成任务', goal: '完成', summary: '', status: 'done' },
+      ]);
+
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        action: 'resume',
+        taskId: 'task_parked',
+        confidence: 0.91,
+        reason: '用户要求恢复旧调研任务',
+      });
+    });
+
+    it('falls back to none when no parked or blocked candidates exist', async () => {
+      const bridge = new LlmBridge('claude');
+      const querySpy = vi.spyOn(bridge, 'query');
+
+      const result = await bridge.resolveTaskResumeIntent('继续之前那个任务', [
+        { id: 'task_done', title: '已完成任务', goal: '完成', summary: '', status: 'done' },
+      ]);
+
+      expect(result.action).toBe('none');
+      expect(querySpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('resolveTaskPriority', () => {
     it('asks for semantic priority instead of keyword-only matching', () => {
       const bridge = new LlmBridge('claude');

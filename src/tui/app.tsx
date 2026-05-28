@@ -212,16 +212,12 @@ function formatRenderLine(line: RenderLine): string {
 function hasPendingConfirmation(lines: string[]): boolean {
   const recentOutput = lines.slice(-8).join('\n');
   return recentOutput.includes('[y] 确认')
-    || recentOutput.includes('[y] 接受并继续恢复')
-    || recentOutput.includes('[y] 全部采用')
-    || recentOutput.includes('[f] 基于该任务创建 follow-up')
-    || recentOutput.includes('输入“确认执行”继续')
-    || recentOutput.includes('输入“取消执行”放弃');
+    || recentOutput.includes('确认执行');
 }
 
 function getComposerStatus(snapshot: SessionSnapshot, lines: string[], defaultExecutorName: string): string {
   if (hasPendingConfirmation(lines)) {
-    return 'waiting_confirm';
+    return 'legacy_confirm_clearing';
   }
 
   if (snapshot.runtimeState.runningTaskId) {

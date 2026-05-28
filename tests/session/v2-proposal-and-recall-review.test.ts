@@ -12,7 +12,6 @@ import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
-import { RecallFeedbackRepo } from '../../src/storage/recall-feedback-repo.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -40,12 +39,8 @@ function createConfig(): Config {
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 0));
-}
-
 describe('V2 proposal flow', () => {
-  it('requires proposal confirmation and recall review before execution', async () => {
+  it('shows proposals without confirmation and lets scheduler resume eligible work', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const prefRepo = new PreferenceRepo(db);
@@ -107,8 +102,8 @@ describe('V2 proposal flow', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
-      resolveRoute: vi.fn(),
-      resolveIntent: vi.fn(),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '新任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
       rankInteractions: vi.fn(),
     } as unknown as LlmBridge;
 
@@ -125,125 +120,18 @@ describe('V2 proposal flow', () => {
     });
 
     session.initialize();
+    await session.waitForAsyncWork();
     expect(session.getSnapshot().output.join('\n')).toContain('操作提案');
-    expect(executor.execute).not.toHaveBeenCalled();
-
-    await session.submit('y');
     const afterProposalAccept = session.getSnapshot().output.join('\n');
-    expect(afterProposalAccept).toContain('记忆召回确认');
+    expect(afterProposalAccept).not.toContain('记忆召回确认');
+    expect(afterProposalAccept).not.toContain('请输入 [y]');
+    expect(afterProposalAccept).toContain('→ 已注入 1 条偏好');
     expect(afterProposalAccept).toContain('Phoenix 周报统一保留风险栏目和经营数据栏目');
-    expect(executor.execute).not.toHaveBeenCalled();
-
-    await session.submit('y', { awaitAsyncWork: true });
-    const finalOutput = session.getSnapshot().output.join('\n');
     expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect(finalOutput).toContain('Phoenix 周报已补齐经营数据并完成输出');
+    expect(afterProposalAccept).toContain('Phoenix 周报已补齐经营数据并完成输出');
   });
 
-  it('persists recall review feedback commands without executing until an adoption decision', async () => {
-    const db = createTestDb();
-    const taskRepo = new TaskRepo(db);
-    const prefRepo = new PreferenceRepo(db);
-    const obsRepo = new ObservationRepo(db);
-    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-feedback');
-    const memoryEngine = new MemoryEngine(prefRepo, obsRepo);
-    const orchestration = new OrchestrationEngine(taskEngine);
-    const contextRecaller = new ContextRecaller(db);
-
-    prefRepo.insert({
-      id: 'pref_project_feedback',
-      type: 'domain',
-      scope: 'project',
-      subject: 'Phoenix',
-      content: 'Phoenix 周报保留旧版销售漏斗栏目',
-      status: 'confirmed',
-      confidence: 1,
-      occurrenceCount: 3,
-      sourceTasks: [],
-      lastUsedAt: null,
-      confirmedAt: '2026-04-20T00:00:00Z',
-      createdAt: '2026-04-20T00:00:00Z',
-      updatedAt: '2026-04-20T00:00:00Z',
-    });
-
-    const parkedTask = taskEngine.create({
-      title: 'Phoenix 周报整理',
-      goal: '继续整理 Phoenix 周报并改用新版经营数据栏目',
-    });
-    taskRepo.update(parkedTask.id, {
-      status: 'parked',
-      summary: '待切换新版栏目',
-      snapshots: [{
-        done: ['已完成旧版栏目草稿'],
-        pending: ['切换新版栏目'],
-        nextStep: '改用新版经营数据栏目',
-        pauseReason: '等待确认',
-        createdAt: '2026-04-20T00:00:00Z',
-      }],
-    });
-
-    const executor: ExecutorAdapter = {
-      name: 'codex-cli',
-      execute: vi.fn().mockResolvedValue({
-        success: true,
-        output: '已按用户选择继续执行',
-        exitCode: 0,
-        durationMs: 100,
-      }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      abort: vi.fn(),
-    };
-    const llmBridge = {
-      resolveRoute: vi.fn(),
-      resolveIntent: vi.fn(),
-      rankInteractions: vi.fn(),
-    } as unknown as LlmBridge;
-
-    const session = new MetaclawSession({
-      taskEngine,
-      memoryEngine,
-      orchestration,
-      executor,
-      db,
-      config: createConfig(),
-      sessionId: 'sess_v2_recall_feedback',
-      contextRecaller,
-      llmBridge,
-    });
-
-    session.initialize();
-    await session.submit('y');
-    expect(session.getSnapshot().output.join('\n')).toContain('记忆召回确认');
-
-    await session.submit('i 1');
-    await session.submit('m');
-    expect(executor.execute).not.toHaveBeenCalled();
-
-    const feedbackRepo = new RecallFeedbackRepo(db);
-    const records = feedbackRepo.findActiveForCandidates({
-      targetKind: 'preference',
-      targetIds: ['pref_project_feedback'],
-      queryTaskId: parkedTask.id,
-    });
-    expect(records.map(record => record.action)).toContain('irrelevant');
-
-    const moreRecords = feedbackRepo.findActiveForCandidates({
-      targetKind: 'task',
-      targetIds: [parkedTask.id],
-      queryTaskId: parkedTask.id,
-    });
-    expect(moreRecords.map(record => record.action)).toContain('more');
-
-    await session.submit('x1', { awaitAsyncWork: true });
-    expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect(feedbackRepo.findActiveForCandidates({
-      targetKind: 'preference',
-      targetIds: ['pref_project_feedback'],
-      queryTaskId: parkedTask.id,
-    }).map(record => record.action)).toContain('select');
-  });
-
-  it('auto-applies high-confidence recall candidates and only asks review for uncertain candidates', async () => {
+  it('auto-applies high-confidence recall candidates and skips uncertain candidates without confirmation', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const prefRepo = new PreferenceRepo(db);
@@ -307,22 +195,6 @@ describe('V2 proposal flow', () => {
       },
     );
 
-    const task = taskEngine.create({
-      title: 'MetaClaw 优化',
-      goal: '根据最终优化方案实施 MetaClaw',
-    });
-    taskRepo.update(task.id, {
-      status: 'parked',
-      summary: '待根据最终优化方案继续实施',
-      snapshots: [{
-        done: ['已确认最终优化方案'],
-        pending: ['实施召回三态和记忆自动化'],
-        nextStep: '继续实施优化方案',
-        pauseReason: '等待继续执行',
-        createdAt: '2026-05-20T00:00:00Z',
-      }],
-    });
-
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
       execute: vi.fn().mockResolvedValue({
@@ -335,8 +207,8 @@ describe('V2 proposal flow', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
-      resolveRoute: vi.fn(),
-      resolveIntent: vi.fn(),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '新任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
       rankInteractions: vi.fn(),
     } as unknown as LlmBridge;
 
@@ -353,44 +225,110 @@ describe('V2 proposal flow', () => {
     });
 
     session.initialize();
-    await session.submit('y');
-    await flushMicrotasks();
+    await session.submit('根据最终优化方案实施 MetaClaw', { awaitAsyncWork: true });
 
-    const reviewOutput = session.getSnapshot().output.join('\n');
-    expect(reviewOutput).toContain('记忆召回确认');
-    expect(reviewOutput).toContain('已自动采用记忆');
-    const recallReviewOnly = reviewOutput.slice(reviewOutput.indexOf('┌─ 记忆召回确认'));
-    expect(recallReviewOnly).not.toContain('MetaClaw 优化方案默认先给结论，再列执行细节');
-    expect(reviewOutput).toContain('长篇报告需要同步生成飞书云文档');
-    const askReviewAudit = db.prepare(
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).toContain('已自动采用记忆');
+    expect(output).toContain('pref_auto_apply');
+    expect(output).toContain('已跳过不确定记忆');
+    expect(output).toContain('跳过：1 条偏好，0 条任务记忆');
+    const suppressAudit = db.prepare(
       `SELECT action, memory_id, reason, judge_source FROM memory_audit_events
-       WHERE memory_id = ? AND action = 'ask_review'
+       WHERE memory_id = ? AND action = 'suppress'
        ORDER BY created_at DESC LIMIT 1`
     ).get('pref_ask_review') as { action: string; memory_id: string; reason: string; judge_source: string } | undefined;
-    expect(askReviewAudit).toEqual(expect.objectContaining({
-      action: 'ask_review',
+    expect(suppressAudit).toEqual(expect.objectContaining({
+      action: 'suppress',
       memory_id: 'pref_ask_review',
-      reason: '可能触发外部文档同步，需要确认',
+      reason: expect.stringContaining('不确定是否适用，默认不召回'),
       judge_source: 'llm',
     }));
-
-    await session.submit('y', { awaitAsyncWork: true });
 
     const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvedPreferences = executionInput.executionContextBundle.memoryContext.resolvedPreferences;
     expect(resolvedPreferences.map((preference: { id: string }) => preference.id)).toEqual([
       'pref_auto_apply',
-      'pref_ask_review',
     ]);
 
     const finalOutput = session.getSnapshot().output.join('\n');
     expect(finalOutput).toContain('已自动采用记忆');
     expect(finalOutput).toContain('pref_auto_apply');
 
-    await session.submit(`/memory applied ${task.id}`);
+    const task = taskRepo.findAll().find(item => item.goal === '根据最终优化方案实施 MetaClaw');
+    expect(task).toBeTruthy();
+    await session.submit(`/memory applied ${task!.id}`);
     const auditOutput = session.getSnapshot().output.join('\n');
     expect(auditOutput).toContain('已自动采用记忆');
     expect(auditOutput).toContain('pref_auto_apply');
     expect(auditOutput).toContain('score=0.92');
+  });
+
+  it('does not ask for recall confirmation for Feishu-style submissions either', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const prefRepo = new PreferenceRepo(db);
+    const obsRepo = new ObservationRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-feishu-recall');
+    const memoryEngine = new MemoryEngine(prefRepo, obsRepo);
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    prefRepo.insert({
+      id: 'pref_feishu_recall',
+      type: 'domain',
+      scope: 'global',
+      subject: null,
+      content: '调研报告需要同步生成飞书云文档和在线预览',
+      status: 'confirmed',
+      confidence: 1,
+      occurrenceCount: 2,
+      sourceTasks: [],
+      lastUsedAt: null,
+      confirmedAt: '2026-05-20T00:00:00Z',
+      createdAt: '2026-05-20T00:00:00Z',
+      updatedAt: '2026-05-20T00:00:00Z',
+    });
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '飞书调研报告已生成',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '飞书任务' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新任务' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_feishu_auto_recall',
+      contextRecaller,
+      llmBridge,
+      executorFactory: () => executor,
+    });
+
+    session.initialize();
+    await session.submit('做一个深度调研报告服务，需要飞书云文档和在线预览', {
+      awaitAsyncWork: true,
+    });
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).not.toContain('记忆召回确认');
+    expect(output).not.toContain('请输入 [y]');
+    expect(output).toContain('已跳过不确定记忆');
+    expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 });

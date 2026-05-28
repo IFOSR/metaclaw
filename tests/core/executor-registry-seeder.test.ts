@@ -29,34 +29,36 @@ describe('seedDefaultExecutorProfiles', () => {
 
     seedDefaultExecutorProfiles(repo, {
       defaultExecutorName: 'codex-cli',
-      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui']),
+      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui', 'pi']),
     });
     seedDefaultExecutorProfiles(repo, {
       defaultExecutorName: 'codex-cli',
-      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui']),
+      availableCommands: new Set(['codex', 'claude', 'hermes', 'openclaw', 'deepseek-tui', 'pi']),
     });
 
     const profiles = repo.findAll();
     expect(profiles.map(profile => profile.name).sort()).toEqual([
       'codex-cli',
-      'deepseek-tui',
       'hermes-agent',
+      'pi-agent',
     ]);
     expect(profiles.some(profile => profile.name === 'openclaw')).toBe(false);
     expect(profiles.some(profile => profile.name === 'claude-code')).toBe(false);
+    expect(profiles.some(profile => profile.name === 'deepseek-tui')).toBe(false);
     expect(profiles.find(profile => profile.name === 'codex-cli')).toEqual(expect.objectContaining({
       availability: 'available',
       domains: expect.arrayContaining(['software', 'repo', 'terminal']),
       capabilities: expect.arrayContaining(['coding', 'tests', 'debugging', 'code_review', 'noninteractive_execution']),
     }));
-    expect(profiles.find(profile => profile.name === 'hermes-agent')).toEqual(expect.objectContaining({
-      domains: expect.arrayContaining(['personal_assistant', 'research', 'automation', 'messaging', 'memory']),
-      capabilities: expect.arrayContaining(['persistent_memory', 'multi_tool', 'skill_runtime', 'messaging_gateway']),
-    }));
-    expect(profiles.find(profile => profile.name === 'deepseek-tui')).toEqual(expect.objectContaining({
+    expect(profiles.find(profile => profile.name === 'pi-agent')).toEqual(expect.objectContaining({
       availability: 'available',
-      domains: expect.arrayContaining(['software', 'repo', 'reasoning', 'algorithm', 'chinese_analysis']),
-      capabilities: expect.arrayContaining(['coding', 'code_review', 'deepseek_reasoning', 'agentic_tui']),
+      domains: expect.arrayContaining(['research', 'automation', 'agent_ops', 'reporting']),
+      capabilities: expect.arrayContaining(['research', 'multi_tool', 'workflow_automation', 'report_generation']),
+    }));
+    expect(profiles.find(profile => profile.name === 'hermes-agent')).toEqual(expect.objectContaining({
+      availability: 'available',
+      domains: expect.arrayContaining(['research', 'automation', 'agent_ops']),
+      capabilities: expect.arrayContaining(['research', 'multi_tool', 'workflow_automation']),
     }));
   });
 });

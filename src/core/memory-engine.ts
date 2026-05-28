@@ -470,12 +470,41 @@ export class MemoryEngine {
     }
 
     if (context.subject && preference.subject === context.subject) {
-      const threshold = SCOPE_TRI_STATE_THRESHOLDS[preference.scope];
-      return Math.max(0, Math.min(threshold.autoApply - 0.01, preference.confidence));
+      return Math.max(preference.confidence, SCOPE_TRI_STATE_THRESHOLDS[preference.scope].autoApply);
+    }
+
+    if (
+      context.userInput
+      && preference.subject
+      && context.userInput.includes(preference.subject)
+      && this.isScopedSubjectSceneCompatible(preference, context.userInput)
+    ) {
+      return Math.max(preference.confidence, SCOPE_TRI_STATE_THRESHOLDS[preference.scope].autoApply);
+    }
+
+    if (
+      context.userInput
+      && preference.scope === 'global'
+      && preference.type === 'style'
+      && this.isPersonalityTonePreference(preference.content)
+      && this.isGlobalPreferenceSceneCompatible(preference, context.userInput)
+    ) {
+      return Math.max(preference.confidence, SCOPE_TRI_STATE_THRESHOLDS[preference.scope].autoApply);
     }
 
     const threshold = SCOPE_TRI_STATE_THRESHOLDS[preference.scope];
     return Math.max(0, Math.min(threshold.autoApply - 0.01, preference.confidence * 0.8));
+  }
+
+  private isScopedSubjectSceneCompatible(preference: Preference, userInput: string): boolean {
+    const normalized = userInput.replace(/\s+/g, '');
+    if (preference.scope === 'contact') {
+      return /(邮件|发信|发给|回复|消息|沟通|通知|客户|会议|预算)/.test(normalized);
+    }
+    if (preference.scope === 'project') {
+      return /(项目|术语|周报|方案|里程碑|复盘|材料|报告|文档|调研|分析)/.test(normalized);
+    }
+    return false;
   }
 
   private buildRuleRecallReason(preference: Preference, context: RecallContext): string {

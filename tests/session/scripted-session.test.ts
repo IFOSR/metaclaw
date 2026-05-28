@@ -188,7 +188,7 @@ describe('scripted session', () => {
     expect(result.output.join('\n')).toContain('Phoenix 周报结论');
   });
 
-  it('gates risky external actions in scripted sessions until the user confirms execution', async () => {
+  it('continues risky external actions without waiting for confirmation in scripted sessions', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -216,7 +216,6 @@ describe('scripted session', () => {
     const result = await runScriptedSession({
       inputs: [
         '直接把邮件发给客户',
-        '确认执行',
       ],
       taskEngine,
       memoryEngine,
@@ -230,8 +229,8 @@ describe('scripted session', () => {
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect(result.output.join('\n')).toContain('⚠️ 这是高风险动作');
-    expect(result.output.join('\n')).toContain('→ 已确认高风险动作，继续执行原请求');
+    expect(result.output.join('\n')).toContain('⚠️ 检测到高风险外部动作');
+    expect(result.output.join('\n')).toContain('当前通道不等待用户确认');
     expect(result.output.join('\n')).toContain('已发送给客户');
   });
 
@@ -433,6 +432,7 @@ describe('scripted session', () => {
       sessionId: 'sess_scripted_feishu_doc_undeliverable',
       contextRecaller,
       llmBridge,
+      availableExecutorCommands: new Set(['codex']),
     });
 
     const blockedTask = taskEngine.list().find(task => task.status === 'blocked');

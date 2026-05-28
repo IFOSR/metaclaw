@@ -37,17 +37,32 @@ function boundaryProfiles(): ExecutorProfile[] {
     {
       name: 'hermes-agent',
       domains: ['personal_assistant', 'research', 'automation', 'messaging', 'memory', 'agent_ops'],
-      capabilities: ['persistent_memory', 'research', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation', 'session_management', 'code_execution'],
+      capabilities: ['persistent_memory', 'research', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation'],
       inputTypes: ['text', 'image'],
       outputTypes: ['markdown', 'report'],
-      strengths: ['cross-session memory'],
+      strengths: ['research workflows', 'toolset orchestration'],
       weaknesses: [],
-      primaryUseCases: ['调研并输出报告', '整理多份资料', '结合长期记忆', '多工具调用', '自动化工作流', '消息网关'],
+      primaryUseCases: ['调研并输出报告', '整理多份资料', '多工具调用', '自动化工作流'],
       avoidUseCases: ['纯本地代码实现', '数学推导', '算法推理'],
       intentAffinity: { repo_execution: 0.15, technical_reasoning: 0.25, research_workflow: 1, memory_agent_ops: 1 },
       riskLevel: 'medium',
       availability: 'available',
       historicalSuccess: 0.72,
+    },
+    {
+      name: 'pi-agent',
+      domains: ['research', 'automation', 'agent_ops', 'reporting', 'analysis'],
+      capabilities: ['research', 'multi_tool', 'workflow_automation', 'agentic_cli', 'report_generation', 'code_execution'],
+      inputTypes: ['text', 'files'],
+      outputTypes: ['markdown', 'report'],
+      strengths: ['research workflows'],
+      weaknesses: [],
+      primaryUseCases: ['调研并输出报告', '整理多份资料', '自动化工作流', '市场调研'],
+      avoidUseCases: ['纯本地代码实现', '数学推导', '算法推理', '消息网关发送'],
+      intentAffinity: { repo_execution: 0.2, technical_reasoning: 0.45, research_workflow: 1, memory_agent_ops: 0.65 },
+      riskLevel: 'medium',
+      availability: 'available',
+      historicalSuccess: 0.78,
     },
   ];
 }
@@ -87,7 +102,7 @@ describe('ExecutorRouter', () => {
     });
 
     expect(decision.selectedExecutor).toBe('legal-contract');
-    expect(decision.action).toBe('ask_review');
+    expect(decision.action).toBe('fallback_default');
     expect(decision.reason).toContain('legal');
     expect(decision.candidates[0]).toMatchObject({
       executorName: 'legal-contract',
@@ -160,7 +175,7 @@ describe('ExecutorRouter', () => {
     expect(decision.action).toBe('auto_dispatch');
   });
 
-  it('routes memory and tool orchestration work to Hermes Agent profiles', () => {
+  it('routes memory and tool orchestration work to Pi Agent profiles', () => {
     const router = new ExecutorRouter([
       {
         name: 'codex-cli',
@@ -177,7 +192,7 @@ describe('ExecutorRouter', () => {
       {
         name: 'hermes-agent',
         domains: ['personal_assistant', 'research', 'automation', 'messaging', 'memory', 'agent_ops'],
-        capabilities: ['persistent_memory', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation'],
+        capabilities: ['persistent_memory', 'research', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation'],
         inputTypes: ['text', 'image'],
         outputTypes: ['markdown', 'report'],
         strengths: [],
@@ -186,6 +201,18 @@ describe('ExecutorRouter', () => {
         availability: 'available',
         historicalSuccess: 0.72,
       },
+      {
+        name: 'pi-agent',
+        domains: ['research', 'automation', 'agent_ops', 'reporting'],
+        capabilities: ['research', 'multi_tool', 'workflow_automation', 'report_generation'],
+        inputTypes: ['text', 'files'],
+        outputTypes: ['markdown', 'report'],
+        strengths: [],
+        weaknesses: [],
+        riskLevel: 'medium',
+        availability: 'available',
+        historicalSuccess: 0.78,
+      },
     ]);
 
     const decision = router.route({
@@ -193,11 +220,11 @@ describe('ExecutorRouter', () => {
       defaultExecutorName: 'codex-cli',
     });
 
-    expect(decision.selectedExecutor).toBe('hermes-agent');
+    expect(decision.selectedExecutor).toBe('pi-agent');
     expect(decision.action).toBe('auto_dispatch');
   });
 
-  it('routes plain research tasks to Hermes Agent instead of falling back to Codex', () => {
+  it('routes plain research tasks to Pi Agent instead of falling back to Codex', () => {
     const router = new ExecutorRouter([
       {
         name: 'codex-cli',
@@ -214,7 +241,7 @@ describe('ExecutorRouter', () => {
       {
         name: 'hermes-agent',
         domains: ['personal_assistant', 'research', 'automation', 'messaging', 'memory', 'agent_ops'],
-        capabilities: ['persistent_memory', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation'],
+        capabilities: ['persistent_memory', 'research', 'multi_tool', 'mcp', 'skill_runtime', 'messaging_gateway', 'workflow_automation'],
         inputTypes: ['text', 'image'],
         outputTypes: ['markdown', 'report'],
         strengths: [],
@@ -223,6 +250,18 @@ describe('ExecutorRouter', () => {
         availability: 'available',
         historicalSuccess: 0.72,
       },
+      {
+        name: 'pi-agent',
+        domains: ['research', 'automation', 'agent_ops', 'reporting'],
+        capabilities: ['research', 'multi_tool', 'workflow_automation', 'report_generation'],
+        inputTypes: ['text', 'files'],
+        outputTypes: ['markdown', 'report'],
+        strengths: [],
+        weaknesses: [],
+        riskLevel: 'medium',
+        availability: 'available',
+        historicalSuccess: 0.78,
+      },
     ]);
 
     const decision = router.route({
@@ -230,10 +269,13 @@ describe('ExecutorRouter', () => {
       defaultExecutorName: 'codex-cli',
     });
 
-    expect(decision.selectedExecutor).toBe('hermes-agent');
+    expect(decision.selectedExecutor).toBe('pi-agent');
     expect(decision.action).toBe('auto_dispatch');
     expect(decision.confidence).toBeGreaterThanOrEqual(0.45);
     expect(decision.reason).toContain('research');
+    expect(decision.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ executorName: 'hermes-agent' }),
+    ]));
   });
 
   it('routes DeepSeek reasoning and algorithm work to DeepSeek TUI', () => {
@@ -277,13 +319,13 @@ describe('ExecutorRouter', () => {
   it.each([
     ['修复这个 TypeScript bug 并跑测试', 'codex-cli', 'repo_execution'],
     ['用 DeepSeek 做复杂算法推理，输出中文技术分析', 'deepseek-tui', 'technical_reasoning'],
-    ['调研 AI Agent 市场并输出报告', 'hermes-agent', 'research_workflow'],
-    ['结合长期记忆和多工具调用做自动化调研报告', 'hermes-agent', 'memory_agent_ops'],
+    ['调研 AI Agent 市场并输出报告', 'pi-agent', 'research_workflow'],
+    ['结合长期记忆和多工具调用做自动化调研报告', 'pi-agent', 'memory_agent_ops'],
     ['分析这段代码边界条件，不改文件', 'deepseek-tui', 'technical_reasoning'],
     ['分析这段代码并直接修复测试', 'codex-cli', 'repo_execution'],
     ['代码 review，重点看算法正确性，用中文解释', 'deepseek-tui', 'technical_reasoning'],
     ['PR review 并给 patch', 'codex-cli', 'repo_execution'],
-    ['消息网关自动通知客户', 'hermes-agent', 'memory_agent_ops'],
+    ['消息网关自动通知客户', 'codex-cli', 'memory_agent_ops'],
   ] as const)('routes boundary matrix case %#', (userInput, selectedExecutor, primaryIntent) => {
     const decision = new ExecutorRouter(boundaryProfiles()).route({
       userInput,
@@ -297,7 +339,7 @@ describe('ExecutorRouter', () => {
   });
 
   it('does not let historical success override a clear ownership mismatch', () => {
-    const profiles = boundaryProfiles().map(profile => profile.name === 'hermes-agent'
+    const profiles = boundaryProfiles().map(profile => profile.name === 'pi-agent'
       ? { ...profile, historicalSuccess: 1 }
       : profile);
     const decision = new ExecutorRouter(profiles).route({
@@ -306,7 +348,7 @@ describe('ExecutorRouter', () => {
     });
 
     expect(decision.selectedExecutor).toBe('codex-cli');
-    expect(decision.rejected.find(candidate => candidate.executorName === 'hermes-agent')?.reason)
+    expect(decision.rejected.find(candidate => candidate.executorName === 'pi-agent')?.reason)
       .toContain('repo mutation');
   });
 });

@@ -141,6 +141,7 @@ describe('App auto-resume after preemption', () => {
         sessionId: 'sess_auto_resume',
         contextRecaller,
         llmBridge,
+        availableExecutorCommands: new Set(['codex']),
       })
     );
 
@@ -156,6 +157,12 @@ describe('App auto-resume after preemption', () => {
     await typeAndSubmit('主线研究任务');
     await typeAndSubmit('紧急优先处理这个任务');
     await typeAndSubmit('普通排队任务');
+
+    expect(app.lastFrame()).toContain('任务队列前五');
+    expect(app.lastFrame()).toContain('[执行中]');
+    expect(app.lastFrame()).toContain('[待执行]');
+    expect(app.lastFrame()).toContain('优先级');
+    expect(app.lastFrame()).toContain('第 1 顺位');
 
     urgentDeferred.resolve({
       success: true,

@@ -457,7 +457,7 @@ describe('MemoryEngine', () => {
     }));
   });
 
-  it('falls back to scope thresholds for tri-state applicability when LLM judge is unavailable', async () => {
+  it('auto-applies explicit subject matches when LLM judge is unavailable', async () => {
     const db = createTestDb();
     const prefRepo = new PreferenceRepo(db);
     const obsRepo = new ObservationRepo(db);
@@ -489,8 +489,8 @@ describe('MemoryEngine', () => {
 
     expect(result.preferenceCandidates[0]).toEqual(expect.objectContaining({
       preferenceId: 'pref_contact_low_confidence',
-      applicabilityAction: 'ask_review',
-      applicabilityScore: 0.7,
+      applicabilityAction: 'auto_apply',
+      applicabilityScore: 0.82,
       judgeSource: 'fallback',
     }));
   });

@@ -550,6 +550,58 @@ describe('Feishu app helpers', () => {
     expect(session.subscribe).toHaveBeenCalled();
   });
 
+  it('streams task failure to Feishu when session subscription is available', async () => {
+    let output = ['before'];
+    let listener: ((snapshot: { output: string[] }) => void) | null = null;
+    const append = (...lines: string[]) => {
+      output = [...output, ...lines];
+      listener?.({ output: [...output] });
+    };
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((next: (snapshot: { output: string[] }) => void) => {
+        listener = next;
+        next({ output: [...output] });
+        return () => {
+          listener = null;
+        };
+      }),
+      submit: vi.fn().mockImplementation(async () => {
+        append('任务 #task_fail 已创建：失败展示');
+        append('→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)');
+        append('→ 原因：research_workflow / research + reporting');
+        append('→ 正在执行任务 #task_fail...');
+        append('+ #task_fail 已启动 pi-agent 执行器');
+        append('✗ 执行失败: executor idle timeout');
+        append('→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。');
+        return { exitRequested: false };
+      }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_stream_fail',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"失败展示"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts).toContain('**处理步骤**\n✗ 执行失败: executor idle timeout');
+    expect(sentTexts.join('\n')).toContain('执行器长时间没有输出或状态变化');
+  });
+
   it('replies with a multiline task summary and strips execution history logs', async () => {
     const session = {
       getSnapshot: vi.fn()
@@ -674,6 +726,39 @@ describe('Feishu app helpers', () => {
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', fullAnswer);
+  });
+
+  it('does not expose raw executor context or workspace paths in Feishu replies', async () => {
+    const reply = formatFeishuReply([
+      '任务 #task_private 已创建：做一份调研报告',
+      '→ 执行准备：先由 codex-cli 解析意图与构建上下文，随后按路由派发到具体 Executor',
+      '→ 路由决策：调研竞速 (auto_dispatch, confidence=1.00)',
+      '→ 执行器：pi-agent + hermes-agent',
+      '→ 正在执行任务 #task_private...',
+      '+ #task_private 已启动 codex-cli 执行器',
+      '+ #task_private 工作目录：/home/ylfego/Program/metaclaw',
+      '+ #task_private 文件输出目标：/home/ylfego/Program/metaclaw/metaclaw-tasks/task_private',
+      '+ #task_private 会话近期上下文：',
+      '+ #task_private [任务#task_old] 用户：之前的任务内容',
+      '+ #task_private 相似历史参考（Reference Context Pack / Minimal Reference Cards，仅供参考）',
+      '+ #task_private 用户意图：插入一个紧急任务，看看 openhumans 这个项目',
+      '+ #task_private 相关性原因：历史用户意图提到类似任务',
+      '+ #task_private 可复用内容：参考当时的处理步骤',
+      '+ #task_private 边界声明：当前任务目标优先',
+      '+ #task_private 输出处理：历史输出约 152 字',
+      '✓ 任务完成 (18.4s)',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: 调研报告已生成，核心结论是该市场仍处于早期，需要重点验证用户付费意愿。',
+      '│ 下一步: 如需延续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(reply).toBe('调研报告已生成，核心结论是该市场仍处于早期，需要重点验证用户付费意愿。');
+    expect(reply).not.toContain('/home/ylfego');
+    expect(reply).not.toContain('文件输出目标');
+    expect(reply).not.toContain('会话近期上下文');
+    expect(reply).not.toContain('Reference Context Pack');
+    expect(reply).not.toContain('任务#task_old');
   });
 
   it('extracts the urgent task final answer before auto-resumed task progress in Feishu replies', () => {
@@ -1340,9 +1425,9 @@ describe('Feishu app helpers', () => {
       '→ 派发给 codex-cli...',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
-      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
       '→ 原因：research_workflow / research',
-      '+ #task_OO0EG38SJo 已启动 hermes-agent 执行器',
+      '+ #task_OO0EG38SJo 已启动 pi-agent 执行器',
       '→ 正在执行任务 #task_OO0EG38SJo...',
       '✓ 任务完成 (8.1s)',
       '最终答案',
@@ -1353,9 +1438,9 @@ describe('Feishu app helpers', () => {
       '→ 发送给 codex-cli 进行意图解析与执行准备',
       '【构建执行上下文】',
       '【执行上下文准备完成】',
-      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
       '→ 原因：research_workflow / research',
-      '→ 已启动 hermes-agent 执行器',
+      '→ 已启动 pi-agent 执行器',
       '→ 正在执行任务 #task_OO0EG38SJo...',
       '✓ 任务完成 (8.1s)',
     ].join('\n'));
@@ -1383,14 +1468,35 @@ describe('Feishu app helpers', () => {
     const sent = new Set<string>();
     expect(formatFeishuStreamingProgressReplies([
       '→ 派发给 codex-cli...',
-      '→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
       '→ 原因：research_workflow / research',
-      '+ #task_research 已启动 hermes-agent 执行器',
+      '+ #task_research 已启动 pi-agent 执行器',
     ], sent)).toEqual([
       '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备',
-      '**处理步骤**\n→ 路由决策：hermes-agent (auto_dispatch, confidence=0.97)',
+      '**处理步骤**\n→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
       '**处理步骤**\n→ 原因：research_workflow / research',
-      '**处理步骤**\n→ 已启动 hermes-agent 执行器',
+      '**处理步骤**\n→ 已启动 pi-agent 执行器',
+    ]);
+  });
+
+  it('streams executor failure terminal state to Feishu progress cards', () => {
+    const sent = new Set<string>();
+    expect(formatFeishuStreamingProgressReplies([
+      '任务 #task_fail 已创建：调研失败展示',
+      '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
+      '→ 原因：research_workflow / research + reporting',
+      '→ 正在执行任务 #task_fail...',
+      '+ #task_fail 已启动 pi-agent 执行器',
+      '✗ 执行失败: executor idle timeout',
+      '→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。',
+    ], sent)).toEqual([
+      '**处理步骤**\n→ 任务 #task_fail 已创建：调研失败展示',
+      '**处理步骤**\n→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
+      '**处理步骤**\n→ 原因：research_workflow / research + reporting',
+      '**处理步骤**\n→ 正在执行任务 #task_fail...',
+      '**处理步骤**\n→ 已启动 pi-agent 执行器',
+      '**处理步骤**\n✗ 执行失败: executor idle timeout',
+      '**处理步骤**\n→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。',
     ]);
   });
 
@@ -1416,4 +1522,56 @@ describe('Feishu app helpers', () => {
     ].join('\n'));
     expect(replies[1]).toBe('**处理步骤**\n【提取最近历史记录上下文】');
   });
+
+  it('streams memory recall decisions to Feishu as progress blocks', () => {
+    const replies = formatFeishuStreamingProgressReplies([
+      '┌─ 已自动采用记忆 ─────────────────────────────────┐',
+      '│ 当前任务：#task_geo GEO 调研报告',
+      '│ - pref_geo: 默认联网搜索并生成飞书云文档 score=1.00',
+      '│   reason=命中主体：GEO',
+      '└──────────────────────────────────────────────────┘',
+      '┌─ 已跳过不确定记忆 ───────────────────────────────┐',
+      '│ 当前任务：#task_geo GEO 调研报告',
+      '│ 策略：无需用户确认；无法确定适用的召回默认不注入执行上下文',
+      '│ 跳过：1 条偏好，0 条任务记忆',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(replies).toEqual([
+      [
+        '**记忆召回自动采用**',
+        '任务：#task_geo GEO 调研报告',
+        '- pref_geo: 默认联网搜索并生成飞书云文档 score=1.00',
+        '  原因：命中主体：GEO',
+      ].join('\n'),
+      [
+        '**记忆召回已跳过**',
+        '任务：#task_geo GEO 调研报告',
+        '- 无需用户确认；无法确定适用的召回默认不注入执行上下文',
+        '- 跳过：1 条偏好，0 条任务记忆',
+      ].join('\n'),
+    ]);
+  });
+
+  it('streams task queue snapshots to Feishu as progress blocks', () => {
+    const replies = formatFeishuStreamingProgressReplies([
+      '┌─ 任务队列前五 ───────────────────────────────────┐',
+      '│ 触发：高优任务抢占，队列已重排',
+      '│ 总览：执行中 1 / 待执行 2 / 挂起 1 / 阻塞 0',
+      '│ 1. [执行中] #task_urgent 插入紧急任务 | 优先级 44.0 | 正在执行 | 进度 10% | 语义优先级：用户要求优先处理',
+      '│ 2. [挂起] #task_main 原始调研任务 | 优先级 32.0 | 第 1 顺位 | 进度 70% | 挂起任务已满足执行条件，恢复连续性收益最高',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(replies).toEqual([
+      [
+        '**任务队列前五**',
+        '触发：高优任务抢占，队列已重排',
+        '总览：执行中 1 / 待执行 2 / 挂起 1 / 阻塞 0',
+        '- 1. [执行中] #task_urgent 插入紧急任务 | 优先级 44.0 | 正在执行 | 进度 10% | 语义优先级：用户要求优先处理',
+        '- 2. [挂起] #task_main 原始调研任务 | 优先级 32.0 | 第 1 顺位 | 进度 70% | 挂起任务已满足执行条件，恢复连续性收益最高',
+      ].join('\n'),
+    ]);
+  });
+
 });

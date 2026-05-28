@@ -151,4 +151,55 @@ describe('tasksCommand', () => {
     expect(result.content).not.toContain(chatterTask.id);
     expect(result.content).not.toContain('[DONE] hi');
   });
+
+  it('clears only parked tasks when requested', async () => {
+    const readyTask = taskEngine.create({ title: '待执行任务', goal: '待执行' });
+    taskEngine.transition(readyTask.id, 'ready');
+
+    const parkedTask = taskEngine.create({ title: '已挂起任务', goal: '已挂起' });
+    taskEngine.transition(parkedTask.id, 'ready');
+    taskEngine.transition(parkedTask.id, 'running');
+    taskEngine.park(parkedTask.id, '用户暂停', {
+      done: [],
+      pending: ['继续'],
+      nextStep: '继续',
+      pauseReason: '用户暂停',
+    });
+
+    const result = await tasksCommand.execute(['clear', 'parked'], context);
+
+    expect(result.content).toContain('已清空挂起任务：取消 1 个任务');
+    expect(result.content).toContain(parkedTask.id);
+    expect(taskRepo.findById(parkedTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(readyTask.id)?.status).toBe('ready');
+  });
+
+  it('clears all manageable tasks and leaves completed history untouched', async () => {
+    const runningTask = taskEngine.create({ title: '执行中的任务', goal: '执行中' });
+    taskEngine.transition(runningTask.id, 'ready');
+    taskEngine.transition(runningTask.id, 'running');
+
+    const blockedTask = taskEngine.create({ title: '已阻塞任务', goal: '已阻塞' });
+    taskEngine.transition(blockedTask.id, 'ready');
+    taskEngine.transition(blockedTask.id, 'running');
+    taskEngine.block(blockedTask.id, {
+      taskId: blockedTask.id,
+      type: 'manual',
+      description: '等待资料',
+      status: 'waiting',
+    });
+
+    const doneTask = taskEngine.create({ title: '已完成任务', goal: '已完成' });
+    taskEngine.transition(doneTask.id, 'ready');
+    taskEngine.transition(doneTask.id, 'running');
+    taskEngine.transition(doneTask.id, 'done');
+
+    const result = await tasksCommand.execute(['clear', 'all'], context);
+
+    expect(result.content).toContain('已清空所有未完成任务：取消 2 个任务');
+    expect(result.content).toContain('已中止当前执行器');
+    expect(taskRepo.findById(runningTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(blockedTask.id)?.status).toBe('cancelled');
+    expect(taskRepo.findById(doneTask.id)?.status).toBe('done');
+  });
 });

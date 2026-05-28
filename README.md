@@ -13,7 +13,7 @@ It is built for teams who need AI agents to keep working across interruptions, r
 - Auto-resumes executable parked tasks when the scheduler is idle.
 - Uses semantic priority, not keyword matching, to decide urgent preemption and resume ordering.
 - Routes work across multiple executors by task intent and ownership boundaries.
-- Recalls preferences and task memory with review before executor injection.
+- Recalls only clearly applicable preferences and task memory; uncertain recall is skipped by default so Feishu and unattended executors never wait for confirmation.
 - Captures generated files as task artifacts.
 - Sends Feishu chat replies, file artifacts, and Markdown preview links through the backend delivery layer.
 - Provides a local Gateway so multiple terminals can connect to one MetaClaw runtime.
@@ -25,11 +25,10 @@ MetaClaw supports these executor adapters:
 | Executor | Command | Best For | Install Requirement |
 | --- | --- | --- | --- |
 | Codex CLI | `codex` | Repository edits, tests, deterministic implementation, code review with patches | Install and authenticate the OpenAI Codex CLI |
-| DeepSeek TUI | `deepseek-tui` | DeepSeek reasoning, Chinese technical analysis, algorithm/math reasoning, terminal-native DeepSeek workflows | Install and authenticate `deepseek-tui` |
-| Hermes Agent | `hermes` | Research workflows, multi-tool automation, memory/gateway/assistant workflows | Install and authenticate `hermes` |
-| Claude Code | `claude` | Compatible fallback executor for code and terminal-agent workflows | Optional; install and authenticate Claude Code |
+| Pi Agent | `pi` | Research tasks, report generation, multi-step synthesis, agentic CLI workflows | Install `@earendil-works/pi-coding-agent` and authenticate Pi |
+| Hermes Agent | `hermes` | Research tasks, multi-tool orchestration, memory/gateway/assistant workflows | Install and authenticate Hermes |
 
-The default executor is `codex`. The router can select `codex-cli`, `deepseek-tui`, or `hermes-agent` when those commands are installed and registered.
+The default executor is `codex`. The default router can select `codex-cli` for repository work. For research work, MetaClaw can dispatch Pi Agent and Hermes Agent in parallel and keep whichever returns first, aborting the slower executor. DeepSeek TUI remains available as a legacy/manual adapter, but it is retired from the default executor registry and automatic route candidates.
 
 ## Prerequisites
 
@@ -55,9 +54,7 @@ sudo apt-get install -y build-essential python3 make g++
 Executor prerequisites:
 
 - Install and log in to OpenAI Codex CLI if you want the default `codex-cli` executor.
-- Install and log in to DeepSeek TUI if you want semantic technical reasoning routed to `deepseek-tui`.
-- Install and log in to Hermes Agent if you want research, memory, gateway, and workflow automation routed to `hermes-agent`.
-- Optionally install Claude Code if you want `claude-code` compatibility.
+- Install and log in to Pi Agent and Hermes Agent if you want research routed through the parallel research race.
 
 Feishu prerequisites, only if you use Feishu integration:
 
@@ -122,26 +119,31 @@ executor:
   max_duration: 3600
 ```
 
-### DeepSeek TUI
+`timeout` is a continuous no-output watchdog, not a fixed wall-clock runtime limit. MetaClaw resets it whenever the executor writes stdout or stderr, so a live executor can keep running as long as it continues to show activity. `max_duration` is kept for backward-compatible configuration files and is not used to kill active executor processes.
 
-Install and authenticate `deepseek-tui`, then verify:
+### Pi Agent
+
+Install the Pi coding agent CLI and authenticate it:
 
 ```bash
-which deepseek-tui
-deepseek-tui --help
+npm install -g @earendil-works/pi-coding-agent
+which pi
+pi --help
 ```
 
 MetaClaw calls it as:
 
 ```bash
-deepseek-tui exec --auto "<prompt>"
+pi -p "<prompt>"
 ```
 
-Use it as the default executor if desired:
+Pi research workflows often run longer than CLI coding tasks. MetaClaw automatically gives `pi-agent` at least `timeout: 900` seconds of continuous no-output idle time, even if the global executor config is shorter. Active Pi processes are not stopped by a hard total-duration limit.
+
+Use Pi as the default executor if desired:
 
 ```yaml
 executor:
-  command: deepseek-tui
+  command: pi
 ```
 
 ### Hermes Agent
@@ -159,31 +161,16 @@ MetaClaw calls it as:
 hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
 
-`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. This is required because MetaClaw executor runs cannot rely on an interactive terminal confirmation mid-task.
+`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. Research workflows can run Pi Agent and Hermes Agent concurrently; MetaClaw records the first returned result and aborts the other executor.
 
-Hermes research workflows often run longer than CLI coding tasks. MetaClaw automatically gives `hermes-agent` at least `timeout: 900` seconds of idle time and `max_duration: 7200` seconds of total runtime, even if the global executor config is shorter.
+### Retired Legacy Adapters
 
-Use it as the default executor if desired:
-
-```yaml
-executor:
-  command: hermes
-```
-
-### Claude Code
-
-Claude Code is optional. Install and authenticate it if you want the compatibility adapter:
+The `deepseek-tui`, `claude-code`, and `openclaw` adapters are retained for compatibility and explicit local configuration, but they are not seeded into the default executor registry unless explicitly configured as the default executor.
 
 ```bash
-which claude
-claude --help
-```
-
-Use it as the default executor if desired:
-
-```yaml
 executor:
-  command: claude
+  command: hermes        # legacy/manual
+  # command: deepseek-tui # legacy/manual
 ```
 
 ## Run
@@ -301,7 +288,7 @@ MetaClaw separates document generation from Feishu delivery:
 
 Executors should not call Feishu Docs or cloud-document APIs directly. If a user asks for a "Feishu cloud document" or "online preview", MetaClaw instructs the executor to produce local Markdown artifacts; the backend handles Feishu synchronization and preview links.
 
-Feishu progress cards show the execution chain explicitly. MetaClaw first sends the request to `codex-cli` for intent parsing and execution preparation, then shows the router decision, routing reason, and the actual executor that starts the task, for example `hermes-agent` for research workflows. This prevents Feishu users from mistaking the intent parser for the final executor.
+Feishu progress cards show the execution chain explicitly. MetaClaw first sends the request to `codex-cli` for intent parsing and execution preparation, then shows the router decision, routing reason, and the actual executor that starts the task. Research workflows can show a `pi-agent + hermes-agent` race, where the first returned result is kept and the slower executor is aborted. This prevents Feishu users from mistaking the intent parser for the final executor.
 
 Default preview URL:
 
@@ -383,9 +370,8 @@ This prevents queued work from wasting compute while preserving task safety.
 Routing is intent-first:
 
 - `repo_execution` goes to `codex-cli` by default.
-- `technical_reasoning` goes to `deepseek-tui` when DeepSeek, algorithm, math, or Chinese technical reasoning is explicit.
-- `research_workflow` goes to `hermes-agent`.
-- `memory_agent_ops` goes to `hermes-agent`.
+- `research_workflow` can race `pi-agent` and `hermes-agent`; the first returned result wins and the slower executor is aborted.
+- `memory_agent_ops` goes to `pi-agent` when available, otherwise falls back to the default executor.
 - Explicit executor names are respected when available.
 
 The router records selected executor, confidence, primary intent, matched boundary, rejected candidates, and routing reason.
@@ -394,7 +380,7 @@ The router records selected executor, confidence, primary intent, matched bounda
 
 MetaClaw stores confirmed preferences, observations, task memory cards, recall events, and learning candidates in SQLite.
 
-Memory is not silently injected into executor prompts. Relevant memories appear in review cards, and the user can accept, reject, or select specific items.
+Memory is never injected blindly. Clearly applicable memories are applied automatically with an audit trail; uncertain memories are skipped by default instead of asking for confirmation. Feishu and unattended executor flows therefore keep moving without interactive prompts.
 
 Commands:
 

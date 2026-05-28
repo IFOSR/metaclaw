@@ -185,7 +185,7 @@ export class GuidancePolicyEngine {
       recommendedAction: input.recommendedAction,
       reasons: input.reasons,
       confidence: input.confidence,
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       proposalPayload: {
         taskId: input.signal.taskId,
         source: input.trigger,

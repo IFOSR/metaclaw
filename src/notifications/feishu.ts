@@ -66,13 +66,14 @@ export class FeishuNotifier implements NotificationService {
       : '重复模式识别';
 
     return [
-      'Metaclaw 检测到待确认偏好',
+      'Metaclaw 检测到候选偏好',
       '',
       `来源：${sourceText}`,
       `候选：${input.pattern}`,
       `ID：${input.observationId}`,
       '',
-      `回到 Metaclaw 输入 /memory confirm ${input.observationId} 确认，或 /memory reject ${input.observationId} 忽略。`,
+      '当前任务不会等待用户确认。系统只会自动写入低风险、高置信偏好；其余候选仅保留备查。',
+      `如需长期保存，可稍后在 Metaclaw 输入 /memory confirm ${input.observationId}；不需要则输入 /memory reject ${input.observationId}。`,
     ].join('\n');
   }
 }
