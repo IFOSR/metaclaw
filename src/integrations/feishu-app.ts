@@ -38,6 +38,7 @@ interface TenantTokenState {
 }
 
 const FEISHU_TYPING_REACTION = 'Typing';
+const FEISHU_REPLY_WAIT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 type FeishuPostRow = Array<{
   tag: 'md';
@@ -1317,7 +1318,7 @@ async function waitForFeishuReplyOutputLines(
   session: FeishuMessageSession,
   before: number,
   submitPromise: Promise<{ exitRequested: boolean }>,
-  timeoutMs = 10 * 60 * 1000,
+  timeoutMs = FEISHU_REPLY_WAIT_TIMEOUT_MS,
 ): Promise<string[]> {
   if (!session.subscribe) {
     await submitPromise;

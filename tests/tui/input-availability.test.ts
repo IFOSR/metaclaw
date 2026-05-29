@@ -155,6 +155,74 @@ describe('App input availability', () => {
     app.cleanup();
   });
 
+  it('uses arrow keys to choose slash command suggestions before falling back to history recall', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-command-suggestions');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: 'command suggestion test',
+        response: 'ok',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_command_suggestions',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    await inputCapture.handler?.('/', {});
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('命令建议 ↑/↓ 选择，Enter 录入');
+    expect(app.lastFrame()).toContain('/task');
+
+    await inputCapture.handler?.('t', {});
+    await inputCapture.handler?.('a', {});
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('/task');
+    expect(app.lastFrame()).toContain('/tasks');
+    expect(app.lastFrame()).not.toContain('/memory');
+
+    await inputCapture.handler?.('', { downArrow: true });
+    await flushUpdates();
+    await inputCapture.handler?.('', { return: true });
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('> /tasks ');
+
+    app.unmount();
+    app.cleanup();
+  });
+
   it('keeps the prompt usable and queues a new task while another task is running', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
@@ -18,6 +18,10 @@ import {
   parseFeishuTextContent,
   resolveAppSecret,
 } from '../../src/integrations/feishu-app.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('FeishuAppClient', () => {
   it('fetches tenant access token, sends Markdown cards, and manages reactions', async () => {
@@ -1159,6 +1163,76 @@ describe('Feishu app helpers', () => {
     listener?.({ output: [...output] });
     expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
       .not.toContain('main result should arrive too late');
+  });
+
+  it('waits longer than ten minutes for long research tasks before sending the final Feishu reply', async () => {
+    vi.useFakeTimers();
+    const listeners = new Set<(snapshot: { output: string[] }) => void>();
+    const output = ['before'];
+    const notify = () => {
+      for (const listener of listeners) {
+        listener({ output: [...output] });
+      }
+    };
+    let resolveSubmit!: () => void;
+    const submitPromise = new Promise<{ exitRequested: false }>(resolve => {
+      resolveSubmit = () => resolve({ exitRequested: false });
+    });
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((callback: (snapshot: { output: string[] }) => void) => {
+        listeners.add(callback);
+        callback({ output: [...output] });
+        return () => {
+          listeners.delete(callback);
+        };
+      }),
+      submit: vi.fn().mockImplementation(() => submitPromise),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const handled = handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_long_research',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"帮我做一个长调研"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1);
+    expect(client.removeReactionFromMessage).not.toHaveBeenCalled();
+
+    output.push(
+      '> 帮我做一个长调研',
+      '任务 #task_long 已创建：帮我做一个长调研',
+      '→ 路由决策：调研竞速 (auto_dispatch, confidence=0.97)',
+      '→ 正在执行任务 #task_long...',
+      '✓ 任务完成 (650.0s)',
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: long research final summary',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '',
+      'long research full answer',
+    );
+    notify();
+    resolveSubmit();
+    await handled;
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('long research full answer');
+    expect(client.removeReactionFromMessage).toHaveBeenCalledWith('om_message_long_research', 'reaction_typing');
   });
 
   it('streams resumed task guidance to Feishu after an urgent task completes', async () => {

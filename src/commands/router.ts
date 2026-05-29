@@ -64,13 +64,22 @@ export class CommandRouter {
     const seen = new Set<string>();
     const lines: string[] = ['可用命令：', ''];
 
-    for (const [name, handler] of this.handlers) {
-      if (seen.has(handler.name)) continue;
-      seen.add(handler.name);
+    for (const handler of this.listHandlers()) {
       const aliases = handler.aliases.length > 0 ? ` (别名: ${handler.aliases.map(a => '/' + a).join(', ')})` : '';
       lines.push(`  /${handler.name}${aliases} — ${handler.description}`);
     }
 
     return lines.join('\n');
+  }
+
+  listHandlers(): CommandHandler[] {
+    const seen = new Set<string>();
+    const handlers: CommandHandler[] = [];
+    for (const [, handler] of this.handlers) {
+      if (seen.has(handler.name)) continue;
+      seen.add(handler.name);
+      handlers.push(handler);
+    }
+    return handlers;
   }
 }

@@ -8,6 +8,8 @@ import {
   createInputHistoryState,
   formatRenderLine,
   getLineColor,
+  getCommandSuggestions,
+  applyCommandSuggestion,
   prepareEditorSubmission,
   recallNextInput,
   recallPreviousInput,
@@ -92,5 +94,24 @@ describe('prepareEditorSubmission', () => {
     expect(history.entries).toHaveLength(100);
     expect(history.entries[0]).toBe('任务 1');
     expect(history.entries[99]).toBe('任务 100');
+  });
+
+  it('filters slash command suggestions by command or alias prefix', () => {
+    expect(getCommandSuggestions({ text: '/', cursor: 1 }).map(item => item.command))
+      .toEqual(expect.arrayContaining(['/task', '/tasks', '/memory', '/help']));
+
+    expect(getCommandSuggestions({ text: '/ta', cursor: 3 }).map(item => item.command))
+      .toEqual(['/task', '/tasks']);
+
+    expect(getCommandSuggestions({ text: '/q', cursor: 2 }).map(item => item.command))
+      .toEqual(['/exit']);
+
+    expect(getCommandSuggestions({ text: '/task ', cursor: 6 })).toEqual([]);
+  });
+
+  it('applies a selected slash command into the editor without submitting it', () => {
+    const [suggestion] = getCommandSuggestions({ text: '/ta', cursor: 3 });
+    expect(applyCommandSuggestion({ text: '/ta', cursor: 3 }, suggestion!))
+      .toEqual({ text: '/task ', cursor: 6 });
   });
 });

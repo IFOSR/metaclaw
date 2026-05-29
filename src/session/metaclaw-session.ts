@@ -2880,7 +2880,7 @@ export class MetaclawSession {
   }
 }
 
-function createDefaultCommandRouter(): CommandRouter {
+export function createDefaultCommandRouter(): CommandRouter {
   const router = new CommandRouter();
   router.register(tasksCommand);
   router.register(taskCommand);
