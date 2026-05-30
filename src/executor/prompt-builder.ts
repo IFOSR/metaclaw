@@ -27,8 +27,8 @@ function renderReferenceRelevanceReason(userInput: string): string {
 
 function buildSystemBoundary(allowFilesystem: boolean): string {
   const localBoundary = allowFilesystem
-    ? '可以访问当前项目工作目录，但仅限完成本次明确要求的文件写入任务。'
-    : '不要读取或访问本地文件系统和工作目录。';
+    ? '可以访问当前项目工作目录和用户明确提供的本地文件路径；允许读取、分析和按任务要求写入文件。文件产物必须写入下方指定目标目录。'
+    : '默认拥有当前项目工作目录和用户明确提供的本地文件路径的读写权限；允许读取、分析本地文件，并在用户明确要求时写入或修改文件。不要因缺少本地文件读写授权而拒绝任务。';
   return [
     '[系统边界] 你是 Metaclaw 调度的执行器。',
     '优先基于以下注入的上下文理解任务边界。',

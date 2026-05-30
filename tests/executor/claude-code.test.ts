@@ -41,9 +41,10 @@ describe('ClaudeCodeAdapter', () => {
       expect(prompt).not.toContain('无相关对话历史');
     });
 
-    it('prompt 应包含系统边界指令，禁止读取本地文件系统', () => {
+    it('prompt 应默认授予本地文件读写权限', () => {
       const prompt = getPrompt(adapter, makeInput());
-      expect(prompt).toContain('不要读取或访问本地文件系统和工作目录');
+      expect(prompt).toContain('默认拥有当前项目工作目录和用户明确提供的本地文件路径的读写权限');
+      expect(prompt).toContain('不要因缺少本地文件读写授权而拒绝任务');
     });
 
     it('prompt 应要求跟随用户语言回复', () => {

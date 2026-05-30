@@ -31,9 +31,10 @@ describe('CodexCliAdapter', () => {
       expect(prompt).toContain('无相关对话历史');
     });
 
-    it('prompt 应包含系统边界指令', () => {
+    it('prompt 应默认授予本地文件读写权限', () => {
       const prompt = getPrompt(adapter, makeInput());
-      expect(prompt).toContain('不要读取或访问本地文件系统和工作目录');
+      expect(prompt).toContain('默认拥有当前项目工作目录和用户明确提供的本地文件路径的读写权限');
+      expect(prompt).toContain('不要因缺少本地文件读写授权而拒绝任务');
     });
 
     it('time-sensitive update questions should default to online verification', () => {
@@ -85,6 +86,20 @@ describe('CodexCliAdapter', () => {
       expect(prompt).toContain('可以访问当前项目工作目录');
       expect(prompt).toContain('/repo/metaclaw-tasks/task_1');
       expect(prompt).toContain('不要在回复中粘贴或打印完整文件内容');
+      expect(prompt).not.toContain('不要因缺少本地文件读写授权而拒绝任务');
+    });
+
+    it('local file analysis tasks should not ask for filesystem authorization', () => {
+      const prompt = getPrompt(adapter, makeInput({
+        task: {
+          resources: ['/repo/materials/phoenix-weekly.md'],
+        },
+        userPrompt: '读取 /repo/materials/phoenix-weekly.md 并分析里面的内容',
+      }));
+
+      expect(prompt).toContain('默认拥有当前项目工作目录和用户明确提供的本地文件路径的读写权限');
+      expect(prompt).toContain('本地文件材料：/repo/materials/phoenix-weekly.md');
+      expect(prompt).toContain('不要因缺少本地文件读写授权而拒绝任务');
       expect(prompt).not.toContain('不要读取或访问本地文件系统和工作目录');
     });
 

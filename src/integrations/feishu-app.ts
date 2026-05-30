@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
-import { existsSync, readFileSync, statSync } from 'fs';
-import { basename } from 'path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { basename, resolve } from 'path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 import type { Config } from '../core/types.js';
 import type { SessionSnapshot } from '../session/metaclaw-session.js';
 import type { MetaclawSession } from '../session/metaclaw-session.js';
+import { resolveMetaclawDir } from '../utils/paths.js';
 import { createMarkdownPreviewBaseUrl, createMarkdownPreviewLinks } from './markdown-preview.js';
 
 export interface FeishuAppConfig {
@@ -28,6 +29,7 @@ interface JsonResponse {
 interface FeishuAppClientDeps {
   postJson?: (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => Promise<JsonResponse>;
   postForm?: (url: string, form: FormData, headers?: Record<string, string>) => Promise<JsonResponse>;
+  getBinary?: (url: string, headers?: Record<string, string>) => Promise<BinaryResponse>;
   deleteJson?: (url: string, headers?: Record<string, string>) => Promise<JsonResponse>;
   nowMs?: () => number;
 }
@@ -35,6 +37,21 @@ interface FeishuAppClientDeps {
 interface TenantTokenState {
   token: string;
   expiresAtMs: number;
+}
+
+interface BinaryResponse {
+  ok: boolean;
+  status: number;
+  headers: {
+    get(name: string): string | null;
+  };
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+}
+
+interface DownloadedFeishuResource {
+  path: string;
+  fileName: string;
 }
 
 const FEISHU_TYPING_REACTION = 'Typing';
@@ -121,6 +138,7 @@ export class FeishuAppClient {
   private tenantToken: TenantTokenState | null = null;
   private readonly postJson: (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => Promise<JsonResponse>;
   private readonly postForm: (url: string, form: FormData, headers?: Record<string, string>) => Promise<JsonResponse>;
+  private readonly getBinary: (url: string, headers?: Record<string, string>) => Promise<BinaryResponse>;
   private readonly deleteJson: (url: string, headers?: Record<string, string>) => Promise<JsonResponse>;
   private readonly nowMs: () => number;
 
@@ -130,6 +148,7 @@ export class FeishuAppClient {
   ) {
     this.postJson = deps.postJson ?? defaultPostJson;
     this.postForm = deps.postForm ?? defaultPostForm;
+    this.getBinary = deps.getBinary ?? defaultGetBinary;
     this.deleteJson = deps.deleteJson ?? defaultDeleteJson;
     this.nowMs = deps.nowMs ?? (() => Date.now());
   }
@@ -249,6 +268,41 @@ export class FeishuAppClient {
     }
   }
 
+  async downloadMessageResource(input: {
+    messageId: string;
+    fileKey: string;
+    resourceType: 'file' | 'image';
+    fileName?: string;
+    outputDir?: string;
+  }): Promise<DownloadedFeishuResource> {
+    const token = await this.getTenantAccessToken();
+    const url = [
+      `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(input.messageId)}`,
+      `/resources/${encodeURIComponent(input.fileKey)}?type=${encodeURIComponent(input.resourceType)}`,
+    ].join('');
+    const response = await this.getBinary(url, {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json; charset=utf-8',
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`飞书消息资源下载失败: ${body || response.status}`);
+    }
+
+    const outputDir = input.outputDir ?? resolve(resolveMetaclawDir(), 'feishu-uploads', sanitizePathPart(input.messageId));
+    mkdirSync(outputDir, { recursive: true });
+    const fileName = sanitizeFileName(
+      input.fileName
+        ?? extractFilenameFromContentDisposition(response.headers.get('content-disposition'))
+        ?? `${input.fileKey}${input.resourceType === 'image' ? '.jpg' : ''}`,
+    );
+    const outputPath = resolve(outputDir, fileName);
+    writeFileSync(outputPath, Buffer.from(await response.arrayBuffer()));
+
+    return { path: outputPath, fileName };
+  }
+
   async addReactionToMessage(messageId: string, emojiType: string): Promise<string | null> {
     const token = await this.getTenantAccessToken();
     const response = await this.postJson(
@@ -318,12 +372,14 @@ export interface FeishuMarkdownPreviewOptions {
 }
 
 type FeishuMessageClient = Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>
-  & Partial<Pick<FeishuAppClient, 'uploadFile' | 'sendFileToChat'>>;
+  & Partial<Pick<FeishuAppClient, 'downloadMessageResource' | 'uploadFile' | 'sendFileToChat'>>;
 
 interface FeishuMessageHandlerDeps {
   client: FeishuMessageClient;
   session: FeishuMessageSession;
   seenMessageIds: Set<string>;
+  pendingResourcesByChatId?: Map<string, string[]>;
+  uploadDir?: string;
   markdownPreview?: FeishuMarkdownPreviewOptions;
 }
 
@@ -332,6 +388,7 @@ type FeishuWebSocketEventHandlers = Parameters<InstanceType<typeof Lark.EventDis
 export class FeishuEventBridge {
   private server: Server | null = null;
   private readonly seenMessageIds = new Set<string>();
+  private readonly pendingResourcesByChatId = new Map<string, string[]>();
 
   constructor(private readonly deps: FeishuEventBridgeDeps) {}
 
@@ -422,6 +479,7 @@ export class FeishuEventBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      pendingResourcesByChatId: this.pendingResourcesByChatId,
       markdownPreview: this.deps.markdownPreview,
     });
   }
@@ -439,6 +497,7 @@ interface FeishuWebSocketBridgeDeps {
 export class FeishuWebSocketBridge implements FeishuBridge {
   private wsClient: Lark.WSClient | null = null;
   private readonly seenMessageIds = new Set<string>();
+  private readonly pendingResourcesByChatId = new Map<string, string[]>();
 
   constructor(private readonly deps: FeishuWebSocketBridgeDeps) {}
 
@@ -454,6 +513,7 @@ export class FeishuWebSocketBridge implements FeishuBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      pendingResourcesByChatId: this.pendingResourcesByChatId,
       markdownPreview: this.deps.markdownPreview,
     }));
 
@@ -504,13 +564,25 @@ export async function handleFeishuMessageEvent(
   const messageId = message?.message_id;
   const chatId = message?.chat_id;
   const messageType = message?.message_type;
-  if (typeof messageId !== 'string' || typeof chatId !== 'string' || messageType !== 'text') {
+  if (typeof messageId !== 'string' || typeof chatId !== 'string' || typeof messageType !== 'string') {
     return false;
   }
   if (deps.seenMessageIds.has(messageId)) {
     return false;
   }
   deps.seenMessageIds.add(messageId);
+
+  if (messageType !== 'text') {
+    return await handleFeishuResourceMessage(message, {
+      chatId,
+      messageId,
+      messageType,
+      client: deps.client,
+      session: deps.session,
+      pendingResourcesByChatId: deps.pendingResourcesByChatId,
+      uploadDir: deps.uploadDir,
+    });
+  }
 
   const text = parseFeishuTextContent(message.content);
   if (!text) {
@@ -528,14 +600,31 @@ export async function handleFeishuMessageEvent(
     const before = deps.session.getSnapshot().output.length;
     let observedOutputLength = before;
     let progressSendQueue = Promise.resolve();
+    let progressFlushTimer: NodeJS.Timeout | null = null;
+    const pendingProgressOutputs: string[] = [];
     const sentProgressSteps = new Set<string>();
-    const enqueueProgress = (progressOutput: string) => {
+    const flushProgress = () => {
+      if (pendingProgressOutputs.length === 0) {
+        return progressSendQueue;
+      }
+      const progressOutput = mergeFeishuProgressOutputs(pendingProgressOutputs.splice(0));
       progressSendQueue = progressSendQueue.then(() =>
         deps.client.sendMarkdownCardToChat(chatId, progressOutput)
           .catch((error) => {
             deps.session.appendSystemMessage(`⚠️ 飞书步骤消息回发失败: ${(error as Error).message}`);
           })
       );
+      return progressSendQueue;
+    };
+    const enqueueProgress = (progressOutput: string) => {
+      pendingProgressOutputs.push(progressOutput);
+      if (progressFlushTimer) {
+        return;
+      }
+      progressFlushTimer = setTimeout(() => {
+        progressFlushTimer = null;
+        void flushProgress();
+      }, 100);
     };
     let progressTargetTaskId: string | null = null;
     let unsubscribe: (() => void) | undefined;
@@ -557,7 +646,8 @@ export async function handleFeishuMessageEvent(
     });
     let outputLines: string[];
     try {
-      const submitPromise = deps.session.submit(text, { awaitAsyncWork: false });
+      const textWithResources = appendPendingFeishuResourcesToText(text, chatId, deps.pendingResourcesByChatId);
+      const submitPromise = deps.session.submit(textWithResources, { awaitAsyncWork: false });
       outputLines = await waitForFeishuReplyOutputLines(deps.session, before, submitPromise);
     } finally {
       unsubscribe?.();
@@ -569,7 +659,8 @@ export async function handleFeishuMessageEvent(
     const progressOutput = deps.session.subscribe
       ? ''
       : formatFeishuProgressReply(replyOutputLines);
-    const output = formatFeishuReply(replyOutputLines) || formatFeishuPendingReply(replyOutputLines);
+    const rawOutput = formatFeishuReply(replyOutputLines) || formatFeishuPendingReply(replyOutputLines);
+    const output = sanitizeFeishuFinalReply(rawOutput, replyOutputLines);
     const reply = appendMarkdownPreviewLinks(output, replyOutputLines, deps.markdownPreview);
     if (!reply) {
       return true;
@@ -578,6 +669,11 @@ export async function handleFeishuMessageEvent(
       if (progressOutput) {
         enqueueProgress(progressOutput);
       }
+      if (progressFlushTimer) {
+        clearTimeout(progressFlushTimer);
+        progressFlushTimer = null;
+      }
+      await flushProgress();
       await progressSendQueue;
       const chunks = splitForFeishu(reply);
       const suppressFinalReply = deps.session.subscribe
@@ -1065,13 +1161,125 @@ export function parseFeishuTextContent(content: unknown): string | null {
   }
 }
 
+function parseFeishuResourceContent(content: unknown): {
+  fileKey: string;
+  fileName?: string;
+  resourceType: 'file' | 'image';
+} | null {
+  if (typeof content !== 'string') {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(content) as {
+      file_key?: unknown;
+      image_key?: unknown;
+      file_name?: unknown;
+      name?: unknown;
+    };
+    if (typeof parsed.file_key === 'string' && parsed.file_key.trim()) {
+      return {
+        fileKey: parsed.file_key.trim(),
+        fileName: typeof parsed.file_name === 'string'
+          ? parsed.file_name
+          : typeof parsed.name === 'string'
+            ? parsed.name
+            : undefined,
+        resourceType: 'file',
+      };
+    }
+    if (typeof parsed.image_key === 'string' && parsed.image_key.trim()) {
+      return {
+        fileKey: parsed.image_key.trim(),
+        fileName: typeof parsed.file_name === 'string'
+          ? parsed.file_name
+          : typeof parsed.name === 'string'
+            ? parsed.name
+            : undefined,
+        resourceType: 'image',
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function handleFeishuResourceMessage(
+  message: NonNullable<FeishuIncomingMessageEvent['message']>,
+  input: {
+    chatId: string;
+    messageId: string;
+    messageType: string;
+    client: FeishuMessageClient;
+    session: FeishuMessageSession;
+    pendingResourcesByChatId?: Map<string, string[]>;
+    uploadDir?: string;
+  },
+): Promise<boolean> {
+  if (input.messageType !== 'file' && input.messageType !== 'image') {
+    return false;
+  }
+
+  const resource = parseFeishuResourceContent(message.content);
+  if (!resource || !input.client.downloadMessageResource) {
+    input.session.appendSystemMessage('⚠️ 收到飞书文件消息，但当前客户端不支持下载消息资源');
+    return true;
+  }
+
+  try {
+    const downloaded = await input.client.downloadMessageResource({
+      messageId: input.messageId,
+      fileKey: resource.fileKey,
+      resourceType: resource.resourceType,
+      fileName: resource.fileName,
+      outputDir: input.uploadDir
+        ? resolve(input.uploadDir, sanitizePathPart(input.chatId), sanitizePathPart(input.messageId))
+        : undefined,
+    });
+    const pendingResources = input.pendingResourcesByChatId ?? new Map<string, string[]>();
+    pendingResources.set(input.chatId, [
+      ...(pendingResources.get(input.chatId) ?? []),
+      downloaded.path,
+    ]);
+    input.session.appendSystemMessage(`→ 已接收飞书文件: ${downloaded.fileName}`);
+    return true;
+  } catch (error) {
+    input.session.appendSystemMessage(`⚠️ 飞书文件下载失败: ${(error as Error).message}`);
+    return true;
+  }
+}
+
+function appendPendingFeishuResourcesToText(
+  text: string,
+  chatId: string,
+  pendingResourcesByChatId?: Map<string, string[]>,
+): string {
+  const pendingResources = pendingResourcesByChatId?.get(chatId) ?? [];
+  if (pendingResources.length === 0) {
+    return text;
+  }
+
+  pendingResourcesByChatId?.delete(chatId);
+  return [
+    text,
+    '',
+    '关联飞书上传文件：',
+    ...pendingResources.map(resourcePath => `"${resourcePath}"`),
+  ].join('\n');
+}
+
 export function formatFeishuReply(outputLines: string[]): string {
   const appendedResultOutput = extractAppendedTaskResultOutput(outputLines);
-  if (appendedResultOutput) {
+  const hasInternalExecutorContext = hasInternalExecutorContextInTaskOutput(outputLines);
+  if (appendedResultOutput && !hasInternalExecutorContext) {
     return appendedResultOutput;
   }
 
-  const executorAnswer = extractLatestExecutorAnswer(outputLines);
+  const executorAnswer = hasInternalExecutorContext
+    ? extractLatestTaskSummary(outputLines)
+    : extractLatestExecutorAnswer(outputLines);
   if (executorAnswer) {
     return executorAnswer;
   }
@@ -1233,6 +1441,24 @@ export function appendMarkdownPreviewLinks(
     '**Markdown 在线预览**',
     ...links.map(link => `- [${link.title}](${link.url})`),
   ].join('\n');
+}
+
+function sanitizeFeishuFinalReply(reply: string, outputLines: string[]): string {
+  if (!reply.trim() || !containsInternalExecutorContext(reply) && !containsFeishuInternalReplyNoise(reply)) {
+    return reply;
+  }
+
+  return extractLatestTaskSummary(outputLines) || '';
+}
+
+function containsFeishuInternalReplyNoise(reply: string): boolean {
+  return reply.split(/\r?\n/).some(line =>
+    /^\[[a-z0-9_-]+\]\s+/i.test(line.trim())
+    || /\[codex-cli\]/i.test(line)
+    || /\/bin\/bash\b/.test(line)
+    || /succeeded in \d+ms/i.test(line)
+    || /\/home\/[^ \t]+/.test(line)
+  );
 }
 
 export function extractMarkdownArtifactPaths(outputLines: string[]): string[] {
@@ -1407,15 +1633,17 @@ function cleanFeishuReplyLine(line: string): string | null {
 
   const taskOutput = trimmed.match(/^[+·•]\s+#task_[^\s]+\s+(.+)$/)?.[1]?.trim();
   if (taskOutput) {
+    const normalizedTaskOutput = stripExecutorLogPrefix(taskOutput);
     if (
-      /^\d[\d,]*$/.test(taskOutput) ||
-      taskOutput === 'tokens used' ||
-      taskOutput.includes('执行器') ||
-      taskOutput.includes('关联历史')
+      /^\d[\d,]*$/.test(normalizedTaskOutput) ||
+      normalizedTaskOutput === 'tokens used' ||
+      normalizedTaskOutput.includes('执行器') ||
+      normalizedTaskOutput.includes('关联历史') ||
+      isInternalExecutorContextLine(normalizedTaskOutput)
     ) {
       return null;
     }
-    return taskOutput;
+    return normalizedTaskOutput;
   }
 
   return trimmed;
@@ -1438,15 +1666,44 @@ export function formatFeishuStreamingProgressReplies(
     replies.push(block);
   }
 
+  const newSteps: string[] = [];
   for (const rawLine of outputLines) {
     const step = extractFeishuProgressStep(rawLine);
     if (!step || sentSteps.has(step)) {
       continue;
     }
     sentSteps.add(step);
-    replies.push(`**处理步骤**\n${step}`);
+    newSteps.push(step);
+  }
+  if (newSteps.length > 0) {
+    replies.push(['**处理步骤**', ...newSteps].join('\n'));
   }
   return replies;
+}
+
+function mergeFeishuProgressOutputs(outputs: string[]): string {
+  const guidanceBlocks = outputs.filter(output => !output.startsWith('**处理步骤**'));
+  const steps: string[] = [];
+  const seen = new Set<string>();
+
+  for (const output of outputs) {
+    if (!output.startsWith('**处理步骤**')) {
+      continue;
+    }
+    for (const line of output.split('\n').slice(1)) {
+      const step = line.trim();
+      if (!step || seen.has(step)) {
+        continue;
+      }
+      seen.add(step);
+      steps.push(step);
+    }
+  }
+
+  return [
+    ...guidanceBlocks,
+    steps.length > 0 ? ['**处理步骤**', ...steps].join('\n') : null,
+  ].filter((line): line is string => Boolean(line)).join('\n\n');
 }
 
 function extractFeishuGuidanceProgressBlocks(outputLines: string[]): string[] {
@@ -1737,6 +1994,9 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
   const answer = trimBlankLines(answerLines).join('\n').trim();
   const taskResultBody = extractLatestTaskResultBody(outputLines);
   const taskSummary = extractLatestTaskSummary(outputLines);
+  if (hasInternalExecutorContextInTaskOutput(outputLines)) {
+    return taskResultBody || taskSummary;
+  }
   if (answer && containsInternalExecutorContext(answer)) {
     return taskResultBody || taskSummary;
   }
@@ -1780,19 +2040,20 @@ function cleanExecutorAnswerLine(line: string): string | null {
     return '';
   }
   const trimmed = line.trim();
+  const normalized = stripExecutorLogPrefix(trimmed);
 
   if (
-    /^\d[\d,]*$/.test(trimmed) ||
-    trimmed === 'tokens used' ||
-    trimmed.includes('关联历史') ||
-    isInternalExecutorContextLine(trimmed) ||
-    /^(thinking|reasoning|analyzing|chain of thought)/i.test(trimmed) ||
-    trimmed === '执行器正在分析问题'
+    /^\d[\d,]*$/.test(normalized) ||
+    normalized === 'tokens used' ||
+    normalized.includes('关联历史') ||
+    isInternalExecutorContextLine(normalized) ||
+    /^(thinking|reasoning|analyzing|chain of thought)/i.test(normalized) ||
+    normalized === '执行器正在分析问题'
   ) {
     return null;
   }
 
-  return line;
+  return normalized;
 }
 
 function containsInternalExecutorContext(text: string): boolean {
@@ -1801,30 +2062,59 @@ function containsInternalExecutorContext(text: string): boolean {
     .some(line => isInternalExecutorContextLine(line.trim()));
 }
 
+function hasInternalExecutorContextInTaskOutput(outputLines: string[]): boolean {
+  return outputLines.some((rawLine) => {
+    const trimmed = rawLine.trim();
+    const taskOutput = trimmed.match(/^[+·•]\s+#task_[^\s]+\s+(.+)$/)?.[1]?.trim();
+    return isInternalExecutorContextLine(taskOutput ?? trimmed);
+  });
+}
+
 function isInternalExecutorContextLine(line: string): boolean {
-  if (!line) {
+  const normalized = stripExecutorLogPrefix(line);
+  if (!normalized) {
     return false;
   }
 
-  return /^工作目录\s*[:：]/.test(line)
-    || /^文件输出目标\s*[:：]/.test(line)
-    || /^会话近期上下文\s*[:：]/.test(line)
-    || /^相似历史参考\b/.test(line)
-    || /Reference Context Pack\b/i.test(line)
-    || /^Minimal Reference Cards\b/i.test(line)
-    || /^\[?任务#task_[^\s\]]+\]?/.test(line)
-    || /^用户意图\s*[:：]/.test(line)
-    || /^相关性原因\s*[:：]/.test(line)
-    || /^可复用内容\s*[:：]/.test(line)
-    || /^边界声明\s*[:：]/.test(line)
-    || /^输出处理\s*[:：]/.test(line)
-    || /^参考来源\s*[:：]/.test(line)
-    || /^必须把结果写入本地文件系统/.test(line)
-    || /^所有本次任务生成的文件/.test(line)
-    || /^目标目录\s*[:：]/.test(line)
-    || /^如果目标目录不存在/.test(line)
-    || /^请按用户意图判断/.test(line)
-    || /^\/home\/[^ \t]+/.test(line);
+  return /^相关偏好\s*[:：]/.test(normalized)
+    || /^工作目录\s*[:：]/.test(normalized)
+    || /^文件输出目标\s*[:：]/.test(normalized)
+    || /^任务目录\s*[:：]/.test(normalized)
+    || /^会话近期上下文\s*[:：]/.test(normalized)
+    || /^关联飞书上传文件\s*[:：]/.test(normalized)
+    || /^\[[a-z0-9_-]+\]\s+/i.test(normalized)
+    || /^"\/home\/[^"]+"$/.test(normalized)
+    || /^'\/home\/[^']+'$/.test(normalized)
+    || /^相似历史参考\b/.test(normalized)
+    || /Reference Context Pack\b/i.test(normalized)
+    || /^Minimal Reference Cards\b/i.test(normalized)
+    || /^\[?任务#task_[^\s\]]+\]?/.test(normalized)
+    || /^用户(?:意图)?\s*[:：]/.test(normalized)
+    || /^助手\s*[:：]/.test(normalized)
+    || /^相关性原因\s*[:：]/.test(normalized)
+    || /^可复用内容\s*[:：]/.test(normalized)
+    || /^边界声明\s*[:：]/.test(normalized)
+    || /^输出处理\s*[:：]/.test(normalized)
+    || /^参考来源\s*[:：]/.test(normalized)
+    || /^必须把结果写入本地文件系统/.test(normalized)
+    || /^所有本次任务生成的文件/.test(normalized)
+    || /^目标目录\s*[:：]/.test(normalized)
+    || /^如果目标目录不存在/.test(normalized)
+    || /^请按用户意图判断/.test(normalized)
+    || /^exec$/i.test(normalized)
+    || /^codex$/i.test(normalized)
+    || /^\/bin\/bash\b/.test(normalized)
+    || /^succeeded in \d+ms:?$/i.test(normalized)
+    || /^drwx/.test(normalized)
+    || /^-rw/.test(normalized)
+    || /^\d+\s+\/home\/[^ \t]+/.test(normalized)
+    || /^\/home\/[^ \t]+/.test(normalized)
+    || / in \/home\/[^ \t]+$/.test(normalized)
+    || /^(ls|cat|cp|mkdir|touch|sed|awk|grep|find)\s+/.test(normalized);
+}
+
+function stripExecutorLogPrefix(line: string): string {
+  return line.trim().replace(/^\[[^\]]+\]\s*/, '').trim();
 }
 
 function trimBlankLines(lines: string[]): string[] {
@@ -2091,6 +2381,18 @@ async function defaultPostForm(
   return response;
 }
 
+async function defaultGetBinary(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<BinaryResponse> {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers,
+  });
+
+  return response;
+}
+
 async function defaultDeleteJson(
   url: string,
   headers: Record<string, string> = {},
@@ -2101,4 +2403,35 @@ async function defaultDeleteJson(
   });
 
   return response;
+}
+
+function sanitizeFileName(fileName: string): string {
+  const cleaned = fileName
+    .replace(/[\\/]/g, '_')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim();
+
+  return cleaned || 'feishu-upload';
+}
+
+function sanitizePathPart(value: string): string {
+  return sanitizeFileName(value).replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+function extractFilenameFromContentDisposition(contentDisposition: string | null): string | null {
+  if (!contentDisposition) {
+    return null;
+  }
+
+  const encoded = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+
+  const plain = contentDisposition.match(/filename="?([^";]+)"?/i)?.[1];
+  return plain ?? null;
 }

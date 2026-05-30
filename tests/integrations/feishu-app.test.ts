@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
 import {
@@ -85,6 +85,46 @@ describe('FeishuAppClient', () => {
       'https://open.feishu.cn/open-apis/im/v1/messages/om_message/reactions/reaction_typing',
       { authorization: 'Bearer tenant-token' },
     );
+  });
+
+  it('downloads user-uploaded Feishu message resources to local files', async () => {
+    const outputDir = mkdtempSync(resolve(tmpdir(), 'metaclaw-feishu-download-'));
+    const postJson = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 }),
+      text: async () => 'ok',
+    });
+    const getBinary = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) => name.toLowerCase() === 'content-disposition'
+          ? 'attachment; filename="report.txt"'
+          : null,
+      },
+      arrayBuffer: async () => new TextEncoder().encode('uploaded content').buffer,
+      text: async () => 'uploaded content',
+    });
+    const client = new FeishuAppClient({ app_id: 'cli_test', app_secret: 'secret' }, { postJson, getBinary });
+
+    const downloaded = await client.downloadMessageResource({
+      messageId: 'om_message',
+      fileKey: 'file_key_uploaded',
+      resourceType: 'file',
+      outputDir,
+    });
+
+    expect(getBinary).toHaveBeenCalledWith(
+      'https://open.feishu.cn/open-apis/im/v1/messages/om_message/resources/file_key_uploaded?type=file',
+      {
+        authorization: 'Bearer tenant-token',
+        'content-type': 'application/json; charset=utf-8',
+      },
+    );
+    expect(downloaded.fileName).toBe('report.txt');
+    expect(existsSync(downloaded.path)).toBe(true);
+    expect(readFileSync(downloaded.path, 'utf-8')).toBe('uploaded content');
   });
 });
 
@@ -424,6 +464,71 @@ describe('Feishu app helpers', () => {
     );
   });
 
+  it('downloads a Feishu file message and attaches it to the next text instruction', async () => {
+    const pendingResourcesByChatId = new Map<string, string[]>();
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({ output: ['before', 'analysis reply'] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+      downloadMessageResource: vi.fn().mockResolvedValue({
+        path: '/tmp/metaclaw-feishu/report.txt',
+        fileName: 'report.txt',
+      }),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_file',
+        chat_id: 'oc_chat',
+        message_type: 'file',
+        content: '{"file_key":"file_key_uploaded","file_name":"report.txt"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      pendingResourcesByChatId,
+      uploadDir: '/tmp/metaclaw-feishu-test',
+    });
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_text',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"分析一下这个文件里的内容"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(['om_file']),
+      pendingResourcesByChatId,
+    });
+
+    expect(client.downloadMessageResource).toHaveBeenCalledWith({
+      messageId: 'om_file',
+      fileKey: 'file_key_uploaded',
+      resourceType: 'file',
+      fileName: 'report.txt',
+      outputDir: '/tmp/metaclaw-feishu-test/oc_chat/om_file',
+    });
+    expect(session.appendSystemMessage).toHaveBeenCalledWith('→ 已接收飞书文件: report.txt');
+    expect(session.submit).toHaveBeenCalledWith([
+      '分析一下这个文件里的内容',
+      '',
+      '关联飞书上传文件：',
+      '"/tmp/metaclaw-feishu/report.txt"',
+    ].join('\n'), { awaitAsyncWork: false });
+    expect(pendingResourcesByChatId.has('oc_chat')).toBe(false);
+    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'analysis reply');
+  });
+
   it('replies with the final task answer instead of Metaclaw execution logs', async () => {
     const session = {
       getSnapshot: vi.fn()
@@ -542,15 +647,18 @@ describe('Feishu app helpers', () => {
       seenMessageIds: new Set<string>(),
     });
 
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', '**处理步骤**\n→ 任务 #task_stream 已创建：流式展示步骤');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '**处理步骤**\n【提取最近历史记录上下文】');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(3, 'oc_chat', '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(4, 'oc_chat', '**处理步骤**\n【构建执行上下文】');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(5, 'oc_chat', '**处理步骤**\n【执行上下文准备完成】');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(6, 'oc_chat', '**处理步骤**\n→ 正在执行任务 #task_stream...');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(7, 'oc_chat', '**处理步骤**\n→ 已启动 codex-cli 执行器');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(8, 'oc_chat', '**处理步骤**\n✓ 任务完成 (3.2s)');
-    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(9, 'oc_chat', '最终答案');
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(1, 'oc_chat', [
+      '**处理步骤**',
+      '→ 任务 #task_stream 已创建：流式展示步骤',
+      '【提取最近历史记录上下文】',
+      '→ 发送给 codex-cli 进行意图解析与执行准备',
+      '【构建执行上下文】',
+      '【执行上下文准备完成】',
+      '→ 正在执行任务 #task_stream...',
+      '→ 已启动 codex-cli 执行器',
+      '✓ 任务完成 (3.2s)',
+    ].join('\n'));
+    expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '最终答案');
     expect(session.subscribe).toHaveBeenCalled();
   });
 
@@ -602,7 +710,7 @@ describe('Feishu app helpers', () => {
     });
 
     const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
-    expect(sentTexts).toContain('**处理步骤**\n✗ 执行失败: executor idle timeout');
+    expect(sentTexts.join('\n')).toContain('✗ 执行失败: executor idle timeout');
     expect(sentTexts.join('\n')).toContain('执行器长时间没有输出或状态变化');
   });
 
@@ -904,10 +1012,93 @@ describe('Feishu app helpers', () => {
       },
     });
 
-    const finalReply = client.sendMarkdownCardToChat.mock.calls.at(-1)?.[1];
+    const finalReplies = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    const finalReply = finalReplies.find(text =>
+      typeof text === 'string' && text.includes('**Markdown 在线预览**')
+    );
     expect(finalReply).toContain('文档已生成。');
     expect(finalReply).toContain('**Markdown 在线预览**');
     expect(finalReply).toContain('[report.md](https://preview.example.com/preview/metaclaw-tasks%2Ftask_doc%2Freport.md)');
+  });
+
+  it('hides verbose Codex command logs from Feishu and keeps only the answer plus preview link', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 优化刚才上传的文档并生成飞书文档',
+            '任务 #task_doc 已创建：优化刚才上传的文档并生成飞书文档',
+            '【提取最近历史记录上下文】',
+            '【构建执行上下文】',
+            '【执行上下文准备完成】',
+            '→ 正在执行任务 #task_doc...',
+            '+ #task_doc 已启动 codex-cli 执行器',
+            '+ #task_doc [codex-cli] 相关偏好：',
+            '+ #task_doc [codex-cli] [global] 凡是让你生成相关报告的详细内容展示的，都要同步生成飞书云文档，并生成在线预览。',
+            '+ #task_doc [codex-cli] 工作目录：/home/ylfego/Program/metaclaw',
+            '+ #task_doc [codex-cli] 文件输出目标：/home/ylfego/Program/metaclaw/metaclaw-tasks/task_doc',
+            '+ #task_doc [codex-cli] 关联飞书上传文件：',
+            '+ #task_doc [codex-cli] "/home/ylfego/.metaclaw/feishu-uploads/oc_chat/om_file/input.docx"',
+            '+ #task_doc [codex-cli] exec',
+            '+ #task_doc [codex-cli] /bin/bash -lc mkdir -p /home/ylfego/Program/metaclaw/metaclaw-tasks/task_doc && cp /tmp/source.md /home/ylfego/Program/metaclaw/metaclaw-tasks/task_doc/report.md in /home/ylfego/Program/metaclaw',
+            '+ #task_doc [codex-cli] succeeded in 0ms:',
+            '+ #task_doc [codex-cli] exec',
+            '+ #task_doc [codex-cli] /bin/bash -lc ls -lh /home/ylfego/Program/metaclaw/metaclaw-tasks/task_doc/report.md in /home/ylfego/Program/metaclaw',
+            '+ #task_doc [codex-cli] -rw-r--r-- 1 ylfe go 595 May 30 09:40 /home/ylfego/Program/metaclaw/metaclaw-tasks/task_doc/report.md',
+            '+ #task_doc [codex-cli] 已经生成 Markdown 文档并完成校验。',
+            '+ #task_doc [codex-cli] tokens used',
+            '+ #task_doc [codex-cli] 595',
+            '✓ 任务完成 (3.1s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 已生成优化后的 Markdown 文档。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+            '→ 文件输出目录: /repo/metaclaw-tasks/task_doc',
+            '→ 已省略文件正文输出，请直接查看生成文件',
+            '→ 已记录 1 个任务产物',
+            '   - /repo/metaclaw-tasks/task_doc/report.md',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_verbose_doc',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"优化刚才上传的文档并生成飞书文档"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      markdownPreview: {
+        baseUrl: 'https://preview.example.com',
+        workspaceRoot: '/repo',
+      },
+    });
+
+    const finalReplies = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    const finalReply = finalReplies.find(text =>
+      typeof text === 'string' && text.includes('**Markdown 在线预览**')
+    );
+    expect(finalReply).toContain('已生成优化后的 Markdown 文档。');
+    expect(finalReply).toContain('**Markdown 在线预览**');
+    expect(finalReply).toContain('[report.md](https://preview.example.com/preview/metaclaw-tasks%2Ftask_doc%2Freport.md)');
+    expect(finalReply).not.toContain('[codex-cli]');
+    expect(finalReply).not.toContain('/bin/bash');
+    expect(finalReply).not.toContain('工作目录');
+    expect(finalReply).not.toContain('关联飞书上传文件');
+    expect(finalReply).not.toContain('succeeded in 0ms');
   });
 
   it('uploads every generated artifact file back to Feishu as browsable file messages', async () => {
@@ -1310,7 +1501,7 @@ describe('Feishu app helpers', () => {
     const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
     const allSent = sentTexts.join('\n');
     expect(allSent).toContain('urgent full line 1\nurgent full line 2');
-    expect(sentTexts).toContain([
+    expect(allSent).toContain([
       '**恢复已挂起任务**',
       '→ 继续处理任务 #task_main: 之前的长任务',
       '任务：#task_main 之前的长任务',
@@ -1527,8 +1718,11 @@ describe('Feishu app helpers', () => {
       '任务 #task_stream 已创建：测试',
       '【提取最近历史记录上下文】',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 任务 #task_stream 已创建：测试',
-      '**处理步骤**\n【提取最近历史记录上下文】',
+      [
+        '**处理步骤**',
+        '→ 任务 #task_stream 已创建：测试',
+        '【提取最近历史记录上下文】',
+      ].join('\n'),
     ]);
     expect(formatFeishuStreamingProgressReplies([
       '【提取最近历史记录上下文】',
@@ -1546,10 +1740,13 @@ describe('Feishu app helpers', () => {
       '→ 原因：research_workflow / research',
       '+ #task_research 已启动 pi-agent 执行器',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 发送给 codex-cli 进行意图解析与执行准备',
-      '**处理步骤**\n→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
-      '**处理步骤**\n→ 原因：research_workflow / research',
-      '**处理步骤**\n→ 已启动 pi-agent 执行器',
+      [
+        '**处理步骤**',
+        '→ 发送给 codex-cli 进行意图解析与执行准备',
+        '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
+        '→ 原因：research_workflow / research',
+        '→ 已启动 pi-agent 执行器',
+      ].join('\n'),
     ]);
   });
 
@@ -1564,13 +1761,16 @@ describe('Feishu app helpers', () => {
       '✗ 执行失败: executor idle timeout',
       '→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。',
     ], sent)).toEqual([
-      '**处理步骤**\n→ 任务 #task_fail 已创建：调研失败展示',
-      '**处理步骤**\n→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
-      '**处理步骤**\n→ 原因：research_workflow / research + reporting',
-      '**处理步骤**\n→ 正在执行任务 #task_fail...',
-      '**处理步骤**\n→ 已启动 pi-agent 执行器',
-      '**处理步骤**\n✗ 执行失败: executor idle timeout',
-      '**处理步骤**\n→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。',
+      [
+        '**处理步骤**',
+        '→ 任务 #task_fail 已创建：调研失败展示',
+        '→ 路由决策：pi-agent (auto_dispatch, confidence=0.97)',
+        '→ 原因：research_workflow / research + reporting',
+        '→ 正在执行任务 #task_fail...',
+        '→ 已启动 pi-agent 执行器',
+        '✗ 执行失败: executor idle timeout',
+        '→ 任务 #task_fail 已转为阻塞；执行器长时间没有输出或状态变化，可能卡住。',
+      ].join('\n'),
     ]);
   });
 
