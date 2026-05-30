@@ -69,9 +69,44 @@ Markdown 在线预览前提：
 
 ## 安装
 
+推荐使用一键 setup：
+
 ```bash
 git clone https://github.com/IFOSR/metaclaw.git
 cd metaclaw
+./setup.sh
+```
+
+`setup.sh` 会安装 MetaClaw 本身、构建 CLI、执行 `npm link`、生成 `~/.metaclaw/config.yaml`，并自动检测当前系统里的 Executor。
+
+在交互式终端里，它会展示检测到的 Executor 列表，让用户选择要接入哪几个 Executor，并选择哪个作为默认 Executor。如果选择了缺失但支持自动安装的 Executor，setup 可以直接安装。没有任何 Executor 可用时，默认 fallback 是安装 Codex CLI：
+
+```bash
+npm install -g @openai/codex
+```
+
+setup 可选参数：
+
+```bash
+# 默认不覆盖已有 ~/.metaclaw/config.yaml
+METACLAW_OVERWRITE_CONFIG=false ./setup.sh
+
+# 强制重写 ~/.metaclaw/config.yaml
+METACLAW_OVERWRITE_CONFIG=true ./setup.sh
+
+# 只构建，不执行 npm link
+METACLAW_INSTALL_MODE=none ./setup.sh
+
+# 没有 Executor 时也不自动安装 Codex CLI
+METACLAW_INSTALL_CODEX=false ./setup.sh
+
+# 强制使用非交互默认行为
+METACLAW_SETUP_INTERACTIVE=false ./setup.sh
+```
+
+手动安装 fallback：
+
+```bash
 npm install
 npm run build
 npm link

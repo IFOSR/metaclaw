@@ -71,23 +71,46 @@ Markdown preview prerequisites:
 
 ## Install
 
-Clone the repository:
+Recommended one-command setup:
 
 ```bash
 git clone https://github.com/IFOSR/metaclaw.git
 cd metaclaw
+./setup.sh
 ```
 
-Install dependencies and build:
+`setup.sh` installs MetaClaw itself, builds the local CLI, links `metaclaw`, creates `~/.metaclaw/config.yaml`, and detects installed executors on `PATH`.
+
+In an interactive terminal it shows the detected executor list, lets you choose which executors to connect, and asks which one should be the default. If a selected auto-installable executor is missing, setup can install it for you. Codex CLI is the default fallback when no executor is available:
+
+```bash
+npm install -g @openai/codex
+```
+
+Setup options:
+
+```bash
+# Do not overwrite an existing ~/.metaclaw/config.yaml
+METACLAW_OVERWRITE_CONFIG=false ./setup.sh
+
+# Rewrite ~/.metaclaw/config.yaml
+METACLAW_OVERWRITE_CONFIG=true ./setup.sh
+
+# Build MetaClaw but skip npm link
+METACLAW_INSTALL_MODE=none ./setup.sh
+
+# Do not auto-install Codex CLI when no executor is found
+METACLAW_INSTALL_CODEX=false ./setup.sh
+
+# Force non-interactive defaults
+METACLAW_SETUP_INTERACTIVE=false ./setup.sh
+```
+
+Manual fallback:
 
 ```bash
 npm install
 npm run build
-```
-
-Expose the local CLI:
-
-```bash
 npm link
 ```
 
