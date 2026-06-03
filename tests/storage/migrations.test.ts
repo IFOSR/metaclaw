@@ -105,6 +105,10 @@ describe('runMigrations', () => {
       'capabilities_json',
       'risk_level',
       'historical_success',
+      'runtime_command',
+      'runtime_args_json',
+      'runtime_check_command',
+      'project_url',
     ]));
 
     const repo = new TaskRepo(db);

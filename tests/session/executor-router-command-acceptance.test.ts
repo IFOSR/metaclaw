@@ -29,6 +29,117 @@ function createConfig(): Config {
 }
 
 describe('executor router command acceptance', () => {
+  it('guides users through executor registration and persists runtime binding', async () => {
+    const db = createDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-wizard');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn(),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration: new OrchestrationEngine(taskEngine),
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_executor_register_wizard',
+      contextRecaller: new ContextRecaller(db),
+      llmBridge,
+    });
+
+    session.initialize();
+    await session.submit('/executor register wizard');
+    await session.submit('research-bot');
+    await session.submit('manual');
+    await session.submit('research-bot');
+    await session.submit('run --prompt {prompt}');
+    await session.submit('research-bot --version');
+    await session.submit('research,reporting');
+    await session.submit('research,report_generation');
+    await session.submit('y');
+
+    const row = db.prepare(`
+      SELECT name, domains_json, capabilities_json, runtime_command, runtime_args_json,
+             runtime_check_command, availability
+      FROM executor_profiles WHERE name = ?
+    `).get('research-bot') as {
+      name: string;
+      domains_json: string;
+      capabilities_json: string;
+      runtime_command: string;
+      runtime_args_json: string;
+      runtime_check_command: string;
+      availability: string;
+    };
+
+    expect(row).toEqual(expect.objectContaining({
+      name: 'research-bot',
+      runtime_command: 'research-bot',
+      runtime_check_command: 'research-bot --version',
+      availability: 'available',
+    }));
+    expect(JSON.parse(row.runtime_args_json)).toEqual(['run', '--prompt', '{prompt}']);
+    expect(JSON.parse(row.domains_json)).toEqual(['research', 'reporting']);
+    expect(JSON.parse(row.capabilities_json)).toEqual(['research', 'report_generation']);
+
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain('Executor 注册向导已启动');
+    expect(output).toContain('已注册 Executor：research-bot');
+    expect(output).toContain('调度前会执行安装检测');
+  });
+
+  it('supports one-line executor registration with quoted runtime args', async () => {
+    const db = createDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-oneline');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn(),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration: new OrchestrationEngine(taskEngine),
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_executor_register_oneline',
+      contextRecaller: new ContextRecaller(db),
+      llmBridge,
+    });
+
+    session.initialize();
+    await session.submit('/executor register research-bot --command research-bot --args "run --prompt {prompt}" --check "research-bot --version" --domains research --capabilities report_generation');
+
+    const row = db.prepare('SELECT runtime_args_json, runtime_check_command FROM executor_profiles WHERE name = ?').get('research-bot') as {
+      runtime_args_json: string;
+      runtime_check_command: string;
+    };
+
+    expect(JSON.parse(row.runtime_args_json)).toEqual(['run', '--prompt', '{prompt}']);
+    expect(row.runtime_check_command).toBe('research-bot --version');
+  });
+
   it('routes through session commands and records feedback', async () => {
     const db = createDb();
     const taskRepo = new TaskRepo(db);

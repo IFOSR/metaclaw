@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { MemoryApplicabilityAction } from '../core/types.js';
@@ -18,6 +19,7 @@ import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { ExecutorAdapter, ExecutorInput, ExecutorProgressEvent } from '../executor/adapter.js';
 import { createExecutorByName } from '../executor/factory.js';
+import { CustomCliExecutorAdapter } from '../executor/custom-cli.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
@@ -157,9 +159,37 @@ interface PendingRecallReview {
   >;
 }
 
+type ExecutorRegisterWizardStep =
+  | 'name'
+  | 'mode'
+  | 'projectUrl'
+  | 'command'
+  | 'args'
+  | 'check'
+  | 'domains'
+  | 'capabilities'
+  | 'confirm';
+
+interface PendingExecutorRegisterWizard {
+  step: ExecutorRegisterWizardStep;
+  profile: {
+    name?: string;
+    projectUrl?: string | null;
+    runtimeCommand?: string;
+    runtimeArgs?: string[];
+    runtimeCheckCommand?: string | null;
+    domains?: string[];
+    capabilities?: string[];
+  };
+}
+
 const BUSY_LLM_TIMEOUT_MS = 250;
 const DEFAULT_LLM_TIMEOUT_MS = 5_000;
 const TASK_QUEUE_SNAPSHOT_LIMIT = 5;
+
+function splitCommaList(value: string): string[] {
+  return value.split(',').map(item => item.trim()).filter(Boolean);
+}
 
 export class MetaclawSession {
   private output: string[] = [];
@@ -179,6 +209,7 @@ export class MetaclawSession {
   private pendingProposalConfirmation: PendingProposalConfirmation | null = null;
   private pendingLastTaskConfirmation: PendingLastTaskConfirmation | null = null;
   private pendingRecallReview: PendingRecallReview | null = null;
+  private pendingExecutorRegisterWizard: PendingExecutorRegisterWizard | null = null;
   private approvedRecallSelections = new Map<string, PendingRecallSelection>();
   private initialized = false;
   private listeners = new Set<(snapshot: SessionSnapshot) => void>();
@@ -320,6 +351,11 @@ export class MetaclawSession {
     this.appendOutput('', `> ${userInput}`);
 
     try {
+      if (this.pendingExecutorRegisterWizard && !userInput.startsWith('/')) {
+        await this.handlePendingExecutorRegisterWizard(userInput);
+        return { exitRequested: false };
+      }
+
       if (userInput.startsWith('/')) {
         const exitRequested = await this.handleCommand(userInput);
         if (options.awaitAsyncWork) {
@@ -624,6 +660,19 @@ export class MetaclawSession {
       return injected;
     }
 
+    const customProfile = new ExecutorProfileRepo(this.deps.db).findByName(name);
+    if (customProfile?.runtimeCommand) {
+      return new CustomCliExecutorAdapter({
+        name,
+        command: customProfile.runtimeCommand,
+        args: customProfile.runtimeArgs ?? [],
+        checkCommand: customProfile.runtimeCheckCommand,
+        timeout: this.deps.config.executor.timeout,
+        maxDuration: this.deps.config.executor.max_duration,
+        workspaceRoot: process.cwd(),
+      });
+    }
+
     return createExecutorByName(name, {
       timeout: this.deps.config.executor.timeout,
       maxDuration: this.deps.config.executor.max_duration,
@@ -633,6 +682,40 @@ export class MetaclawSession {
 
   private formatExecutorRunLabel(executors: ExecutorAdapter[]): string {
     return executors.map(executor => executor.name).join('+');
+  }
+
+  private async ensureRoutedExecutorAvailability(routedExecutor: RoutedExecutorSelection): Promise<RoutedExecutorSelection> {
+    if (
+      routedExecutor.executor.name === this.deps.executor.name
+      || routedExecutor.raceExecutors.length > 1
+    ) {
+      return routedExecutor;
+    }
+
+    const profileRepo = new ExecutorProfileRepo(this.deps.db);
+    const profile = profileRepo.findByName(routedExecutor.executor.name);
+    if (!profile?.runtimeCommand) {
+      return routedExecutor;
+    }
+
+    const available = await routedExecutor.executor.isAvailable();
+    if (available) {
+      return routedExecutor;
+    }
+
+    profileRepo.upsert({
+      ...profile,
+      availability: 'unavailable',
+    });
+    new ExecutorRouteEventRepo(this.deps.db).updateResult(routedExecutor.eventId, 'fallback_default:executor_unavailable');
+
+    return {
+      ...routedExecutor,
+      executor: this.deps.executor,
+      raceExecutors: [this.deps.executor],
+      effectiveAction: 'fallback_default',
+      fallbackReason: `Executor ${routedExecutor.executor.name} 已注册但安装检测失败，已标记 unavailable 并回退 ${this.deps.executor.name}`,
+    };
   }
 
   private appendExecutorRoutingDecision(routedExecutor: RoutedExecutorSelection): void {
@@ -1549,6 +1632,15 @@ export class MetaclawSession {
 
     this.appendOutput(result.content);
 
+    const commandData = result.data as
+      | {
+          executorRegisterWizard?: boolean;
+        }
+      | undefined;
+    if (commandData?.executorRegisterWizard) {
+      this.startExecutorRegisterWizard();
+    }
+
     if (result.type === 'exit') {
       this.persistSessionState({ lastSessionId: this.deps.sessionId });
       return true;
@@ -1578,6 +1670,267 @@ export class MetaclawSession {
     }
 
     return false;
+  }
+
+  private startExecutorRegisterWizard(): void {
+    this.pendingExecutorRegisterWizard = {
+      step: 'name',
+      profile: {},
+    };
+    this.appendOutput(
+      '1/8 Executor 名称是什么？',
+      '示例：my-agent、pi-agent、finance-research-agent',
+    );
+  }
+
+  private async handlePendingExecutorRegisterWizard(userInput: string): Promise<boolean> {
+    const wizard = this.pendingExecutorRegisterWizard;
+    if (!wizard) return false;
+
+    const value = userInput.trim();
+    if (/^(cancel|取消)$/iu.test(value)) {
+      this.pendingExecutorRegisterWizard = null;
+      this.appendOutput('已取消 Executor 注册向导');
+      return true;
+    }
+
+    switch (wizard.step) {
+      case 'name':
+        if (!value) {
+          this.appendOutput('名称不能为空。请输入 Executor 名称，或输入 cancel 取消。');
+          return true;
+        }
+        wizard.profile.name = value;
+        wizard.step = 'mode';
+        this.appendOutput(
+          '2/8 你想怎么补全运行信息？',
+          '输入 url：我给项目地址，MetaClaw 尝试推断安装/运行信息',
+          '输入 manual：我手动填写 command、args、check',
+        );
+        return true;
+
+      case 'mode':
+        if (/^url$/iu.test(value)) {
+          wizard.step = 'projectUrl';
+          this.appendOutput('3/8 请粘贴 Executor 项目地址（例如 GitHub URL）。');
+          return true;
+        }
+        if (/^manual$/iu.test(value)) {
+          wizard.step = 'command';
+          this.appendOutput('3/8 本机运行这个 Executor 的命令是什么？示例：codex、my-agent、npx');
+          return true;
+        }
+        this.appendOutput('请输入 url 或 manual。');
+        return true;
+
+      case 'projectUrl': {
+        wizard.profile.projectUrl = value;
+        const suggestion = await this.inferExecutorRuntimeFromProjectUrl(value);
+        if (suggestion.command) {
+          wizard.profile.runtimeCommand = suggestion.command;
+          wizard.profile.runtimeArgs = suggestion.args;
+          wizard.profile.runtimeCheckCommand = suggestion.checkCommand;
+          this.appendOutput(
+            '→ 已从项目地址推断出候选运行方式：',
+            `  command=${suggestion.command}`,
+            `  args=${suggestion.args.join(' ') || '{prompt}'}`,
+            `  check=${suggestion.checkCommand || '-'}`,
+            '如果正确，输入 y；如果不正确，输入 n 后手动填写。',
+          );
+          wizard.step = 'confirm';
+          return true;
+        }
+        this.appendOutput(
+          '→ 没能从项目地址可靠推断非交互运行方式，切换为手动填写。',
+          '4/8 本机运行这个 Executor 的命令是什么？示例：codex、my-agent、npx',
+        );
+        wizard.step = 'command';
+        return true;
+      }
+
+      case 'command':
+        if (!value) {
+          this.appendOutput('command 不能为空。示例：my-agent');
+          return true;
+        }
+        wizard.profile.runtimeCommand = value;
+        wizard.step = 'args';
+        this.appendOutput(
+          '4/8 非交互运行参数是什么？用 {prompt} 表示 MetaClaw 传入的任务提示。',
+          '示例：exec --prompt {prompt}',
+          '如果命令会把最后一个参数当 prompt，可直接输入 skip。',
+        );
+        return true;
+
+      case 'args':
+        wizard.profile.runtimeArgs = /^skip$/iu.test(value) ? [] : value.split(/\s+/).filter(Boolean);
+        wizard.step = 'check';
+        this.appendOutput(
+          '5/8 安装检测命令是什么？',
+          '示例：my-agent --version',
+          '如果不填，将用 which <command> 检测；输入 skip 跳过自定义检测。',
+        );
+        return true;
+
+      case 'check':
+        wizard.profile.runtimeCheckCommand = /^skip$/iu.test(value) || !value ? null : value;
+        wizard.step = 'domains';
+        this.appendOutput('6/8 适合哪些领域？用逗号分隔。示例：software,research,finance');
+        return true;
+
+      case 'domains':
+        wizard.profile.domains = splitCommaList(value);
+        wizard.step = 'capabilities';
+        this.appendOutput('7/8 具备哪些能力？用逗号分隔。示例：coding,tests,report_generation');
+        return true;
+
+      case 'capabilities':
+        wizard.profile.capabilities = splitCommaList(value);
+        wizard.step = 'confirm';
+        this.appendOutput(this.formatExecutorRegisterWizardSummary(wizard), '确认注册？输入 y 注册，输入 n 取消。');
+        return true;
+
+      case 'confirm':
+        if (!wizard.profile.domains) {
+          if (/^n$/iu.test(value)) {
+            wizard.step = 'command';
+            this.appendOutput('请手动填写运行命令。示例：my-agent、npx');
+            return true;
+          }
+          if (!/^y$/iu.test(value)) {
+            this.appendOutput('请输入 y 或 n。');
+            return true;
+          }
+          wizard.step = 'domains';
+          this.appendOutput('6/8 适合哪些领域？用逗号分隔。示例：software,research,finance');
+          return true;
+        }
+
+        if (/^n$/iu.test(value)) {
+          this.pendingExecutorRegisterWizard = null;
+          this.appendOutput('已取消 Executor 注册');
+          return true;
+        }
+        if (!/^y$/iu.test(value)) {
+          this.appendOutput('请输入 y 或 n。');
+          return true;
+        }
+        this.completeExecutorRegisterWizard(wizard);
+        this.pendingExecutorRegisterWizard = null;
+        return true;
+    }
+  }
+
+  private completeExecutorRegisterWizard(wizard: PendingExecutorRegisterWizard): void {
+    if (!wizard.profile.name || !wizard.profile.runtimeCommand) {
+      this.appendOutput('注册失败：缺少 name 或 command。请重新执行 /executor register wizard。');
+      return;
+    }
+
+    const profileRepo = new ExecutorProfileRepo(this.deps.db);
+    const existing = profileRepo.findByName(wizard.profile.name);
+    const profile = {
+      name: wizard.profile.name,
+      domains: wizard.profile.domains ?? existing?.domains ?? [],
+      capabilities: wizard.profile.capabilities ?? existing?.capabilities ?? [],
+      inputTypes: existing?.inputTypes ?? ['text'],
+      outputTypes: existing?.outputTypes ?? ['markdown'],
+      strengths: existing?.strengths ?? [],
+      weaknesses: existing?.weaknesses ?? [],
+      primaryUseCases: existing?.primaryUseCases ?? [],
+      avoidUseCases: existing?.avoidUseCases ?? [],
+      intentAffinity: existing?.intentAffinity ?? {},
+      riskLevel: existing?.riskLevel ?? 'medium' as const,
+      availability: 'available' as const,
+      historicalSuccess: existing?.historicalSuccess ?? 0.5,
+      runtimeCommand: wizard.profile.runtimeCommand,
+      runtimeArgs: wizard.profile.runtimeArgs ?? [],
+      runtimeCheckCommand: wizard.profile.runtimeCheckCommand ?? null,
+      projectUrl: wizard.profile.projectUrl ?? existing?.projectUrl ?? null,
+    };
+    profileRepo.upsert(profile);
+    this.appendOutput(
+      `已注册 Executor：${profile.name}`,
+      `→ runtime: ${profile.runtimeCommand} ${profile.runtimeArgs.join(' ')}`.trim(),
+      `→ check: ${profile.runtimeCheckCommand || `which ${profile.runtimeCommand}`}`,
+      '→ 调度前会执行安装检测；检测失败会自动标记 unavailable 并回退默认 Executor。',
+    );
+  }
+
+  private formatExecutorRegisterWizardSummary(wizard: PendingExecutorRegisterWizard): string {
+    return [
+      'Executor 注册信息：',
+      `  name=${wizard.profile.name ?? '-'}`,
+      `  projectUrl=${wizard.profile.projectUrl ?? '-'}`,
+      `  command=${wizard.profile.runtimeCommand ?? '-'}`,
+      `  args=${(wizard.profile.runtimeArgs ?? []).join(' ') || '{prompt}'}`,
+      `  check=${wizard.profile.runtimeCheckCommand ?? `which ${wizard.profile.runtimeCommand ?? '<command>'}`}`,
+      `  domains=${(wizard.profile.domains ?? []).join(',') || '-'}`,
+      `  capabilities=${(wizard.profile.capabilities ?? []).join(',') || '-'}`,
+    ].join('\n');
+  }
+
+  private async inferExecutorRuntimeFromProjectUrl(projectUrl: string): Promise<{
+    command: string | null;
+    args: string[];
+    checkCommand: string | null;
+  }> {
+    const github = projectUrl.match(/^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)/i);
+    if (!github) {
+      return { command: null, args: [], checkCommand: null };
+    }
+
+    const owner = github[1];
+    const repo = github[2]?.replace(/\.git$/i, '');
+    if (!owner || !repo) {
+      return { command: null, args: [], checkCommand: null };
+    }
+
+    const packageJson = await this.fetchText(`https://raw.githubusercontent.com/${owner}/${repo}/main/package.json`)
+      ?? await this.fetchText(`https://raw.githubusercontent.com/${owner}/${repo}/master/package.json`);
+    if (packageJson) {
+      try {
+        const parsed = JSON.parse(packageJson) as { name?: string; bin?: string | Record<string, string> };
+        const command = typeof parsed.bin === 'string'
+          ? parsed.name
+          : parsed.bin
+            ? Object.keys(parsed.bin)[0]
+            : parsed.name;
+        if (command) {
+          return {
+            command,
+            args: ['{prompt}'],
+            checkCommand: `${command} --version`,
+          };
+        }
+      } catch {
+        // Fall through to README heuristics.
+      }
+    }
+
+    const readme = await this.fetchText(`https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`)
+      ?? await this.fetchText(`https://raw.githubusercontent.com/${owner}/${repo}/master/README.md`);
+    const npxMatch = readme?.match(/\bnpx\s+([@a-zA-Z0-9/_-]+)(?:\s+([^\n`]*))?/);
+    if (npxMatch?.[1]) {
+      return {
+        command: 'npx',
+        args: ['-y', npxMatch[1], '{prompt}'],
+        checkCommand: `npx -y ${npxMatch[1]} --version`,
+      };
+    }
+
+    return { command: null, args: [], checkCommand: null };
+  }
+
+  private async fetchText(url: string): Promise<string | null> {
+    const result = spawnSync('curl', ['-L', '--silent', '--show-error', '--max-time', '20', url], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+    });
+    if (result.status !== 0 || !result.stdout) {
+      return null;
+    }
+    return result.stdout;
   }
 
   private async handleNaturalLanguageInput(
@@ -2299,7 +2652,9 @@ export class MetaclawSession {
     }
 
     this.refreshRuntimeState();
-    const routedExecutor = this.resolveExecutorForTask(taskId, userPrompt);
+    const routedExecutor = await this.ensureRoutedExecutorAvailability(
+      this.resolveExecutorForTask(taskId, userPrompt),
+    );
     this.runningExecutorNameByTask.set(taskId, this.formatExecutorRunLabel(routedExecutor.raceExecutors));
     this.appendExecutorRoutingDecision(routedExecutor);
     if (routedExecutor.fallbackReason) {

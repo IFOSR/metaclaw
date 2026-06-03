@@ -3,6 +3,7 @@ import { DeepSeekTuiAdapter } from '../../src/executor/deepseek-tui.js';
 import { HermesAgentAdapter } from '../../src/executor/hermes-agent.js';
 import { OpenClawAdapter } from '../../src/executor/openclaw.js';
 import { PiAgentAdapter } from '../../src/executor/pi-agent.js';
+import { CustomCliExecutorAdapter } from '../../src/executor/custom-cli.js';
 import { createExecutor, createExecutorByName } from '../../src/executor/factory.js';
 
 describe('HermesAgentAdapter', () => {
@@ -48,6 +49,42 @@ describe('PiAgentAdapter', () => {
     ]));
     expect(args[args.indexOf('--extension') + 1]).toContain('metaclaw-web-tools.ts');
     expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('Use web_search automatically');
+  });
+});
+
+describe('CustomCliExecutorAdapter', () => {
+  it('replaces the prompt placeholder in configured non-interactive args', () => {
+    const adapter = new CustomCliExecutorAdapter({
+      name: 'research-bot',
+      command: 'research-bot',
+      args: ['run', '--prompt', '{prompt}'],
+      timeout: 300,
+    });
+
+    expect((adapter as any).buildSpawnArgs('test prompt')).toEqual(['run', '--prompt', 'test prompt']);
+  });
+
+  it('appends the prompt when args do not contain a prompt placeholder', () => {
+    const adapter = new CustomCliExecutorAdapter({
+      name: 'research-bot',
+      command: 'research-bot',
+      args: ['run'],
+      timeout: 300,
+    });
+
+    expect((adapter as any).buildSpawnArgs('test prompt')).toEqual(['run', 'test prompt']);
+  });
+
+  it('uses the configured shell check command for availability', async () => {
+    const adapter = new CustomCliExecutorAdapter({
+      name: 'research-bot',
+      command: 'missing-research-bot',
+      args: [],
+      checkCommand: 'node --version',
+      timeout: 300,
+    });
+
+    await expect(adapter.isAvailable()).resolves.toBe(true);
   });
 });
 

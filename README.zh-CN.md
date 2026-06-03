@@ -122,6 +122,45 @@ metaclaw --help
 
 MetaClaw 不内置下游执行器 CLI。你需要自己安装要使用的执行器，并确保命令在 `PATH` 中。
 
+### 注册自定义 Executor
+
+Executor 是 MetaClaw 可以路由任务的运行时工人。一个已注册 Executor 现在包含两层信息：
+
+- 路由画像：适用领域、能力、风险等级、历史成功率、输入/输出类型和适用场景。
+- 运行绑定：本机命令、非交互参数、安装检测命令和可选项目地址。
+
+如果不确定具体该填什么，使用问答式注册向导：
+
+```bash
+/executor register wizard
+```
+
+向导会依次询问 Executor 名称、是否从项目地址推断、运行命令、非交互参数、安装检测命令、适用领域和能力。如果提供 GitHub 项目地址，MetaClaw 会尝试从 `package.json` 或 README 示例推断 CLI 信息；如果无法可靠推断，会自动回到手动填写。
+
+也可以一次性注册：
+
+```bash
+/executor register research-bot \
+  --command research-bot \
+  --args "run --prompt {prompt}" \
+  --check "research-bot --version" \
+  --project-url https://github.com/example/research-bot \
+  --domains research,reporting \
+  --capabilities research,report_generation
+```
+
+`{prompt}` 会被替换为任务提示词。如果 `--args` 不包含 `{prompt}`，MetaClaw 会把 prompt 追加为最后一个参数。调度到自定义 Executor 前，MetaClaw 会先执行配置的检测命令；检测失败时会把该 Executor 标记为 `unavailable`，并回退默认 Executor。
+
+常用管理命令：
+
+```bash
+/executor list
+/executor register wizard
+/executor unregister <name>
+/executor route <任务描述>
+/executor route-feedback
+```
+
 ### Codex CLI
 
 安装并登录 Codex CLI 后验证：
@@ -176,6 +215,45 @@ hermes --oneshot "<prompt>" --yolo --accept-hooks
 ### 已退役的兼容 Adapter
 
 `deepseek-tui`、`claude-code` 和 `openclaw` adapter 仍保留在代码里，用于兼容和显式本地配置；但除非把它们显式配置为默认 executor，否则不会进入默认注册表。
+
+## Executor 与 Skill 的差异
+
+Executor 和 Skill 是生态里的不同层。
+
+Executor 是“谁来干活”。Skill 是“干活时带什么方法、知识和工具规范”。
+
+Executor 更像一个可派发的 Agent runtime：Codex CLI、Pi Agent、Hermes Agent、DeepSeek TUI，或者某个垂直领域本地 Agent。它决定模型、工具链、权限、运行环境、上下文窗口、文件读写能力、非交互执行方式、成本和可靠性边界。
+
+Skill 更像轻量能力包。它描述某一类工作应该怎么做：怎么做期货分析、怎么做代码审查、怎么跑调研流程、怎么输出报告格式。Skill 可以改善某个 Executor 的表现，但不会自动改变这个 Executor 的 runtime、权限、工具或安装状态。
+
+Executor 的优势：
+
+- 增加新的 runtime 边界，包括模型、工具、凭证、权限和命令行行为。
+- 让 MetaClaw 可以把任务路由给最适合的执行者。
+- 支持不同 Agent 之间的回退、竞速、交叉验证和审计。
+- 可以接入通用 Skill 无法访问的私有系统或垂直领域系统。
+
+Executor 的代价：
+
+- 安装和配置更重。
+- 必须明确非交互运行命令和可用性检测方式。
+- 需要处理权限、超时、失败和回退。
+- 多个 runtime 行为不一致时，会增加运维复杂度。
+
+Skill 的优势：
+
+- 更轻量，添加速度快。
+- 适合沉淀可重复的方法、清单、领域启发和输出规范。
+- 能提高同一个 Executor 在特定任务上的一致性。
+- 运维成本比新增 runtime 更低。
+
+Skill 的限制：
+
+- 受限于宿主 Executor 的工具、权限、上下文和模型。
+- 不能凭空获得不存在的 CLI、私有 API、浏览器能力、文件权限或企业系统集成。
+- 通常提升执行质量，而不是扩展 runtime 边界。
+
+当缺失能力来自“需要不同工人或不同 runtime”时，MetaClaw 通过注册 Executor 扩展能力；当已有工人需要更好的流程、领域知识或输出规范时，通过 Skill 扩展能力。
 
 ## 运行
 

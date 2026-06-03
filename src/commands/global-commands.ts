@@ -157,6 +157,15 @@ Metaclaw V1 - 任务连续性、偏好记忆与主动编排中枢
   /memory reject <id>           拒绝偏好
   /memory stats                 偏好统计
 
+Executor 管理：
+  /executor list                查看已注册 Executor
+  /executor register wizard     问答式注册 Executor，包含安装检测和非交互运行方式
+  /executor register <name> --command <cmd> --args "... {prompt}" --check "<cmd> --version"
+                                一次性注册 Executor 路由画像和运行绑定
+  /executor unregister <name>   反注册 Executor，路由不再派发
+  /executor route <任务描述>     预览任务会路由到哪个 Executor
+  /executor route-feedback      查看最近路由记录
+
 全局命令：
   /dashboard                    显示任务盘面
   /attach [taskId] <文件路径...>  关联文件到当前任务或指定任务

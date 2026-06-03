@@ -15,6 +15,10 @@ interface ExecutorProfileRow {
   risk_level: ExecutorRiskLevel;
   availability: ExecutorAvailability;
   historical_success: number;
+  runtime_command?: string | null;
+  runtime_args_json?: string | null;
+  runtime_check_command?: string | null;
+  project_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +46,10 @@ function rowToProfile(row: ExecutorProfileRow): ExecutorProfile {
     riskLevel: row.risk_level,
     availability: row.availability,
     historicalSuccess: row.historical_success,
+    runtimeCommand: row.runtime_command ?? null,
+    runtimeArgs: parseList(row.runtime_args_json ?? '[]'),
+    runtimeCheckCommand: row.runtime_check_command ?? null,
+    projectUrl: row.project_url ?? null,
   };
 }
 
@@ -55,8 +63,9 @@ export class ExecutorProfileRepo {
         name, domains_json, capabilities_json, input_types_json, output_types_json,
         strengths_json, weaknesses_json, primary_use_cases_json, avoid_use_cases_json,
         intent_affinity_json, risk_level, availability, historical_success,
+        runtime_command, runtime_args_json, runtime_check_command, project_url,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(name) DO UPDATE SET
         domains_json = excluded.domains_json,
         capabilities_json = excluded.capabilities_json,
@@ -70,6 +79,10 @@ export class ExecutorProfileRepo {
         risk_level = excluded.risk_level,
         availability = excluded.availability,
         historical_success = excluded.historical_success,
+        runtime_command = excluded.runtime_command,
+        runtime_args_json = excluded.runtime_args_json,
+        runtime_check_command = excluded.runtime_check_command,
+        project_url = excluded.project_url,
         updated_at = excluded.updated_at
     `).run(
       profile.name,
@@ -85,6 +98,10 @@ export class ExecutorProfileRepo {
       profile.riskLevel,
       profile.availability,
       profile.historicalSuccess,
+      profile.runtimeCommand ?? null,
+      JSON.stringify(profile.runtimeArgs ?? []),
+      profile.runtimeCheckCommand ?? null,
+      profile.projectUrl ?? null,
       now,
       now,
     );
@@ -93,6 +110,11 @@ export class ExecutorProfileRepo {
   findAll(): ExecutorProfile[] {
     const rows = this.db.prepare('SELECT * FROM executor_profiles ORDER BY name ASC').all() as ExecutorProfileRow[];
     return rows.map(rowToProfile);
+  }
+
+  findByName(name: string): ExecutorProfile | null {
+    const row = this.db.prepare('SELECT * FROM executor_profiles WHERE name = ?').get(name) as ExecutorProfileRow | undefined;
+    return row ? rowToProfile(row) : null;
   }
 
   deleteByName(name: string): void {

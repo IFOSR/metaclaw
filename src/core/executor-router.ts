@@ -23,6 +23,10 @@ export interface ExecutorProfile {
   primaryUseCases?: string[];
   avoidUseCases?: string[];
   intentAffinity?: Partial<Record<TaskRouteIntent, number>>;
+  runtimeCommand?: string | null;
+  runtimeArgs?: string[];
+  runtimeCheckCommand?: string | null;
+  projectUrl?: string | null;
 }
 
 export interface ExecutorRouteCandidate {

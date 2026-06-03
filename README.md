@@ -124,6 +124,45 @@ metaclaw --help
 
 MetaClaw does not vendor the downstream executor CLIs. Install the ones you want to use and make sure each command is available on `PATH`.
 
+### Register Custom Executors
+
+Installed executors are runtime workers that MetaClaw can route tasks to. A registered executor now has two parts:
+
+- The routing profile: domains, capabilities, risk level, success history, input/output types, and use-case hints.
+- The runtime binding: local command, non-interactive arguments, install check command, and optional project URL.
+
+Use the guided registration flow when you are not sure what to fill in:
+
+```bash
+/executor register wizard
+```
+
+The wizard asks for the executor name, whether to infer from a project URL or fill fields manually, the local command, non-interactive args, install check command, domains, and capabilities. If you provide a GitHub URL, MetaClaw tries to infer CLI information from `package.json` or README examples. If inference is not reliable, it falls back to manual entry.
+
+One-line registration is also supported:
+
+```bash
+/executor register research-bot \
+  --command research-bot \
+  --args "run --prompt {prompt}" \
+  --check "research-bot --version" \
+  --project-url https://github.com/example/research-bot \
+  --domains research,reporting \
+  --capabilities research,report_generation
+```
+
+`{prompt}` is replaced with the task prompt. If `--args` does not contain `{prompt}`, MetaClaw appends the prompt as the final argument. Before dispatching to a custom executor, MetaClaw runs the configured check command. If the check fails, the executor is marked `unavailable` and the task falls back to the default executor.
+
+Executor management commands:
+
+```bash
+/executor list
+/executor register wizard
+/executor unregister <name>
+/executor route <task description>
+/executor route-feedback
+```
+
 ### Codex CLI
 
 Install and authenticate Codex CLI according to the official OpenAI Codex instructions. Then verify:
@@ -398,6 +437,45 @@ Routing is intent-first:
 - Explicit executor names are respected when available.
 
 The router records selected executor, confidence, primary intent, matched boundary, rejected candidates, and routing reason.
+
+## Executors Vs Skills
+
+Executors and Skills are different layers of the ecosystem.
+
+An Executor is who does the work. A Skill is the method, knowledge, or operating guide the worker uses while doing it.
+
+Executors are agent runtimes such as Codex CLI, Pi Agent, Hermes Agent, DeepSeek TUI, or a domain-specific local agent. An executor determines the model, toolchain, permissions, runtime environment, context window, file access, non-interactive command, cost profile, and reliability boundary.
+
+Skills are lighter capability packages. They describe how to perform a specific class of work: how to analyze futures contracts, how to review code, how to run a research workflow, or what output format to use. A Skill can improve an executor's behavior, but it does not automatically change the executor's runtime, permissions, tools, or installation state.
+
+Executor strengths:
+
+- Adds a new runtime boundary: model, tools, credentials, permissions, and command-line behavior.
+- Lets MetaClaw route work to the executor that is best suited for that task.
+- Enables fallback, racing, cross-checking, and audit trails across different agents.
+- Can integrate private or domain-specific systems that a generic Skill cannot access.
+
+Executor tradeoffs:
+
+- Heavier to install and configure.
+- Requires a non-interactive command and an availability check.
+- Needs permission, timeout, failure, and fallback handling.
+- Can create operational complexity if many runtimes behave differently.
+
+Skill strengths:
+
+- Lightweight and fast to add.
+- Good for encoding repeatable methods, checklists, domain heuristics, and output conventions.
+- Can improve consistency within a single executor.
+- Lower operational overhead than adding a new runtime.
+
+Skill tradeoffs:
+
+- Bound by the host executor's tools, permissions, context, and model.
+- Cannot make an unavailable CLI, private API, browser, file permission, or enterprise integration appear by itself.
+- Usually improves execution quality rather than expanding the runtime boundary.
+
+MetaClaw uses executor registration when the missing capability is a different worker or runtime. It uses Skills when the worker exists but needs better procedure, domain knowledge, or formatting discipline.
 
 ## Memory And Recall Review
 

@@ -131,15 +131,9 @@ function knownProfiles(defaultExecutorName: string): Array<ExecutorProfile & { c
 }
 
 export function seedDefaultExecutorProfiles(
-  repo: Pick<ExecutorProfileRepo, 'upsert' | 'deleteByName'>,
+  repo: Pick<ExecutorProfileRepo, 'upsert' | 'findByName'>,
   input: ExecutorRegistrySeedInput,
 ): void {
-  for (const name of RETIRED_DEFAULT_EXECUTOR_PROFILES) {
-    if (name !== input.defaultExecutorName) {
-      repo.deleteByName(name);
-    }
-  }
-
   const availableCommands = input.availableCommands;
   for (const profile of knownProfiles(input.defaultExecutorName)) {
     if (RETIRED_DEFAULT_EXECUTOR_PROFILES.includes(profile.name) && profile.name !== input.defaultExecutorName) {
@@ -154,6 +148,11 @@ export function seedDefaultExecutorProfiles(
     }
 
     const { command: _command, ...record } = profile;
+    const existing = repo.findByName(profile.name);
+    if (existing?.availability === 'unavailable') {
+      continue;
+    }
+
     repo.upsert({
       ...record,
       availability: available ? 'available' : 'unavailable',

@@ -28,6 +28,58 @@ export interface CommandHandler {
   execute(args: string[], context: CommandContext): Promise<CommandResult>;
 }
 
+function splitCommandLine(input: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (const char of input) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaping) {
+    current += '\\';
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
 export class CommandRouter {
   private handlers: Map<string, CommandHandler> = new Map();
 
@@ -40,7 +92,7 @@ export class CommandRouter {
 
   parse(input: string): { command: string; args: string[] } | null {
     if (!input.startsWith('/')) return null;
-    const parts = input.slice(1).trim().split(/\s+/);
+    const parts = splitCommandLine(input.slice(1).trim());
     const command = parts[0];
     const args = parts.slice(1);
     return { command, args };
