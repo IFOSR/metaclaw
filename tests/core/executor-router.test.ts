@@ -175,7 +175,7 @@ describe('ExecutorRouter', () => {
     expect(decision.action).toBe('auto_dispatch');
   });
 
-  it('routes memory and tool orchestration work to Pi Agent profiles', () => {
+  it('routes memory and tool orchestration work to a Pi/Hermes research agent candidate', () => {
     const router = new ExecutorRouter([
       {
         name: 'codex-cli',
@@ -220,11 +220,15 @@ describe('ExecutorRouter', () => {
       defaultExecutorName: 'codex-cli',
     });
 
-    expect(decision.selectedExecutor).toBe('pi-agent');
+    expect(['pi-agent', 'hermes-agent']).toContain(decision.selectedExecutor);
     expect(decision.action).toBe('auto_dispatch');
+    expect(decision.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ executorName: 'pi-agent' }),
+      expect.objectContaining({ executorName: 'hermes-agent' }),
+    ]));
   });
 
-  it('routes plain research tasks to Pi Agent instead of falling back to Codex', () => {
+  it('routes plain research tasks to a Pi/Hermes research agent instead of falling back to Codex', () => {
     const router = new ExecutorRouter([
       {
         name: 'codex-cli',
@@ -269,7 +273,7 @@ describe('ExecutorRouter', () => {
       defaultExecutorName: 'codex-cli',
     });
 
-    expect(decision.selectedExecutor).toBe('pi-agent');
+    expect(['pi-agent', 'hermes-agent']).toContain(decision.selectedExecutor);
     expect(decision.action).toBe('auto_dispatch');
     expect(decision.confidence).toBeGreaterThanOrEqual(0.45);
     expect(decision.reason).toContain('research');
@@ -319,8 +323,8 @@ describe('ExecutorRouter', () => {
   it.each([
     ['修复这个 TypeScript bug 并跑测试', 'codex-cli', 'repo_execution'],
     ['用 DeepSeek 做复杂算法推理，输出中文技术分析', 'deepseek-tui', 'technical_reasoning'],
-    ['调研 AI Agent 市场并输出报告', 'pi-agent', 'research_workflow'],
-    ['结合长期记忆和多工具调用做自动化调研报告', 'pi-agent', 'memory_agent_ops'],
+    ['调研 AI Agent 市场并输出报告', 'research-agent', 'research_workflow'],
+    ['结合长期记忆和多工具调用做自动化调研报告', 'research-agent', 'memory_agent_ops'],
     ['分析这段代码边界条件，不改文件', 'deepseek-tui', 'technical_reasoning'],
     ['分析这段代码并直接修复测试', 'codex-cli', 'repo_execution'],
     ['代码 review，重点看算法正确性，用中文解释', 'deepseek-tui', 'technical_reasoning'],
@@ -332,10 +336,16 @@ describe('ExecutorRouter', () => {
       defaultExecutorName: 'codex-cli',
     });
 
-    expect(decision.selectedExecutor).toBe(selectedExecutor);
+    if (selectedExecutor === 'research-agent') {
+      expect(['pi-agent', 'hermes-agent']).toContain(decision.selectedExecutor);
+    } else {
+      expect(decision.selectedExecutor).toBe(selectedExecutor);
+    }
     expect(decision.primaryIntent).toBe(primaryIntent);
     expect(decision.matchedBoundary.length).toBeGreaterThan(0);
-    expect(decision.rejected.every(candidate => candidate.executorName !== selectedExecutor)).toBe(true);
+    if (selectedExecutor !== 'research-agent') {
+      expect(decision.rejected.every(candidate => candidate.executorName !== selectedExecutor)).toBe(true);
+    }
   });
 
   it('does not let historical success override a clear ownership mismatch', () => {

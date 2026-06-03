@@ -624,7 +624,7 @@ export class MetaclawSession {
   ): ExecutorAdapter[] {
     if (
       decision.action !== 'auto_dispatch'
-      || (decision.primaryIntent !== 'research_workflow' && !decision.matchedBoundary.includes('research'))
+      || !this.shouldRaceResearchExecutors(decision)
     ) {
       return [selectedExecutor];
     }
@@ -645,6 +645,23 @@ export class MetaclawSession {
       byName.set(executor.name, executor);
     }
     return Array.from(byName.values());
+  }
+
+  private shouldRaceResearchExecutors(decision: ExecutorRouteDecision): boolean {
+    if (decision.primaryIntent === 'research_workflow') {
+      return true;
+    }
+
+    return decision.primaryIntent === 'memory_agent_ops'
+      && decision.matchedBoundary.some(boundary => [
+        'research',
+        'multi_tool',
+        'workflow_automation',
+        'skill_runtime',
+        'mcp',
+        'report_generation',
+        'messaging_gateway',
+      ].includes(boundary));
   }
 
   private resolveExecutorAdapterByName(name: string, defaultExecutorName: string): ExecutorAdapter | null {

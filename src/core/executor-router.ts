@@ -279,8 +279,18 @@ function classifyIntent(userInput: string, profiles: ExecutorProfile[]): IntentC
 
 function ownershipExecutorForIntent(intent: TaskRouteIntent): string | null {
   if (intent === 'repo_execution') return 'codex-cli';
-  if (intent === 'research_workflow') return 'pi-agent';
   return null;
+}
+
+function shouldRaceResearchAgents(classification: IntentClassification): boolean {
+  return classification.primaryIntent === 'research_workflow'
+    || classification.matchedBoundary.some(boundary => [
+      'research',
+      'multi_tool',
+      'workflow_automation',
+      'skill_runtime',
+      'mcp',
+    ].includes(boundary));
 }
 
 function intentAffinity(profile: ExecutorProfile, intent: TaskRouteIntent): number {
@@ -435,12 +445,11 @@ export class ExecutorRouter {
         ?? null;
     }
 
-    if (classification.primaryIntent === 'research_workflow') {
-      return candidates.find(candidate => candidate.executorName === 'pi-agent') ?? null;
-    }
-
     if (classification.primaryIntent === 'memory_agent_ops') {
-      return candidates.find(candidate => candidate.executorName === 'pi-agent')
+      if (shouldRaceResearchAgents(classification)) {
+        return null;
+      }
+      return candidates.find(candidate => candidate.executorName === defaultExecutorName)
         ?? candidates.find(candidate => candidate.executorName === 'codex-cli')
         ?? null;
     }
