@@ -1101,6 +1101,35 @@ describe('Feishu app helpers', () => {
     expect(finalReply).not.toContain('succeeded in 0ms');
   });
 
+  it('hides related-task filesystem scans from Feishu replies', () => {
+    const reply = formatFeishuReply([
+      '任务 #task_related 已创建：找一下之前那份自学习报告',
+      '→ 正在执行任务 #task_related...',
+      '+ #task_related 已启动 codex-cli 执行器',
+      '+ #task_related [codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_vswMcy2tHw/feishu-document.md',
+      '+ #task_related [codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_wcFQ0b3DGm/artifact-note.md',
+      '+ #task_related [codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_wltujOLX_H/artifact-note.md',
+      '+ #task_related [codex-cli] exec',
+      `+ #task_related [codex-cli] /bin/bash -lc "find /home/ylfego/Program/metaclaw -path 'task_VezBimwFQ' -maxdepth 5 -type f -o -path 'task_VezBimwFQ' -maxdepth 5 -type d" in /home/ylfego/Program/metaclaw`,
+      '+ #task_related [codex-cli] succeeded in 0ms:',
+      '+ #task_related [codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_VezBimwFQ',
+      '+ #task_related [codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_VezBimwFQ/metaclaw_self_learning_executor_research.md',
+      '+ #task_related [codex-cli] 已找到原任务本地 Markdown，接下来会作为本次任务产物放入目标目录。',
+      '✓ 任务完成 (4.2s)',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: 已找到相关任务并定位到原始 Markdown 文档。',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(reply).toBe('已找到相关任务并定位到原始 Markdown 文档。');
+    expect(reply).not.toContain('[codex-cli]');
+    expect(reply).not.toContain('/home/ylfego/Program/metaclaw/metaclaw-tasks');
+    expect(reply).not.toContain('/bin/bash');
+    expect(reply).not.toContain('find /home/ylfego');
+    expect(reply).not.toContain('succeeded in 0ms');
+  });
+
   it('uploads every generated artifact file back to Feishu as browsable file messages', async () => {
     const repoDir = mkdtempSync(resolve(tmpdir(), 'metaclaw-feishu-artifacts-'));
     const taskDir = resolve(repoDir, 'metaclaw-tasks', 'task_doc');

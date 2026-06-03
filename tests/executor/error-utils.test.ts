@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatExecutorError, isRecoverableExecutorFailure } from '../../src/executor/error-utils.js';
+import { formatExecutorError, formatExecutorProgress, isRecoverableExecutorFailure } from '../../src/executor/error-utils.js';
 
 describe('formatExecutorError', () => {
   it('collapses codex network logs into a concise user-facing message', () => {
@@ -55,5 +55,25 @@ describe('formatExecutorError', () => {
   it('maps legacy executor max duration timeout to a compatibility message', () => {
     expect(formatExecutorError('executor max duration exceeded')).toBe('执行器历史总时长超限，请升级执行器配置并重试');
     expect(isRecoverableExecutorFailure('executor max duration exceeded')).toBe(true);
+  });
+});
+
+describe('formatExecutorProgress', () => {
+  it('hides related-task filesystem scans and command details from user-facing progress', () => {
+    const noisyLines = [
+      '[codex-cli] /home/ylfego/Program/metaclaw/metaclaw-tasks/task_vswMcy2tHw/feishu-document.md',
+      '[codex-cli] exec',
+      `[codex-cli] /bin/bash -lc "find /home/ylfego/Program/metaclaw -path 'task_VezBimwFQ' -maxdepth 5 -type f" in /home/ylfego/Program/metaclaw`,
+      '[codex-cli] succeeded in 0ms:',
+      '/home/ylfego/Program/metaclaw/metaclaw-tasks/task_VezBimwFQ/metaclaw_self_learning_executor_research.md',
+    ];
+
+    for (const line of noisyLines) {
+      expect(formatExecutorProgress(line)).toBeUndefined();
+    }
+  });
+
+  it('keeps concise executor progress that is useful to the user', () => {
+    expect(formatExecutorProgress('[codex-cli] 正在检索相关任务')).toBe('正在检索相关任务');
   });
 });

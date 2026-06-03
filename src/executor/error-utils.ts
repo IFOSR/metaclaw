@@ -83,7 +83,7 @@ export function isRecoverableExecutorFailure(raw?: string): boolean {
 export function formatExecutorProgress(raw?: string): string | undefined {
   if (!raw) return undefined;
 
-  const normalized = raw.trim();
+  const normalized = stripExecutorLogPrefix(raw.trim());
   if (!normalized) return undefined;
 
   if (EXECUTOR_NOISE_PATTERNS.some(pattern => pattern.test(normalized))) {
@@ -91,6 +91,10 @@ export function formatExecutorProgress(raw?: string): string | undefined {
   }
 
   if (EXECUTOR_WARNING_PATTERNS.some(pattern => pattern.test(normalized))) {
+    return undefined;
+  }
+
+  if (isInternalExecutorProgressNoise(normalized)) {
     return undefined;
   }
 
@@ -103,6 +107,23 @@ export function formatExecutorProgress(raw?: string): string | undefined {
   }
 
   return normalized;
+}
+
+function stripExecutorLogPrefix(raw: string): string {
+  return raw.replace(/^\[[^\]]+\]\s*/, '').trim();
+}
+
+function isInternalExecutorProgressNoise(raw: string): boolean {
+  return [
+    /^exec$/i,
+    /^succeeded in \d+(?:\.\d+)?(?:ms|s):?$/i,
+    /^failed in \d+(?:\.\d+)?(?:ms|s):?$/i,
+    /^\/(?:home|tmp|var|opt|usr|mnt|Volumes)\b/,
+    /^[A-Za-z]:\\/,
+    /^\/bin\/(?:bash|sh)\b/i,
+    /(?:^|\s)(?:find|rg|grep|ls|cat|sed|awk)\s+\/(?:home|tmp|var|opt|usr|mnt|Volumes)\b/i,
+    /\bmetaclaw-tasks\/task_[A-Za-z0-9_-]+/,
+  ].some(pattern => pattern.test(raw));
 }
 
 function isNetworkFailure(raw: string): boolean {
