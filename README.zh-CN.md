@@ -151,6 +151,48 @@ Executor 是 MetaClaw 可以路由任务的运行时工人。一个已注册 Exe
 
 `{prompt}` 会被替换为任务提示词。如果 `--args` 不包含 `{prompt}`，MetaClaw 会把 prompt 追加为最后一个参数。调度到自定义 Executor 前，MetaClaw 会先执行配置的检测命令；检测失败时会把该 Executor 标记为 `unavailable`，并回退默认 Executor。
 
+Executor 扩展契约：
+
+必需的路由字段：
+
+- `name`：稳定的 Executor 名称，例如 `research-bot` 或 `finance-research-agent`。
+- `domains`：适用领域，例如 `research`、`finance`、`software`。
+- `capabilities`：能力标签，例如 `research`、`report_generation`、`multi_tool`、`coding`、`tests`。
+- `availability`：`available` 或 `unavailable`；安装检测失败时 MetaClaw 会更新该状态。
+
+建议的路由字段：
+
+- `inputTypes`：支持输入类型，例如 `text`、`files`、`image`。
+- `outputTypes`：输出类型，例如 `markdown`、`report`、`code`、`patch`、`json`。
+- `primaryUseCases`：适合路由给它的典型任务。
+- `avoidUseCases`：不适合路由给它的任务。
+- `riskLevel`：`low`、`medium` 或 `high`。
+- `historicalSuccess`：历史成功分数，后续可随任务结果影响排序。
+- `projectUrl`：项目仓库或文档地址。
+
+必需的运行绑定：
+
+- `runtimeCommand`：本机 `PATH` 上可执行的命令，例如 `research-bot`。
+- `runtimeArgs`：非交互运行参数，例如 `["run", "--prompt", "{prompt}"]`。
+- `runtimeCheckCommand`：安装或可用性检测命令，例如 `research-bot --version`。
+
+运行行为要求：
+
+- 必须能非交互运行，不能等待人工输入。
+- 必须能通过 `{prompt}` 或最后一个参数接收完整任务提示词。
+- 最终答案应输出到 stdout。
+- 失败时应返回非 0 exit code，或在 stderr 输出明确错误。
+- 长任务应周期性输出进度，避免被 idle watchdog 判断为卡死。
+- 文件产物应写入 prompt 中指定的任务输出目录。
+- 飞书交付、文件上传和预览链接生成应由 MetaClaw 后端完成；Executor 应产出本地文件，不应自己直接调用飞书 API。
+
+可选高级 Adapter 接口：
+
+- `execute(input)`：用结构化上下文执行任务。
+- `isAvailable()`：检测 Executor 是否可运行。
+- `abort()`：取消正在执行的任务。
+- `installSkill(pkg)`、`updateSkill(pkg)`、`disableSkill(target)`、`deprecateSkill(target)`：支持 Executor 自己的 Skill 生命周期管理。
+
 常用管理命令：
 
 ```bash

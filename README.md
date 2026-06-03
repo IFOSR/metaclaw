@@ -153,6 +153,48 @@ One-line registration is also supported:
 
 `{prompt}` is replaced with the task prompt. If `--args` does not contain `{prompt}`, MetaClaw appends the prompt as the final argument. Before dispatching to a custom executor, MetaClaw runs the configured check command. If the check fails, the executor is marked `unavailable` and the task falls back to the default executor.
 
+Executor extension contract:
+
+Required routing fields:
+
+- `name`: stable executor name, such as `research-bot` or `finance-research-agent`.
+- `domains`: where the executor fits, such as `research`, `finance`, or `software`.
+- `capabilities`: what the executor can do, such as `research`, `report_generation`, `multi_tool`, `coding`, or `tests`.
+- `availability`: `available` or `unavailable`; MetaClaw updates this when install checks fail.
+
+Recommended routing fields:
+
+- `inputTypes`: supported input types, such as `text`, `files`, or `image`.
+- `outputTypes`: expected outputs, such as `markdown`, `report`, `code`, `patch`, or `json`.
+- `primaryUseCases`: examples of tasks that should route to this executor.
+- `avoidUseCases`: examples of tasks that should not route to this executor.
+- `riskLevel`: `low`, `medium`, or `high`.
+- `historicalSuccess`: success score used by routing as more task outcomes are recorded.
+- `projectUrl`: source repository or documentation URL.
+
+Required runtime binding:
+
+- `runtimeCommand`: executable command available on `PATH`, for example `research-bot`.
+- `runtimeArgs`: non-interactive arguments, for example `["run", "--prompt", "{prompt}"]`.
+- `runtimeCheckCommand`: install or availability check, for example `research-bot --version`.
+
+Runtime behavior requirements:
+
+- The executor must run non-interactively; it cannot wait for human prompts.
+- It must accept the full task prompt through `{prompt}` or as the final argument.
+- It should write the final answer to stdout.
+- Failures should return a non-zero exit code or a clear stderr error.
+- Long-running tasks should emit progress periodically so the idle watchdog does not treat the process as stuck.
+- File artifacts should be written into the task output directory provided in the prompt.
+- Feishu delivery, file upload, and preview link generation should stay in MetaClaw's backend; executors should produce local artifacts instead of calling Feishu APIs directly.
+
+Optional advanced adapter interfaces:
+
+- `execute(input)`: run a task with structured context.
+- `isAvailable()`: check whether the executor can run.
+- `abort()`: cancel a running task.
+- `installSkill(pkg)`, `updateSkill(pkg)`, `disableSkill(target)`, `deprecateSkill(target)`: support executor-specific Skill lifecycle management.
+
 Executor management commands:
 
 ```bash
