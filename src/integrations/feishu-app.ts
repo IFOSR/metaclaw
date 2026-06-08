@@ -56,6 +56,8 @@ interface DownloadedFeishuResource {
 
 const FEISHU_TYPING_REACTION = 'Typing';
 const FEISHU_REPLY_WAIT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const FEISHU_REPLY_MESSAGE_MAX_LENGTH = 1200;
+const FEISHU_CARD_MARKDOWN_ELEMENT_MAX_LENGTH = 900;
 
 type FeishuPostRow = Array<{
   tag: 'md';
@@ -855,12 +857,12 @@ function createFeishuMarkdownCardElements(
   for (const segment of segments) {
     if (segment.kind === 'markdown') {
       const content = normalizeFeishuMarkdownContent(segment.content).trim();
-      if (content) {
+      for (const contentChunk of splitFeishuMarkdownContent(content)) {
         elements.push({
           tag: 'div' as const,
           text: {
             tag: 'lark_md' as const,
-            content,
+            content: contentChunk,
           },
         });
       }
@@ -878,13 +880,15 @@ function createFeishuMarkdownCardElements(
       continue;
     }
 
-    elements.push({
-      tag: 'div' as const,
-      text: {
-        tag: 'lark_md' as const,
-        content: formatMarkdownTableAsFeishuMarkdown(segment),
-      },
-    });
+    for (const contentChunk of splitFeishuMarkdownContent(formatMarkdownTableAsFeishuMarkdown(segment))) {
+      elements.push({
+        tag: 'div' as const,
+        text: {
+          tag: 'lark_md' as const,
+          content: contentChunk,
+        },
+      });
+    }
   }
 
   return elements.length > 0
@@ -905,10 +909,10 @@ function createFeishuMarkdownCardV2Elements(markdown: string): FeishuMarkdownCar
   for (const segment of segments) {
     if (segment.kind === 'markdown') {
       const content = normalizeFeishuMarkdownContent(segment.content).trim();
-      if (content) {
+      for (const contentChunk of splitFeishuMarkdownContent(content)) {
         elements.push({
           tag: 'markdown' as const,
-          content,
+          content: contentChunk,
         });
       }
       continue;
@@ -1088,6 +1092,33 @@ function normalizeFeishuMarkdownContent(markdown: string): string {
 
     return line.replace(/^(\s*)#{2,6}\s+(.+?)\s*$/, '$1**$2**');
   }).join('\n');
+}
+
+function splitFeishuMarkdownContent(
+  content: string,
+  maxLength = FEISHU_CARD_MARKDOWN_ELEMENT_MAX_LENGTH,
+): string[] {
+  if (!content) {
+    return [];
+  }
+  if (content.length <= maxLength) {
+    return [content];
+  }
+
+  const chunks: string[] = [];
+  let remaining = content;
+  while (remaining.length > maxLength) {
+    const splitAt = findFeishuSplitPoint(remaining, maxLength);
+    const chunk = remaining.slice(0, splitAt).trimEnd();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    remaining = remaining.slice(splitAt).replace(/^\n+/, '');
+  }
+  if (remaining.trim()) {
+    chunks.push(remaining.trim());
+  }
+  return chunks;
 }
 
 function createFeishuMarkdownPostRows(markdown: string): FeishuPostRow[] {
@@ -2306,7 +2337,7 @@ function extractLatestTaskSummary(outputLines: string[]): string | null {
   return summary && summary !== '无' ? summary : null;
 }
 
-function splitForFeishu(text: string, maxLength = 3500): string[] {
+function splitForFeishu(text: string, maxLength = FEISHU_REPLY_MESSAGE_MAX_LENGTH): string[] {
   if (text.length <= maxLength) {
     return [text];
   }

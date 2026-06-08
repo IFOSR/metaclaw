@@ -236,6 +236,29 @@ describe('Feishu app helpers', () => {
     ].join('\n'));
   });
 
+  it('splits long card Markdown into bounded elements so Feishu clients do not truncate the answer', () => {
+    const longSections = Array.from({ length: 9 }, (_, index) => [
+      `${index + 1}. **检查项 ${index + 1}**：飞书 CLI 只是调用飞书开放平台 API 的本地工具，能访问什么取决于应用权限、OAuth 授权、机器人可见范围和具体 API 能力。`,
+      `   这一段用于模拟 Terminal 里完整展示、但飞书客户端容易在单个卡片元素里截断的中文长答案。`,
+    ].join('\n')).join('\n\n');
+    const card = createFeishuMarkdownCard([
+      '飞书 CLI 能读取哪些内容，需要分几层看：',
+      '',
+      longSections,
+      '',
+      '**所以结论是：**',
+      '文档：可以比较顺畅地做到读取和分析。',
+      '聊天信息：也可以，但限制和风险更高。',
+      '我建议的安全做法是：按最小权限授权，并把访问范围限定在当前任务需要的资源。',
+    ].join('\n'));
+
+    const contents = card.elements.map(element => element.text.content);
+    expect(contents.length).toBeGreaterThan(1);
+    expect(contents.every(content => content.length <= 900)).toBe(true);
+    expect(contents.join('\n')).toContain('所以结论是');
+    expect(contents.join('\n')).toContain('我建议的安全做法是');
+  });
+
   it('renders GitHub-style Markdown tables as structured Feishu-safe Markdown blocks', () => {
     const card = createFeishuMarkdownCard([
       '下面是对比：',
