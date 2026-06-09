@@ -65,10 +65,22 @@ type FeishuPostRow = Array<{
   text: string;
 }>;
 
+type FeishuRichTextPostRow = Array<{
+  tag: 'text';
+  text: string;
+}>;
+
 interface FeishuPostContent {
   zh_cn: {
     title?: string;
     content: FeishuPostRow[];
+  };
+}
+
+interface FeishuRichTextPostContent {
+  zh_cn: {
+    title?: string;
+    content: FeishuRichTextPostRow[];
   };
 }
 
@@ -189,6 +201,25 @@ export class FeishuAppClient {
 
   async sendTextToChat(chatId: string, text: string): Promise<void> {
     await this.sendMarkdownCardToChat(chatId, text);
+  }
+
+  async sendMarkdownPostToChat(chatId: string, markdown: string): Promise<void> {
+    const token = await this.getTenantAccessToken();
+    const response = await this.postJson(
+      'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+      {
+        receive_id: chatId,
+        msg_type: 'post',
+        content: JSON.stringify(createFeishuPlainTextPostContent(markdown)),
+      },
+      {
+        authorization: `Bearer ${token}`,
+      },
+    );
+    const payload = await response.json() as { code?: number; msg?: string };
+    if (!response.ok || payload.code !== 0) {
+      throw new Error(`飞书富文本消息发送失败: ${payload.code ?? response.status}${payload.msg ? ` ${payload.msg}` : ''}`);
+    }
   }
 
   async sendMarkdownCardToChat(chatId: string, markdown: string): Promise<void> {
@@ -384,8 +415,11 @@ export interface FeishuMarkdownPreviewOptions {
   workspaceRoot: string;
 }
 
-type FeishuMessageClient = Pick<FeishuAppClient, 'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'>
-  & Partial<Pick<FeishuAppClient, 'downloadMessageResource' | 'uploadFile' | 'sendFileToChat'>>;
+type FeishuMessageClient = Pick<
+  FeishuAppClient,
+  'addReactionToMessage' | 'removeReactionFromMessage' | 'sendMarkdownCardToChat'
+>
+  & Partial<Pick<FeishuAppClient, 'sendMarkdownPostToChat' | 'downloadMessageResource' | 'uploadFile' | 'sendFileToChat'>>;
 
 interface FeishuMessageHandlerDeps {
   client: FeishuMessageClient;
@@ -693,8 +727,14 @@ export async function handleFeishuMessageEvent(
         && chunks.length === 1
         && sentProgressSteps.has(chunks[0] ?? '');
       if (!suppressFinalReply) {
-        for (const chunk of chunks) {
-          await deps.client.sendMarkdownCardToChat(chatId, chunk);
+        if (deps.client.sendMarkdownPostToChat) {
+          for (const chunk of chunks) {
+            await deps.client.sendMarkdownPostToChat(chatId, chunk);
+          }
+        } else {
+          for (const chunk of chunks) {
+            await deps.client.sendMarkdownCardToChat(chatId, chunk);
+          }
         }
       }
       await sendArtifactFilesToFeishu(chatId, replyOutputLines, deps);
@@ -771,6 +811,15 @@ export function createFeishuMarkdownPostContent(markdown: string, options: { tit
     zh_cn: {
       ...(options.title ? { title: options.title } : {}),
       content: createFeishuMarkdownPostRows(markdown),
+    },
+  };
+}
+
+export function createFeishuPlainTextPostContent(markdown: string, options: { title?: string } = {}): FeishuRichTextPostContent {
+  return {
+    zh_cn: {
+      ...(options.title ? { title: options.title } : {}),
+      content: createFeishuPlainTextPostRows(markdown),
     },
   };
 }
@@ -1203,6 +1252,25 @@ function createFeishuMarkdownPostRows(markdown: string): FeishuPostRow[] {
 
   flushCurrent();
   return rows.length > 0 ? rows : [[{ tag: 'md', text: markdown }]];
+}
+
+function createFeishuPlainTextPostRows(markdown: string): FeishuRichTextPostRow[] {
+  const text = stripFeishuMarkdownForPlainText(markdown);
+  if (!text.trim()) {
+    return [[{ tag: 'text', text: '' }]];
+  }
+
+  const rows = text.split('\n').map(line => [{ tag: 'text' as const, text: line }]);
+  return rows.length > 0 ? rows : [[{ tag: 'text', text }]];
+}
+
+function stripFeishuMarkdownForPlainText(markdown: string): string {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
 }
 
 export function resolveAppSecret(config: FeishuAppConfig): string | null {

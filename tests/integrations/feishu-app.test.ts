@@ -6,6 +6,7 @@ import {
   appendMarkdownPreviewLinks,
   createFeishuMarkdownCard,
   createFeishuMarkdownPostContent,
+  createFeishuPlainTextPostContent,
   createFeishuBridge,
   createFeishuWebSocketEventHandlers,
   extractArtifactPaths,
@@ -163,6 +164,45 @@ describe('FeishuAppClient', () => {
     expect('elements' in fallbackCard ? fallbackCard.elements[0]?.text.tag : null).toBe('plain_text');
     expect(fallbackBody.content).toContain('MetaClaw Desktop Runtime');
     expect(fallbackBody.content).toContain('后续建议');
+  });
+
+  it('sends final answers as Feishu post messages instead of interactive cards', async () => {
+    const postJson = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 }),
+        text: async () => 'ok',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0 }),
+        text: async () => 'ok',
+      });
+    const client = new FeishuAppClient({ app_id: 'cli_test', app_secret: 'secret' }, { postJson });
+    const answer = [
+      '可以分成三层来看。',
+      '',
+      '**第一层：飞书式知识管理**',
+      '飞书做的是信息管理。',
+      '',
+      '**第二层：Ontology / 业务对象建模**',
+      'Ontology 系统回答的是业务世界现在是什么状态。',
+      '',
+      '**第三层：决策与行动**',
+      '真正有价值的是知识进入业务决策。',
+    ].join('\n');
+
+    await client.sendMarkdownPostToChat('oc_chat', answer);
+
+    expect(postJson).toHaveBeenCalledTimes(2);
+    const body = postJson.mock.calls[1]?.[1] as { msg_type: string; content: string };
+    expect(body.msg_type).toBe('post');
+    expect(body.content).toContain('第一层：飞书式知识管理');
+    expect(body.content).toContain('第二层：Ontology / 业务对象建模');
+    expect(body.content).toContain('第三层：决策与行动');
+    expect(body.content).not.toContain('interactive');
   });
 });
 
@@ -1398,6 +1438,74 @@ describe('Feishu app helpers', () => {
     expect(finalTexts.join('')).toBe(fullAnswer);
     expect(finalTexts.some(text => text.endsWith('**MetaClaw Des'))).toBe(false);
     expect(finalTexts.join('\n')).toContain('3. **安全边界代理**');
+  });
+
+  it('delivers complete final answers through Feishu post messages in the handler path', async () => {
+    const fullAnswer = [
+      '我换一种方式讲：**你们的知识管理产品不要把自己定义成“文档管理/知识库”，而要定义成“企业业务决策系统的知识底座”。**',
+      '',
+      '可以分成三层来看。',
+      '',
+      '**第一层：飞书式知识管理**',
+      '飞书做的是信息管理。',
+      '',
+      '**第二层：Ontology / 业务对象建模**',
+      'Ontology 系统回答的是业务世界现在是什么状态，接下来会发生什么，我该做什么。',
+      '',
+      '**第三层：决策与行动**',
+      '真正有价值的不是知识本身，而是知识进入业务决策。',
+      '',
+      '一句话总结差异：飞书帮助企业把信息组织起来；你们应该帮助企业把业务世界建模出来，并驱动决策和执行。',
+    ].join('\n');
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 详细解释知识管理定位',
+            '任务 #task_knowledge 已创建：详细解释知识管理定位',
+            '+ #task_knowledge 已启动 codex-cli 执行器',
+            ...fullAnswer.split('\n').map(line => `+ #task_knowledge ${line}`),
+            '+ #task_knowledge tokens used',
+            '+ #task_knowledge 1,548',
+            '✓ 任务完成 (68.0s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 你们的知识管理产品应该定义成企业业务决策系统的知识底座。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownPostToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_knowledge',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"详细解释知识管理定位"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    expect(client.sendMarkdownPostToChat).toHaveBeenCalledWith('oc_chat', fullAnswer);
+    expect(client.sendMarkdownPostToChat.mock.calls[0]?.[1]).toContain('**第二层：Ontology / 业务对象建模**');
+    expect(client.sendMarkdownPostToChat.mock.calls[0]?.[1]).toContain('**第三层：决策与行动**');
+    expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
+      .toContain('**处理步骤**');
+    expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
+      .not.toContain('**第二层：Ontology / 业务对象建模**');
   });
 
   it('keeps Feishu replies scoped to the submitted task across urgent preemption and resume', async () => {
