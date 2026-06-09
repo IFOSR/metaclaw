@@ -11,7 +11,7 @@ import { OrchestrationEngine } from './core/orchestration.js';
 import { createExecutor } from './executor/factory.js';
 import { ContextRecaller } from './core/context-recaller.js';
 import { LlmBridge } from './core/llm-bridge.js';
-import { loadConfig } from './utils/config.js';
+import { loadConfig, migrateLegacyFeishuConfigFileToGateway } from './utils/config.js';
 import { resolveMetaclawDir } from './utils/paths.js';
 import { renderApp } from './tui/app.js';
 import { parseCliArgs } from './cli/args.js';
@@ -22,6 +22,8 @@ import { MetaclawGatewayServer } from './gateway/server.js';
 import { runGatewayClientUi } from './gateway/client-ui.js';
 import { resolveGatewaySocketPath } from './gateway/gateway-paths.js';
 import { MarkdownPreviewServer } from './integrations/markdown-preview.js';
+import { runGatewaySetup } from './gateway/setup.js';
+import { startFeishuRuntimeBridge } from './gateway/feishu-runtime.js';
 
 async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
@@ -38,8 +40,25 @@ async function main() {
     return;
   }
 
+  if (cliArgs.gatewayCommand === 'setup') {
+    await runGatewaySetup({ metaclawDir });
+    return;
+  }
+
+  if (
+    cliArgs.gatewayCommand === 'start'
+    || cliArgs.gatewayCommand === 'stop'
+    || cliArgs.gatewayCommand === 'restart'
+    || cliArgs.gatewayCommand === 'status'
+  ) {
+    console.log(`请使用 ./metaclaw.sh ${cliArgs.gatewayCommand} 管理后台进程。`);
+    return;
+  }
+
   // 2. 加载配置
-  const config = loadConfig(resolve(metaclawDir, 'config.yaml'));
+  const configPath = resolve(metaclawDir, 'config.yaml');
+  migrateLegacyFeishuConfigFileToGateway(configPath);
+  const config = loadConfig(configPath);
   const markdownPreviewConfig = config.integrations?.markdown_preview;
   const markdownPreviewServer = markdownPreviewConfig?.enabled
     ? new MarkdownPreviewServer(markdownPreviewConfig, process.cwd())
@@ -127,18 +146,38 @@ async function main() {
   });
 
   await gatewayServer.start();
+  let gatewayFeishuBridge: Awaited<ReturnType<typeof startFeishuRuntimeBridge>> = null;
+  if (cliArgs.gateway) {
+    const gatewaySession = new (await import('./session/metaclaw-session.js')).MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config,
+      sessionId,
+      contextRecaller,
+      llmBridge,
+      notifier,
+    });
+    gatewaySession.initialize({ resumeStartupTasks: false, showDashboard: false });
+    gatewayFeishuBridge = await startFeishuRuntimeBridge(config, gatewaySession);
+  }
   process.once('exit', () => {
+    void gatewayFeishuBridge?.stop();
     void markdownPreviewServer?.stop();
     void gatewayServer.stop();
   });
   process.once('SIGINT', () => {
     void Promise.all([
+      gatewayFeishuBridge?.stop() ?? Promise.resolve(),
       gatewayServer.stop(),
       markdownPreviewServer?.stop() ?? Promise.resolve(),
     ]).finally(() => process.exit(0));
   });
   process.once('SIGTERM', () => {
     void Promise.all([
+      gatewayFeishuBridge?.stop() ?? Promise.resolve(),
       gatewayServer.stop(),
       markdownPreviewServer?.stop() ?? Promise.resolve(),
     ]).finally(() => process.exit(0));

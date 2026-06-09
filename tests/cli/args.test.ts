@@ -27,4 +27,26 @@ describe('parseCliArgs', () => {
       connect: true,
     });
   });
+
+  it('parses gateway subcommands without breaking legacy gateway flags', () => {
+    expect(parseCliArgs(['gateway', 'setup'])).toEqual({
+      gateway: false,
+      connect: false,
+      gatewayCommand: 'setup',
+    });
+    expect(parseCliArgs(['gateway', 'run'])).toEqual({
+      gateway: true,
+      connect: false,
+      gatewayCommand: 'run',
+    });
+    expect(parseCliArgs(['gateway'])).toEqual({
+      gateway: true,
+      connect: false,
+      gatewayCommand: 'run',
+    });
+  });
+
+  it('rejects unknown gateway subcommands', () => {
+    expect(() => parseCliArgs(['gateway', 'deploy'])).toThrow('未知 gateway 子命令');
+  });
 });

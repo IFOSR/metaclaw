@@ -549,6 +549,53 @@ describe('Feishu app helpers', () => {
     }
   });
 
+  it('creates Feishu bridge from canonical Gateway config after migration', () => {
+    const previousSecret = process.env.GATEWAY_FEISHU_SECRET;
+    process.env.GATEWAY_FEISHU_SECRET = 'secret';
+
+    try {
+      const bridge = createFeishuBridge({
+        version: 1,
+        executor: {
+          command: 'codex',
+          timeout: 300,
+          max_duration: 3600,
+        },
+        orchestration: {
+          reminder_enabled: true,
+          reminder_throttle: 300,
+          top_k_preferences: 5,
+        },
+        ui: {
+          language: 'zh-CN',
+          dashboard_on_start: true,
+        },
+        gateway: {
+          enabled: true,
+          platforms: {
+            feishu: {
+              enabled: true,
+              connection_mode: 'websocket',
+              app_id: 'cli_gateway',
+              app_secret_env: 'GATEWAY_FEISHU_SECRET',
+              event_port: 8787,
+              event_path: '/feishu/events',
+            },
+          },
+        },
+      }, {} as never);
+
+      expect(bridge).not.toBeNull();
+      expect(bridge?.constructor.name).toBe('FeishuWebSocketBridge');
+    } finally {
+      if (previousSecret === undefined) {
+        delete process.env.GATEWAY_FEISHU_SECRET;
+      } else {
+        process.env.GATEWAY_FEISHU_SECRET = previousSecret;
+      }
+    }
+  });
+
   it('registers no-op event handlers to avoid SDK missing-handler warnings', async () => {
     const session = {
       getSnapshot: vi.fn().mockReturnValue({ output: [] }),

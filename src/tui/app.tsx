@@ -3,7 +3,7 @@ import { render, Box, Static, Text, useInput } from 'ink';
 import type { MetaclawSessionDeps, SessionSnapshot } from '../session/metaclaw-session.js';
 import { createDefaultCommandRouter, MetaclawSession } from '../session/metaclaw-session.js';
 import { prepareEditorSubmission } from '../session/session-helpers.js';
-import { createFeishuBridge } from '../integrations/feishu-app.js';
+import { startFeishuRuntimeBridge } from '../gateway/feishu-runtime.js';
 import type { CommandHandler } from '../commands/router.js';
 
 interface AppProps extends MetaclawSessionDeps {}
@@ -429,34 +429,18 @@ export function App(props: AppProps) {
   useEffect(() => {
     const session = sessionRef.current!;
     let stopped = false;
-    let bridge;
-    try {
-      bridge = createFeishuBridge(props.config, session);
-    } catch (error) {
-      session.appendSystemMessage(`⚠️ 飞书应用桥接未启动: ${(error as Error).message}`);
-      return;
-    }
-
-    if (!bridge) {
-      return;
-    }
-
-    const feishuMode = props.config.integrations?.feishu?.mode ?? 'websocket';
-    void bridge.start().then(() => {
-      if (!stopped) {
-        session.appendSystemMessage(
-          feishuMode === 'webhook'
-            ? '→ 飞书 Webhook 桥接已启动，等待飞书回调'
-            : '→ 飞书长连接桥接已启动，等待飞书消息',
-        );
+    let runtimeBridge: Awaited<ReturnType<typeof startFeishuRuntimeBridge>> = null;
+    void startFeishuRuntimeBridge(props.config, session).then(startedBridge => {
+      if (stopped) {
+        void startedBridge?.stop();
+        return;
       }
-    }).catch(error => {
-      session.appendSystemMessage(`⚠️ 飞书应用桥接启动失败: ${(error as Error).message}`);
+      runtimeBridge = startedBridge;
     });
 
     return () => {
       stopped = true;
-      void bridge.stop();
+      void runtimeBridge?.stop();
     };
   }, [props.config]);
 

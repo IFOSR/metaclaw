@@ -444,6 +444,10 @@ export interface Config {
     };
   };
   integrations?: {
+    /**
+     * @deprecated Migration-only. Feishu runtime config now lives under
+     * `gateway.platforms.feishu`; keep this type only to read old config files.
+     */
     feishu?: {
       enabled: boolean;
       mode?: 'websocket' | 'webhook';
@@ -459,6 +463,33 @@ export interface Config {
       host: string;
       port: number;
       public_base_url?: string;
+    };
+  };
+  gateway?: {
+    enabled: boolean;
+    platforms?: {
+      feishu?: {
+        enabled: boolean;
+        domain?: 'feishu' | 'lark';
+        connection_mode?: 'websocket' | 'webhook';
+        app_id?: string;
+        app_secret_env?: string;
+        event_port?: number;
+        event_path?: string;
+        verification_token?: string;
+        access?: {
+          dm_policy?: 'pairing' | 'allow_all' | 'allowlist';
+          allowed_users?: string[];
+          group_policy?: 'open' | 'disabled' | 'allowlist' | 'admin_only';
+          require_mention?: boolean;
+        };
+        delivery?: {
+          final_markdown_mode?: 'card' | 'post';
+          fallback_mode?: 'post' | 'file';
+          final_file_fallback?: boolean;
+        };
+        home_channel?: string;
+      };
     };
   };
 }

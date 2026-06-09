@@ -7,6 +7,7 @@ import type { SessionSnapshot } from '../session/metaclaw-session.js';
 import type { MetaclawSession } from '../session/metaclaw-session.js';
 import { resolveMetaclawDir } from '../utils/paths.js';
 import { createMarkdownPreviewBaseUrl, createMarkdownPreviewLinks } from './markdown-preview.js';
+import { resolveFeishuGatewayConfig, toFeishuAppConfig } from '../gateway/feishu-config.js';
 
 export interface FeishuAppConfig {
   enabled: boolean;
@@ -742,8 +743,9 @@ export async function handleFeishuMessageEvent(
 }
 
 export function createFeishuBridge(config: Config, session: MetaclawSession): FeishuBridge | null {
-  const feishu = config.integrations?.feishu;
-  if (!feishu?.enabled || !feishu.app_id) {
+  const gatewayFeishu = resolveFeishuGatewayConfig(config);
+  const feishu = toFeishuAppConfig(gatewayFeishu);
+  if (!gatewayFeishu.enabled || !gatewayFeishu.appId) {
     return null;
   }
 
@@ -756,12 +758,12 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
   }
 
   const client = new FeishuAppClient({
-    app_id: feishu.app_id,
+    app_id: gatewayFeishu.appId,
     app_secret: appSecret,
   });
   const markdownPreview = buildFeishuMarkdownPreviewOptions(config);
 
-  if ((feishu.mode ?? 'websocket') === 'webhook') {
+  if (gatewayFeishu.connectionMode === 'webhook') {
     return new FeishuEventBridge({
       config: feishu,
       session,
@@ -773,9 +775,9 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
   return new FeishuWebSocketBridge({
     session,
     client,
-    appId: feishu.app_id,
+    appId: gatewayFeishu.appId,
     appSecret,
-    verificationToken: feishu.verification_token,
+    verificationToken: gatewayFeishu.verificationToken,
     markdownPreview,
   });
 }

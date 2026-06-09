@@ -236,8 +236,13 @@ case "${1:-}" in
     logs)
         logs "${2:-}"
         ;;
+    gateway)
+        ensure_built
+        shift
+        exec "$NODE_BIN" "$APP_ENTRY" gateway "$@"
+        ;;
     *)
-        echo "用法: $0 {start|connect|stop|restart|status|logs [-f]}"
+        echo "用法: $0 {start|connect|stop|restart|status|logs [-f]|gateway [setup|run|status]}"
         echo ""
         echo "命令:"
         echo "  start    - 启动 Metaclaw"
@@ -246,6 +251,7 @@ case "${1:-}" in
         echo "  restart  - 重启 Metaclaw"
         echo "  status   - 查看运行状态"
         echo "  logs     - 查看日志 (加 -f 实时跟踪)"
+        echo "  gateway  - Gateway 子命令透传，例如 gateway setup"
         exit 1
         ;;
 esac
