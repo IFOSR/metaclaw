@@ -229,6 +229,55 @@ describe('Feishu app helpers', () => {
     });
   });
 
+  it('splits long Feishu post rows so rich text nodes do not get truncated', () => {
+    const longLine = [
+      '如果把 MetaClaw 做成桌面端，我建议它不要定位成 AI 桌面助手，',
+      '而要定位成企业 AI Agent 工作台。'.repeat(80),
+    ].join('');
+    const markdownPost = createFeishuMarkdownPostContent(longLine);
+    const plainTextPost = createFeishuPlainTextPostContent(`**${longLine}**`);
+
+    const markdownRows = markdownPost.zh_cn.content.map(row => row[0]?.text ?? '');
+    const plainTextRows = plainTextPost.zh_cn.content.map(row => row[0]?.text ?? '');
+
+    expect(markdownRows.length).toBeGreaterThan(1);
+    expect(markdownRows.every(row => row.length <= 900)).toBe(true);
+    expect(markdownRows.join('')).toBe(longLine);
+    expect(plainTextRows.length).toBeGreaterThan(1);
+    expect(plainTextRows.every(row => row.length <= 900)).toBe(true);
+    expect(plainTextRows.join('')).toBe(longLine);
+  });
+
+  it('sends long final answers as bounded Feishu post rows', async () => {
+    const answer = [
+      '如果把 MetaClaw 做成桌面端，我建议它不要定位成 AI 桌面助手。',
+      '企业本地执行器负责把云端 Agent 的计划变成端侧可执行动作。'.repeat(90),
+    ].join('\n');
+    const postJson = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 }),
+        text: async () => 'ok',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0 }),
+        text: async () => 'ok',
+      });
+    const client = new FeishuAppClient({ app_id: 'cli_test', app_secret: 'secret' }, { postJson });
+
+    await client.sendMarkdownPostToChat('oc_chat', answer);
+
+    const body = postJson.mock.calls[1]?.[1] as { content: string };
+    const content = JSON.parse(body.content) as ReturnType<typeof createFeishuPlainTextPostContent>;
+    const rows = content.zh_cn.content.map(row => row[0]?.text ?? '');
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.every(row => row.length <= 900)).toBe(true);
+    expect(rows.join('\n').replace(/\n/g, '')).toBe(answer.replace(/\n/g, ''));
+  });
+
   it('builds Feishu card markdown with the first h1 promoted to the card header', () => {
     expect(createFeishuMarkdownCard([
       '# 关于启动 OPC 试点的公告',
@@ -760,7 +809,6 @@ describe('Feishu app helpers', () => {
       '✓ 任务完成 (3.2s)',
     ].join('\n'));
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '最终答案');
-    expect(session.subscribe).toHaveBeenCalled();
   });
 
   it('streams task failure to Feishu when session subscription is available', async () => {
@@ -972,6 +1020,88 @@ describe('Feishu app helpers', () => {
     expect(reply).not.toContain('会话近期上下文');
     expect(reply).not.toContain('Reference Context Pack');
     expect(reply).not.toContain('任务#task_old');
+  });
+
+  it('uses the full appended executor output instead of truncated summary when earlier task logs contain internal context', () => {
+    const fullAnswer = [
+      '如果把 MetaClaw 做成桌面端，我建议它不要定位成“AI 桌面助手”，更不要定位成“个人知识管理”，而应定位成：',
+      '',
+      '**企业 AI Agent 工作台：运行在员工本地桌面的任务连续性、上下文接入与多执行器调度中枢。**',
+      '',
+      '**MetaClaw Desktop = 企业员工电脑上的 AI 工作调度台。它负责把本地文件、浏览器、IM、企业系统、执行器 CLI 和长期任务状态连接起来，让 AI 能跨中断、跨工具、跨天持续推进工作。**',
+      '',
+      '它的核心不是“聊天”，而是三件事：',
+      '',
+      '1. **把桌面变成企业工作的感知入口**',
+      '2. **把 AI 执行变成可管理的任务流**',
+      '3. **把多个 Agent / CLI / 企业系统统一调度**',
+    ].join('\n');
+    const truncatedSummary = fullAnswer.slice(0, 200);
+
+    const reply = formatFeishuReply([
+      '任务 #task_desktop 已创建：MetaClaw 桌面端定位',
+      '→ 正在执行任务 #task_desktop...',
+      '+ #task_desktop 已启动 codex-cli 执行器',
+      '+ #task_desktop 工作目录：/home/ylfego/Program/metaclaw',
+      '+ #task_desktop 文件输出目标：/home/ylfego/Program/metaclaw/metaclaw-tasks/task_desktop',
+      '+ #task_desktop 会话近期上下文：',
+      '+ #task_desktop [任务#task_old] 用户：之前的问题',
+      '✓ 任务完成 (81.8s)',
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      `│ 摘要: ${truncatedSummary}`,
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '',
+      fullAnswer,
+    ]);
+
+    expect(reply).toBe(fullAnswer);
+    expect(reply).toContain('3. **把多个 Agent / CLI / 企业系统统一调度**');
+    expect(reply).not.toBe(truncatedSummary);
+    expect(reply).not.toContain('工作目录');
+    expect(reply).not.toContain('/home/ylfego');
+  });
+
+  it('cleans full prefixed executor output for Feishu instead of falling back to the truncated task result summary', () => {
+    const fullAnswer = [
+      '我换一种方式讲：**你们的知识管理产品不要把自己定义成“文档管理/知识库”，而要定义成“企业业务决策系统的知识底座”。**',
+      '',
+      '飞书强的是“把企业已有信息收进来、整理好、让人和 Agent 能查”。但这仍然偏向**信息管理**。',
+      '',
+      '你们如果要有不可替代性，应该往更深一层走：不是帮企业“存知识”，而是帮企业把业务世界建模出来，让知识能直接参与判断、推演和行动。',
+      '',
+      '**不要做“知识的仓库”，要做“业务对象 + 关系 + 决策 + 行动”的系统。**',
+      '',
+      '因为这需要深度理解行业业务对象、业务规则、业务流程和决策逻辑，不只是文档能力。',
+    ].join('\n');
+    const truncatedSummary = fullAnswer.slice(0, 200);
+
+    const reply = formatFeishuReply([
+      '任务 #task_knowledge 已创建：详细解释知识管理定位',
+      '→ 正在执行任务 #task_knowledge...',
+      '+ #task_knowledge 已启动 codex-cli 执行器',
+      '+ #task_knowledge [codex-cli] 工作目录：/home/ylfego/Program/metaclaw',
+      '+ #task_knowledge [codex-cli] 会话近期上下文：',
+      '+ #task_knowledge [codex-cli] [任务#task_old] 用户：之前的问题',
+      ...fullAnswer.split('\n').map(line => `+ #task_knowledge [codex-cli] ${line}`),
+      '+ #task_knowledge [codex-cli] tokens used',
+      '+ #task_knowledge [codex-cli] 1,548',
+      '✓ 任务完成 (28.0s)',
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      `│ 摘要: ${truncatedSummary}`,
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+    ]);
+
+    expect(reply).toBe(fullAnswer);
+    expect(reply).toContain('业务对象 + 关系 + 决策 + 行动');
+    expect(reply).not.toBe(truncatedSummary);
+    expect(reply).not.toContain('#task_knowledge');
+    expect(reply).not.toContain('[codex-cli]');
+    expect(reply).not.toContain('工作目录');
+    expect(reply).not.toContain('会话近期上下文');
   });
 
   it('extracts the urgent task final answer before auto-resumed task progress in Feishu replies', () => {
@@ -1440,7 +1570,7 @@ describe('Feishu app helpers', () => {
     expect(finalTexts.join('\n')).toContain('3. **安全边界代理**');
   });
 
-  it('delivers complete final answers through Feishu post messages in the handler path', async () => {
+  it('delivers complete Markdown final answers through Feishu cards in the handler path', async () => {
     const fullAnswer = [
       '我换一种方式讲：**你们的知识管理产品不要把自己定义成“文档管理/知识库”，而要定义成“企业业务决策系统的知识底座”。**',
       '',
@@ -1499,13 +1629,133 @@ describe('Feishu app helpers', () => {
       seenMessageIds: new Set<string>(),
     });
 
-    expect(client.sendMarkdownPostToChat).toHaveBeenCalledWith('oc_chat', fullAnswer);
-    expect(client.sendMarkdownPostToChat.mock.calls[0]?.[1]).toContain('**第二层：Ontology / 业务对象建模**');
-    expect(client.sendMarkdownPostToChat.mock.calls[0]?.[1]).toContain('**第三层：决策与行动**');
+    const cardTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(cardTexts.join('\n')).toContain('**处理步骤**');
+    expect(cardTexts).toContain(fullAnswer);
+    expect(cardTexts.join('\n')).toContain('**第二层：Ontology / 业务对象建模**');
+    expect(cardTexts.join('\n')).toContain('**第三层：决策与行动**');
+    expect(client.sendMarkdownPostToChat).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Feishu rich text when one Markdown card chunk fails and still sends later chunks', async () => {
+    const fullAnswer = [
+      '第一段必须送达。'.repeat(120),
+      '第二段也必须送达，不能因为前一段富文本失败而丢失。'.repeat(80),
+    ].join('\n\n');
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 完整输出长答案',
+            '任务 #task_chunks 已创建：完整输出长答案',
+            '+ #task_chunks 已启动 codex-cli 执行器',
+            ...fullAnswer.split('\n').map(line => `+ #task_chunks ${line}`),
+            '+ #task_chunks tokens used',
+            '+ #task_chunks 1,548',
+            '✓ 任务完成 (68.0s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 第一段必须送达。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('card chunk rejected'))
+        .mockResolvedValue(undefined),
+      sendMarkdownPostToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_chunk_fallback',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"完整输出长答案"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const cardChunks = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    const postChunks = client.sendMarkdownPostToChat.mock.calls.map(([, text]) => text);
+    expect(postChunks.join('\n')).toContain('第一段必须送达');
+    expect(cardChunks.join('\n')).toContain('第二段也必须送达');
+    expect(session.appendSystemMessage).toHaveBeenCalledWith(
+      expect.stringContaining('回发失败，改用富文本'),
+    );
+  });
+
+  it('sends the complete final answer as a file when any reply chunk cannot be delivered', async () => {
+    const fullAnswer = [
+      '第一段必须送达。'.repeat(120),
+      '第二段也必须送达，不能因为前一段失败而丢失。'.repeat(80),
+    ].join('\n\n');
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> 完整输出长答案',
+            '任务 #task_file_fallback 已创建：完整输出长答案',
+            '+ #task_file_fallback 已启动 codex-cli 执行器',
+            ...fullAnswer.split('\n').map(line => `+ #task_file_fallback ${line}`),
+            '+ #task_file_fallback tokens used',
+            '+ #task_file_fallback 1,548',
+            '✓ 任务完成 (68.0s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: 第一段必须送达。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('card chunk rejected'))
+        .mockResolvedValue(undefined),
+      sendMarkdownPostToChat: vi.fn()
+        .mockRejectedValueOnce(new Error('post chunk rejected'))
+        .mockResolvedValue(undefined),
+      uploadFile: vi.fn().mockResolvedValue('file_key_full_reply'),
+      sendFileToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_file_fallback',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"完整输出长答案"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
     expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
-      .toContain('**处理步骤**');
-    expect(client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text).join('\n'))
-      .not.toContain('**第二层：Ontology / 业务对象建模**');
+      .toContain('下面将同步完整答案文件');
+    expect(client.uploadFile).toHaveBeenCalledTimes(1);
+    const uploadedPath = client.uploadFile.mock.calls[0]?.[0] as string;
+    expect(readFileSync(uploadedPath, 'utf-8')).toBe(`${fullAnswer}\n`);
+    expect(client.sendFileToChat).toHaveBeenCalledWith('oc_chat', 'file_key_full_reply');
   });
 
   it('keeps Feishu replies scoped to the submitted task across urgent preemption and resume', async () => {

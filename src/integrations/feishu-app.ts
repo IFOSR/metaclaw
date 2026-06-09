@@ -57,6 +57,7 @@ interface DownloadedFeishuResource {
 const FEISHU_TYPING_REACTION = 'Typing';
 const FEISHU_REPLY_WAIT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const FEISHU_REPLY_MESSAGE_MAX_LENGTH = 1200;
+const FEISHU_POST_ROW_MAX_LENGTH = 900;
 const FEISHU_CARD_MARKDOWN_ELEMENT_MAX_LENGTH = 900;
 const FEISHU_REPLY_TERMINAL_SETTLE_MS = 300;
 
@@ -723,20 +724,7 @@ export async function handleFeishuMessageEvent(
       await flushProgress();
       await progressSendQueue;
       const chunks = splitForFeishu(reply);
-      const suppressFinalReply = deps.session.subscribe
-        && chunks.length === 1
-        && sentProgressSteps.has(chunks[0] ?? '');
-      if (!suppressFinalReply) {
-        if (deps.client.sendMarkdownPostToChat) {
-          for (const chunk of chunks) {
-            await deps.client.sendMarkdownPostToChat(chatId, chunk);
-          }
-        } else {
-          for (const chunk of chunks) {
-            await deps.client.sendMarkdownCardToChat(chatId, chunk);
-          }
-        }
-      }
+      await sendFeishuFinalReplyChunks(chatId, chunks, deps);
       await sendArtifactFilesToFeishu(chatId, replyOutputLines, deps);
     } catch (error) {
       deps.session.appendSystemMessage(`⚠️ 飞书消息回发失败: ${(error as Error).message}`);
@@ -1211,7 +1199,7 @@ function createFeishuMarkdownPostRows(markdown: string): FeishuPostRow[] {
     return [[{ tag: 'md', text: '' }]];
   }
   if (!markdown.includes('```')) {
-    return [[{ tag: 'md', text: markdown }]];
+    return splitFeishuPostRowText(markdown).map(text => [{ tag: 'md' as const, text }]);
   }
 
   const rows: FeishuPostRow[] = [];
@@ -1224,7 +1212,7 @@ function createFeishuMarkdownPostRows(markdown: string): FeishuPostRow[] {
     }
     const segment = current.join('\n');
     if (segment.trim()) {
-      rows.push([{ tag: 'md', text: segment }]);
+      rows.push(...splitFeishuPostRowText(segment).map(text => [{ tag: 'md' as const, text }]));
     }
     current = [];
   };
@@ -1260,8 +1248,31 @@ function createFeishuPlainTextPostRows(markdown: string): FeishuRichTextPostRow[
     return [[{ tag: 'text', text: '' }]];
   }
 
-  const rows = text.split('\n').map(line => [{ tag: 'text' as const, text: line }]);
+  const rows = text
+    .split('\n')
+    .flatMap(line => splitFeishuPostRowText(line).map(chunk => [{ tag: 'text' as const, text: chunk }]));
   return rows.length > 0 ? rows : [[{ tag: 'text', text }]];
+}
+
+function splitFeishuPostRowText(text: string, maxLength = FEISHU_POST_ROW_MAX_LENGTH): string[] {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLength) {
+    const splitAt = findFeishuSplitPoint(remaining, maxLength);
+    const chunk = remaining.slice(0, splitAt).trimEnd();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    remaining = remaining.slice(splitAt).replace(/^\n+/, '');
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks.length > 0 ? chunks : [text.slice(0, maxLength)];
 }
 
 function stripFeishuMarkdownForPlainText(markdown: string): string {
@@ -1407,16 +1418,18 @@ function appendPendingFeishuResourcesToText(
 
 export function formatFeishuReply(outputLines: string[]): string {
   const appendedResultOutput = extractAppendedTaskResultOutput(outputLines);
-  const hasInternalExecutorContext = hasInternalExecutorContextInTaskOutput(outputLines);
-  if (appendedResultOutput && !hasInternalExecutorContext) {
+  if (appendedResultOutput && !containsInternalExecutorContext(appendedResultOutput)) {
     return appendedResultOutput;
   }
 
-  const executorAnswer = hasInternalExecutorContext
-    ? extractLatestTaskSummary(outputLines)
-    : extractLatestExecutorAnswer(outputLines);
+  const executorAnswer = extractLatestExecutorAnswer(outputLines);
   if (executorAnswer) {
     return executorAnswer;
+  }
+
+  const hasInternalExecutorContext = hasInternalExecutorContextInTaskOutput(outputLines);
+  if (hasInternalExecutorContext) {
+    return extractLatestTaskSummary(outputLines) ?? '';
   }
 
   return outputLines
@@ -1658,6 +1671,82 @@ async function sendArtifactFilesToFeishu(
       deps.session.appendSystemMessage(`⚠️ 飞书任务产物同步失败: ${artifactPath}: ${(error as Error).message}`);
       await deps.client.sendMarkdownCardToChat(chatId, `⚠️ 任务产物同步失败：${basename(artifactPath)}`);
     }
+  }
+}
+
+async function sendFeishuFinalReplyChunks(
+  chatId: string,
+  chunks: string[],
+  deps: FeishuMessageHandlerDeps,
+): Promise<void> {
+  const failedChunks: Array<{ index: number; errors: string[] }> = [];
+
+  for (const [index, chunk] of chunks.entries()) {
+    let sent = false;
+    const errors: string[] = [];
+
+    try {
+      await deps.client.sendMarkdownCardToChat(chatId, chunk);
+      sent = true;
+    } catch (error) {
+      errors.push(`消息卡: ${(error as Error).message}`);
+      deps.session.appendSystemMessage(`⚠️ 飞书 Markdown 消息卡分片 ${index + 1}/${chunks.length} 回发失败，改用富文本: ${(error as Error).message}`);
+    }
+
+    if (sent) {
+      continue;
+    }
+
+    if (deps.client.sendMarkdownPostToChat) {
+      try {
+        await deps.client.sendMarkdownPostToChat(chatId, chunk);
+        sent = true;
+      } catch (error) {
+        errors.push(`富文本: ${(error as Error).message}`);
+        deps.session.appendSystemMessage(`⚠️ 飞书富文本分片 ${index + 1}/${chunks.length} 回发失败: ${(error as Error).message}`);
+      }
+    } else {
+      errors.push('富文本: 当前客户端不支持富文本发送');
+    }
+
+    if (!sent) {
+      failedChunks.push({ index, errors });
+    }
+  }
+
+  if (failedChunks.length > 0) {
+    await sendFeishuCompleteReplyFallback(chatId, chunks.join(''), failedChunks, deps);
+  }
+}
+
+async function sendFeishuCompleteReplyFallback(
+  chatId: string,
+  fullReply: string,
+  failedChunks: Array<{ index: number; errors: string[] }>,
+  deps: FeishuMessageHandlerDeps,
+): Promise<void> {
+  const failedLabels = failedChunks.map(chunk => `第 ${chunk.index + 1} 段`).join('、');
+  const warning = `⚠️ 飞书部分回复分片未能直接送达（${failedLabels}）。下面将同步完整答案文件，避免内容缺失。`;
+  try {
+    await deps.client.sendMarkdownCardToChat(chatId, warning);
+  } catch (error) {
+    deps.session.appendSystemMessage(`⚠️ 飞书完整答案兜底提示发送失败: ${(error as Error).message}`);
+  }
+
+  if (!deps.client.uploadFile || !deps.client.sendFileToChat) {
+    deps.session.appendSystemMessage('⚠️ 飞书完整答案文件兜底失败: 当前客户端不支持文件上传');
+    return;
+  }
+
+  try {
+    const outputDir = resolve(resolveMetaclawDir(), 'feishu-replies');
+    mkdirSync(outputDir, { recursive: true });
+    const filePath = resolve(outputDir, `metaclaw-reply-${Date.now()}.md`);
+    writeFileSync(filePath, fullReply.trimEnd() + '\n', 'utf-8');
+    const fileKey = await deps.client.uploadFile(filePath);
+    await deps.client.sendFileToChat(chatId, fileKey);
+  } catch (error) {
+    deps.session.appendSystemMessage(`⚠️ 飞书完整答案文件兜底失败: ${(error as Error).message}`);
   }
 }
 
@@ -2158,9 +2247,6 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
   const answer = trimBlankLines(answerLines).join('\n').trim();
   const taskResultBody = extractLatestTaskResultBody(outputLines);
   const taskSummary = extractLatestTaskSummary(outputLines);
-  if (hasInternalExecutorContextInTaskOutput(outputLines)) {
-    return taskResultBody || taskSummary;
-  }
   if (answer && containsInternalExecutorContext(answer)) {
     return taskResultBody || taskSummary;
   }
@@ -2259,6 +2345,8 @@ function isInternalExecutorContextLine(line: string): boolean {
     || /^可复用内容\s*[:：]/.test(normalized)
     || /^边界声明\s*[:：]/.test(normalized)
     || /^输出处理\s*[:：]/.test(normalized)
+    || /^已找到原任务本地\s+Markdown\b/.test(normalized)
+    || /作为本次任务产物放入目标目录/.test(normalized)
     || /^参考来源\s*[:：]/.test(normalized)
     || /^必须把结果写入本地文件系统/.test(normalized)
     || /^所有本次任务生成的文件/.test(normalized)
