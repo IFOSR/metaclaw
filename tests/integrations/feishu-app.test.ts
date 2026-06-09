@@ -126,6 +126,44 @@ describe('FeishuAppClient', () => {
     expect(existsSync(downloaded.path)).toBe(true);
     expect(readFileSync(downloaded.path, 'utf-8')).toBe('uploaded content');
   });
+
+  it('falls back to a plain text card when Feishu rejects Markdown card content', async () => {
+    const postJson = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 }),
+        text: async () => 'ok',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200905, msg: 'Failed to create card content' }),
+        text: async () => 'bad card',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0 }),
+        text: async () => 'ok',
+      });
+    const client = new FeishuAppClient({ app_id: 'cli_test', app_secret: 'secret' }, { postJson });
+
+    await client.sendMarkdownCardToChat('oc_chat', [
+      'MetaClaw 桌面端的特殊定位应该是：',
+      '',
+      '**MetaClaw Desktop Runtime**',
+      '',
+      '后续建议：优先做后台常驻运行时、任务面板、授权面板。',
+    ].join('\n'));
+
+    expect(postJson).toHaveBeenCalledTimes(3);
+    const fallbackBody = postJson.mock.calls[2]?.[1] as { content: string };
+    const fallbackCard = JSON.parse(fallbackBody.content) as ReturnType<typeof createFeishuMarkdownCard>;
+    expect('elements' in fallbackCard ? fallbackCard.elements[0]?.text.tag : null).toBe('plain_text');
+    expect(fallbackBody.content).toContain('MetaClaw Desktop Runtime');
+    expect(fallbackBody.content).toContain('后续建议');
+  });
 });
 
 describe('Feishu app helpers', () => {
@@ -1282,8 +1320,84 @@ describe('Feishu app helpers', () => {
       '✓ 任务完成 (12.4s)',
     ].join('\n'));
     expect(sentTexts.slice(1).join('')).toBe(longAnswer);
-    expect(sentTexts.every(text => text.length <= 3500)).toBe(true);
+    expect(sentTexts.every(text => text.length <= 1200)).toBe(true);
     expect(sentTexts.join('')).not.toContain('[已截断]');
+  });
+
+  it('splits final Feishu replies at safe boundaries instead of cutting Markdown phrases', async () => {
+    const lead = [
+      'MetaClaw 桌面端的特殊定位应该是：',
+      '',
+      '企业级本地执行器，不是桌面聊天机器人。',
+      '',
+      '它的核心价值不是让用户在桌面上和 AI 聊天，而是让 MetaClaw 能进入真实工作现场：员工电脑、本地文件、浏览器、Office、飞书、企业内网系统、VPN、截图、剪贴板、表格、邮件、审批页面等，把云端 Agent 的计划变成端侧可执行动作。',
+      '',
+      '一句话定位可以是：',
+      '',
+    ].join('\n');
+    const padding = '这段补充说明用于把分片边界推到关键 Markdown 短语附近，确保飞书不会把粗体英文定位切成半截。'.repeat(8);
+    const fullAnswer = [
+      lead,
+      padding,
+      '',
+      '**MetaClaw Desktop Runtime / 企业 Agent 执行节点。**',
+      '',
+      '1. **端侧 Executor**',
+      '桌面端负责执行本地动作：打开文件、读写表格、操作浏览器、调用本地 CLI、访问内网系统。',
+      '',
+      '2. **企业工作现场接管器**',
+      '很多企业系统没有 API，或者 API 权限难批。桌面端可以通过 UI 自动化完成最后一公里执行。',
+      '',
+      '3. **安全边界代理**',
+      '敏感数据不一定全部上传云端，桌面端可以做本地解析、本地脱敏和本地权限判断。',
+    ].join('\n');
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({
+          output: [
+            'before',
+            '> MetaClaw 桌面端定位',
+            '任务 #task_desktop 已创建：MetaClaw 桌面端定位',
+            '+ #task_desktop 已启动 codex-cli 执行器',
+            ...fullAnswer.split('\n').map(line => `+ #task_desktop ${line}`),
+            '+ #task_desktop tokens used',
+            '+ #task_desktop 1,234',
+            '✓ 任务完成 (68.0s)',
+            '┌─ 任务结果 ───────────────────────────────────────┐',
+            '│ 摘要: MetaClaw 桌面端的特殊定位应该是企业级本地执行器。',
+            '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+            '└──────────────────────────────────────────────────┘',
+          ],
+        }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_desktop',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"MetaClaw 桌面端定位"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const finalTexts = client.sendMarkdownCardToChat.mock.calls
+      .map(([, text]) => text)
+      .filter(text => typeof text === 'string' && !text.startsWith('**处理步骤**'));
+    expect(finalTexts.join('')).toBe(fullAnswer);
+    expect(finalTexts.some(text => text.endsWith('**MetaClaw Des'))).toBe(false);
+    expect(finalTexts.join('\n')).toContain('3. **安全边界代理**');
   });
 
   it('keeps Feishu replies scoped to the submitted task across urgent preemption and resume', async () => {

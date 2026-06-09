@@ -111,7 +111,7 @@ type FeishuMarkdownCardElement =
   {
       tag: 'div';
       text: {
-        tag: 'lark_md';
+        tag: 'lark_md' | 'plain_text';
         content: string;
       };
     };
@@ -207,7 +207,7 @@ export class FeishuAppClient {
       );
       const payload = await response.json() as { code?: number; msg?: string };
       if (!response.ok || payload.code !== 0) {
-        throw new Error(`飞书消息发送失败: ${payload.msg ?? response.status}`);
+        throw new Error(`飞书消息发送失败: ${payload.code ?? response.status}${payload.msg ? ` ${payload.msg}` : ''}`);
       }
     };
 
@@ -215,10 +215,20 @@ export class FeishuAppClient {
     try {
       await sendCard(card);
     } catch (error) {
-      if (!isFeishuTableCard(card) || !isFeishuCardContentError(error)) {
-        throw error;
+      let fallbackError = error;
+      if (isFeishuTableCard(card) && isFeishuCardContentError(error)) {
+        try {
+          await sendCard(createFeishuMarkdownCard(markdown, { tableMode: 'markdown' }));
+          return;
+        } catch (tableFallbackError) {
+          fallbackError = tableFallbackError;
+        }
       }
-      await sendCard(createFeishuMarkdownCard(markdown, { tableMode: 'markdown' }));
+      if (isFeishuCardContentError(fallbackError)) {
+        await sendCard(createFeishuPlainTextCard(markdown));
+        return;
+      }
+      throw fallbackError;
     }
   }
 
@@ -850,10 +860,11 @@ function extractFeishuCardTitle(markdown: string): { title: string | null; conte
 
 function createFeishuMarkdownCardElements(
   markdown: string,
-  options: { tableMode?: 'native' | 'markdown' } = {},
+  options: { tableMode?: 'native' | 'markdown'; textTag?: 'lark_md' | 'plain_text' } = {},
 ): FeishuMarkdownCardV1['elements'] {
   const segments = splitFeishuMarkdownTableSegments(markdown);
   const elements: FeishuMarkdownCardV1['elements'] = [];
+  const textTag = options.textTag ?? 'lark_md';
 
   for (const segment of segments) {
     if (segment.kind === 'markdown') {
@@ -862,7 +873,7 @@ function createFeishuMarkdownCardElements(
         elements.push({
           tag: 'div' as const,
           text: {
-            tag: 'lark_md' as const,
+            tag: textTag,
             content: contentChunk,
           },
         });
@@ -874,7 +885,7 @@ function createFeishuMarkdownCardElements(
       elements.push({
         tag: 'div' as const,
         text: {
-          tag: 'lark_md' as const,
+          tag: textTag,
           content: segmentToMarkdownTable(segment),
         },
       });
@@ -885,7 +896,7 @@ function createFeishuMarkdownCardElements(
       elements.push({
         tag: 'div' as const,
         text: {
-          tag: 'lark_md' as const,
+          tag: textTag,
           content: contentChunk,
         },
       });
@@ -897,10 +908,34 @@ function createFeishuMarkdownCardElements(
     : [{
         tag: 'div' as const,
         text: {
-          tag: 'lark_md' as const,
+          tag: textTag,
           content: '',
         },
       }];
+}
+
+function createFeishuPlainTextCard(markdown: string): FeishuMarkdownCardV1 {
+  const { title, content } = extractFeishuCardTitle(markdown);
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    ...(title
+      ? {
+          header: {
+            template: 'blue' as const,
+            title: {
+              tag: 'plain_text' as const,
+              content: title,
+            },
+          },
+        }
+      : {}),
+    elements: createFeishuMarkdownCardElements(content, {
+      tableMode: 'markdown',
+      textTag: 'plain_text',
+    }),
+  };
 }
 
 function createFeishuMarkdownCardV2Elements(markdown: string): FeishuMarkdownCardV2Element[] {
@@ -2387,11 +2422,36 @@ function splitForFeishu(text: string, maxLength = FEISHU_REPLY_MESSAGE_MAX_LENGT
 
 function findFeishuSplitPoint(text: string, maxLength: number): number {
   const hardLimit = Math.min(maxLength, text.length);
-  const newlineIndex = text.lastIndexOf('\n', hardLimit);
-  if (newlineIndex > 0) {
-    return newlineIndex + 1;
+  const minimumUsefulSplit = Math.floor(hardLimit * 0.45);
+  const preferredPatterns = [
+    /\n\s*\n/g,
+    /\n/g,
+    /[。！？；;]\s*/g,
+    /[，、：:]\s*/g,
+    /\s+/g,
+  ];
+
+  for (const pattern of preferredPatterns) {
+    const splitAt = findLastPatternSplitPoint(text, pattern, hardLimit);
+    if (splitAt > minimumUsefulSplit) {
+      return splitAt;
+    }
   }
   return hardLimit;
+}
+
+function findLastPatternSplitPoint(text: string, pattern: RegExp, hardLimit: number): number {
+  let splitAt = -1;
+  const window = text.slice(0, hardLimit);
+  pattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(window)) !== null) {
+    splitAt = match.index + match[0].length;
+    if (match[0].length === 0) {
+      pattern.lastIndex += 1;
+    }
+  }
+  return splitAt;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
