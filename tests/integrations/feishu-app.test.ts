@@ -476,7 +476,7 @@ describe('Feishu app helpers', () => {
     });
 
     expect(client.addReactionToMessage).toHaveBeenCalledWith('om_message', 'Typing');
-    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: false });
+    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: true });
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'metaclaw reply');
     expect(client.removeReactionFromMessage).toHaveBeenCalledWith('om_message', 'reaction_typing');
     expect(client.addReactionToMessage.mock.invocationCallOrder[0]).toBeLessThan(
@@ -547,7 +547,7 @@ describe('Feishu app helpers', () => {
       '',
       '关联飞书上传文件：',
       '"/tmp/metaclaw-feishu/report.txt"',
-    ].join('\n'), { awaitAsyncWork: false });
+    ].join('\n'), { awaitAsyncWork: true });
     expect(pendingResourcesByChatId.has('oc_chat')).toBe(false);
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'analysis reply');
   });
@@ -1471,11 +1471,95 @@ describe('Feishu app helpers', () => {
     );
     notify();
     resolveSubmit();
+    await vi.advanceTimersByTimeAsync(301);
     await handled;
 
     const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
     expect(sentTexts.join('\n')).toContain('long research full answer');
     expect(client.removeReactionFromMessage).toHaveBeenCalledWith('om_message_long_research', 'reaction_typing');
+  });
+
+  it('waits for terminal output to settle before sending the final Feishu answer', async () => {
+    vi.useFakeTimers();
+    const listeners = new Set<(snapshot: { output: string[] }) => void>();
+    const output = ['before'];
+    const notify = () => {
+      for (const listener of listeners) {
+        listener({ output: [...output] });
+      }
+    };
+    let resolveSubmit!: () => void;
+    const submitPromise = new Promise<{ exitRequested: false }>(resolve => {
+      resolveSubmit = () => resolve({ exitRequested: false });
+    });
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((callback: (snapshot: { output: string[] }) => void) => {
+        listeners.add(callback);
+        callback({ output: [...output] });
+        return () => {
+          listeners.delete(callback);
+        };
+      }),
+      submit: vi.fn().mockImplementation(() => submitPromise),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const handled = handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_settle',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"MetaClaw 是否应该做桌面版"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    await Promise.resolve();
+    output.push(
+      '> MetaClaw 是否应该做桌面版',
+      '任务 #task_settle 已创建：MetaClaw 是否应该做桌面版',
+      '→ 正在执行任务 #task_settle...',
+      '+ #task_settle 已启动 codex-cli 执行器',
+      '+ #task_settle 我判断：MetaClaw 应该做桌面版，但不能做成“又一个聊天客户端”。',
+      '✓ 任务完成 (68.0s)',
+    );
+    notify();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.sendMarkdownCardToChat).not.toHaveBeenCalledWith(
+      'oc_chat',
+      expect.stringContaining('我判断：MetaClaw 应该做桌面版'),
+    );
+
+    output.push(
+      '',
+      '┌─ 任务结果 ───────────────────────────────────────┐',
+      '│ 摘要: MetaClaw 应该做桌面版，但定位应是企业级 Desktop Agent Runtime。',
+      '│ 下一步: 如需继续，可基于当前结果继续创建 follow-up 任务',
+      '└──────────────────────────────────────────────────┘',
+      '',
+      '我判断：MetaClaw 应该做桌面版，但不能做成“又一个聊天客户端”，而应该做成企业级 Desktop Agent Runtime / 桌面执行器。',
+      '',
+      '完整结论：桌面版要解决本地文件读写、长任务、权限治理、Executor 管理和企业协作。',
+      '',
+      '后续建议：优先做后台常驻运行时、任务面板、授权面板和飞书/Terminal 双通道一致展示。',
+    );
+    notify();
+    resolveSubmit();
+    await vi.advanceTimersByTimeAsync(301);
+    await handled;
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('完整结论：桌面版要解决本地文件读写');
+    expect(sentTexts.join('\n')).toContain('后续建议：优先做后台常驻运行时');
   });
 
   it('streams resumed task guidance to Feishu after an urgent task completes', async () => {
@@ -1646,7 +1730,7 @@ describe('Feishu app helpers', () => {
     });
 
     expect(session.appendSystemMessage).toHaveBeenCalledWith('⚠️ 飞书 Typing 表情添加失败: missing reaction permission');
-    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: false });
+    expect(session.submit).toHaveBeenCalledWith('hello metaclaw', { awaitAsyncWork: true });
     expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'metaclaw reply');
     expect(client.removeReactionFromMessage).not.toHaveBeenCalled();
   });

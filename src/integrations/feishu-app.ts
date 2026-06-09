@@ -58,6 +58,7 @@ const FEISHU_TYPING_REACTION = 'Typing';
 const FEISHU_REPLY_WAIT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const FEISHU_REPLY_MESSAGE_MAX_LENGTH = 1200;
 const FEISHU_CARD_MARKDOWN_ELEMENT_MAX_LENGTH = 900;
+const FEISHU_REPLY_TERMINAL_SETTLE_MS = 300;
 
 type FeishuPostRow = Array<{
   tag: 'md';
@@ -649,7 +650,7 @@ export async function handleFeishuMessageEvent(
     let outputLines: string[];
     try {
       const textWithResources = appendPendingFeishuResourcesToText(text, chatId, deps.pendingResourcesByChatId);
-      const submitPromise = deps.session.submit(textWithResources, { awaitAsyncWork: false });
+      const submitPromise = deps.session.submit(textWithResources, { awaitAsyncWork: true });
       outputLines = await waitForFeishuReplyOutputLines(deps.session, before, submitPromise);
     } finally {
       unsubscribe?.();
@@ -1587,6 +1588,8 @@ async function waitForFeishuReplyOutputLines(
   let resolved = false;
   let unsubscribe: (() => void) | undefined;
   let timer: NodeJS.Timeout | null = null;
+  let settleTimer: NodeJS.Timeout | null = null;
+  let submitSettled = false;
 
   return await new Promise<string[]>(resolve => {
     const finish = (lines: string[]) => {
@@ -1597,8 +1600,26 @@ async function waitForFeishuReplyOutputLines(
       if (timer) {
         clearTimeout(timer);
       }
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+      }
       unsubscribe?.();
       resolve(lines);
+    };
+
+    const finishAfterTerminalSettle = () => {
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+      }
+      settleTimer = setTimeout(() => {
+        if (!submitSettled) {
+          return;
+        }
+        const scopedLines = targetTaskId
+          ? filterFeishuOutputLinesForTask(lastLines, targetTaskId)
+          : lastLines;
+        finish(scopedLines);
+      }, FEISHU_REPLY_TERMINAL_SETTLE_MS);
     };
 
     const inspect = (lines: string[]) => {
@@ -1607,8 +1628,12 @@ async function waitForFeishuReplyOutputLines(
       const scopedLines = targetTaskId
         ? filterFeishuOutputLinesForTask(lines, targetTaskId)
         : lines;
-      if (isFeishuReplyTerminal(scopedLines)) {
+      if (isFeishuPendingTerminal(scopedLines)) {
         finish(scopedLines);
+        return;
+      }
+      if (isFeishuExecutionTerminal(scopedLines)) {
+        finishAfterTerminalSettle();
       }
     };
 
@@ -1618,12 +1643,14 @@ async function waitForFeishuReplyOutputLines(
 
     void submitPromise
       .then(() => {
+        submitSettled = true;
         inspect(session.getSnapshot().output.slice(before));
         if (!resolved && !targetTaskId) {
           finish(session.getSnapshot().output.slice(before));
         }
       })
       .catch(() => {
+        submitSettled = true;
         finish(session.getSnapshot().output.slice(before));
       });
 
@@ -1636,10 +1663,13 @@ async function waitForFeishuReplyOutputLines(
   });
 }
 
-function isFeishuReplyTerminal(outputLines: string[]): boolean {
+function isFeishuExecutionTerminal(outputLines: string[]): boolean {
   return outputLines.some(line => /^✓\s+任务完成/.test(line.trim()))
-    || outputLines.some(line => /^✗\s+执行/.test(line.trim()))
-    || Boolean(formatFeishuPendingReply(outputLines));
+    || outputLines.some(line => /^✗\s+执行/.test(line.trim()));
+}
+
+function isFeishuPendingTerminal(outputLines: string[]): boolean {
+  return Boolean(formatFeishuPendingReply(outputLines));
 }
 
 function cleanFeishuReplyLine(line: string): string | null {
