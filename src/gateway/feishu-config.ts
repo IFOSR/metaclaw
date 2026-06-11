@@ -11,6 +11,7 @@ export interface ResolvedFeishuGatewayConfig {
   eventPort: number;
   eventPath: string;
   verificationToken?: string;
+  encryptKeyEnv?: string;
   source: 'gateway' | 'legacy-integration' | 'default';
 }
 
@@ -34,6 +35,7 @@ export function resolveFeishuGatewayConfig(config: Config): ResolvedFeishuGatewa
     eventPort: gatewayFeishu?.event_port ?? legacyFeishu?.event_port ?? 8787,
     eventPath: gatewayFeishu?.event_path ?? legacyFeishu?.event_path ?? '/feishu/events',
     verificationToken: gatewayFeishu?.verification_token ?? legacyFeishu?.verification_token,
+    encryptKeyEnv: gatewayFeishu?.encrypt_key_env,
     source,
   };
 }
@@ -48,6 +50,7 @@ export function toFeishuAppConfig(config: ResolvedFeishuGatewayConfig): FeishuAp
     event_port: config.eventPort,
     event_path: config.eventPath,
     verification_token: config.verificationToken,
+    ...(config.encryptKeyEnv ? { encrypt_key_env: config.encryptKeyEnv } : {}),
   };
 }
 

@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
+import { createCipheriv, createHash, randomBytes } from 'crypto';
 import {
   appendMarkdownPreviewLinks,
   createFeishuMarkdownCard,
   createFeishuMarkdownPostContent,
   createFeishuPlainTextPostContent,
   createFeishuBridge,
+  decryptFeishuEventPayload,
+  FeishuEventBridge,
   createFeishuWebSocketEventHandlers,
   extractArtifactPaths,
   extractMarkdownArtifactPaths,
@@ -23,6 +26,17 @@ import {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+function encryptFeishuTestPayload(payload: Record<string, unknown>, encryptKey: string): string {
+  const key = createHash('sha256').update(encryptKey).digest();
+  const iv = randomBytes(16);
+  const cipher = createCipheriv('aes-256-cbc', key, iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), 'utf-8'),
+    cipher.final(),
+  ]).toString('base64');
+}
 
 describe('FeishuAppClient', () => {
   it('fetches tenant access token, sends Markdown cards, and manages reactions', async () => {
@@ -209,6 +223,13 @@ describe('FeishuAppClient', () => {
 describe('Feishu app helpers', () => {
   it('parses text message content payloads', () => {
     expect(parseFeishuTextContent('{"text":"hi metaclaw"}')).toBe('hi metaclaw');
+  });
+
+  it('decrypts Feishu encrypted webhook payloads', () => {
+    const payload = { event: { message: { message_id: 'om_encrypted' } } };
+    const encrypted = encryptFeishuTestPayload(payload, 'encrypt-secret');
+
+    expect(decryptFeishuEventPayload(encrypted, 'encrypt-secret')).toEqual(payload);
   });
 
   it('builds Feishu post markdown content with isolated fenced code blocks', () => {
@@ -622,6 +643,211 @@ describe('Feishu app helpers', () => {
     expect(session.submit).not.toHaveBeenCalled();
   });
 
+  it('handles Feishu webhook events through the HTTP bridge', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({ output: ['before', 'webhook reply'] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = new FeishuEventBridge({
+      client,
+      session: session as never,
+      config: {
+        enabled: true,
+        mode: 'webhook',
+        app_id: 'cli_test',
+        app_secret: 'secret',
+        event_port: 0,
+        event_path: '/feishu/events',
+        verification_token: 'token',
+      },
+    });
+
+    await bridge.start();
+    const address = (bridge as any).server.address();
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/feishu/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          header: {
+            event_type: 'im.message.receive_v1',
+            token: 'token',
+          },
+          event: {
+            message: {
+              message_id: 'om_webhook',
+              chat_id: 'oc_chat',
+              chat_type: 'p2p',
+              message_type: 'text',
+              content: '{"text":"from webhook"}',
+            },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ code: 0 });
+      expect(session.submit).toHaveBeenCalledWith('from webhook', { awaitAsyncWork: true });
+      expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'webhook reply');
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it('handles encrypted Feishu webhook events through the HTTP bridge', async () => {
+    const previousEncryptKey = process.env.TEST_FEISHU_ENCRYPT_KEY;
+    process.env.TEST_FEISHU_ENCRYPT_KEY = 'encrypt-secret';
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({ output: ['before', 'encrypted reply'] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = new FeishuEventBridge({
+      client,
+      session: session as never,
+      config: {
+        enabled: true,
+        mode: 'webhook',
+        app_id: 'cli_test',
+        app_secret: 'secret',
+        event_port: 0,
+        event_path: '/feishu/events',
+        verification_token: 'token',
+        encrypt_key_env: 'TEST_FEISHU_ENCRYPT_KEY',
+      },
+    });
+
+    await bridge.start();
+    const address = (bridge as any).server.address();
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/feishu/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          encrypt: encryptFeishuTestPayload({
+            header: {
+              event_type: 'im.message.receive_v1',
+              token: 'token',
+            },
+            event: {
+              message: {
+                message_id: 'om_encrypted_webhook',
+                chat_id: 'oc_chat',
+                chat_type: 'p2p',
+                message_type: 'text',
+                content: '{"text":"encrypted webhook"}',
+              },
+            },
+          }, 'encrypt-secret'),
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(session.submit).toHaveBeenCalledWith('encrypted webhook', { awaitAsyncWork: true });
+      expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith('oc_chat', 'encrypted reply');
+    } finally {
+      await bridge.stop();
+      if (previousEncryptKey === undefined) {
+        delete process.env.TEST_FEISHU_ENCRYPT_KEY;
+      } else {
+        process.env.TEST_FEISHU_ENCRYPT_KEY = previousEncryptKey;
+      }
+    }
+  });
+
+  it('updates Gateway Feishu home channel through webhook /sethome command', async () => {
+    const metaclawDir = mkdtempSync(resolve(tmpdir(), 'metaclaw-feishu-home-'));
+    const configPath = resolve(metaclawDir, 'config.yaml');
+    writeFileSync(configPath, [
+      'gateway:',
+      '  enabled: true',
+      '  platforms:',
+      '    feishu:',
+      '      enabled: true',
+      '      app_id: cli_home',
+      '',
+    ].join('\n'));
+    const session = {
+      getSnapshot: vi.fn().mockReturnValue({ output: [] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = new FeishuEventBridge({
+      client,
+      session: session as never,
+      config: {
+        enabled: true,
+        mode: 'webhook',
+        app_id: 'cli_test',
+        app_secret: 'secret',
+        event_port: 0,
+        event_path: '/feishu/events',
+        verification_token: 'token',
+      },
+      gatewayConfig: {
+        configPath,
+        accessPolicy: {
+          dmPolicy: 'allow_all',
+          allowedUsers: [],
+          groupPolicy: 'open',
+          requireMention: true,
+        },
+      },
+    });
+
+    await bridge.start();
+    const address = (bridge as any).server.address();
+    try {
+      await fetch(`http://127.0.0.1:${address.port}/feishu/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          header: {
+            event_type: 'im.message.receive_v1',
+            token: 'token',
+          },
+          event: {
+            sender: {
+              sender_id: { open_id: 'ou_user' },
+            },
+            message: {
+              message_id: 'om_sethome_webhook',
+              chat_id: 'oc_home',
+              chat_type: 'p2p',
+              message_type: 'text',
+              content: '{"text":"/sethome"}',
+            },
+          },
+        }),
+      });
+
+      expect(readFileSync(configPath, 'utf-8')).toContain('home_channel: oc_home');
+      expect(session.submit).not.toHaveBeenCalled();
+    } finally {
+      await bridge.stop();
+    }
+  });
+
   it('submits websocket message events to Metaclaw and replies to the source chat', async () => {
     const session = {
       getSnapshot: vi.fn()
@@ -659,6 +885,141 @@ describe('Feishu app helpers', () => {
     expect(client.removeReactionFromMessage.mock.invocationCallOrder[0]).toBeGreaterThan(
       client.sendMarkdownCardToChat.mock.invocationCallOrder[0],
     );
+  });
+
+  it('handles /sethome without submitting a task', async () => {
+    const session = {
+      getSnapshot: vi.fn().mockReturnValue({ output: [] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+    const setHomeChannel = vi.fn();
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_sethome',
+        chat_id: 'oc_home',
+        message_type: 'text',
+        content: '{"text":"/sethome"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      setHomeChannel,
+    });
+
+    expect(setHomeChannel).toHaveBeenCalledWith('oc_home');
+    expect(session.submit).not.toHaveBeenCalled();
+    expect(client.sendMarkdownCardToChat).toHaveBeenCalledWith(
+      'oc_home',
+      '已将当前飞书会话设置为 MetaClaw home channel：oc_home',
+    );
+  });
+
+  it('blocks denied DM users before task submission', async () => {
+    const session = {
+      getSnapshot: vi.fn().mockReturnValue({ output: [] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      sender: {
+        sender_id: { open_id: 'ou_denied' },
+      },
+      message: {
+        message_id: 'om_denied',
+        chat_id: 'oc_dm',
+        chat_type: 'p2p',
+        message_type: 'text',
+        content: '{"text":"hello"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      accessPolicy: {
+        dmPolicy: 'allowlist',
+        allowedUsers: ['ou_allowed'],
+        groupPolicy: 'open',
+        requireMention: true,
+      },
+    });
+
+    expect(session.submit).not.toHaveBeenCalled();
+    expect(client.addReactionToMessage).not.toHaveBeenCalled();
+    expect(session.appendSystemMessage).toHaveBeenCalledWith('→ 飞书消息已被 Gateway 策略拦截: dm_allowlist_denied');
+  });
+
+  it('records delivery audit events for final reply chunks', async () => {
+    const session = {
+      getSnapshot: vi.fn()
+        .mockReturnValueOnce({ output: ['before'] })
+        .mockReturnValueOnce({ output: ['before', 'audited reply'] }),
+      submit: vi.fn().mockResolvedValue({ exitRequested: false }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+    const audit = { record: vi.fn() };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_audit',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"audit"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+      accessPolicy: {
+        dmPolicy: 'allow_all',
+        allowedUsers: [],
+        groupPolicy: 'open',
+        requireMention: true,
+      },
+      audit,
+    });
+
+    expect(audit.record).toHaveBeenCalledWith({
+      kind: 'inbound',
+      chatId: 'oc_chat',
+      requestId: 'om_audit',
+      method: 'skipped',
+      ok: true,
+    });
+    expect(audit.record).toHaveBeenCalledWith({
+      kind: 'policy',
+      chatId: 'oc_chat',
+      requestId: 'om_audit',
+      method: 'skipped',
+      ok: true,
+      reason: 'dm_allow_all',
+    });
+    expect(audit.record).toHaveBeenCalledWith({
+      kind: 'final',
+      chatId: 'oc_chat',
+      chunkIndex: 0,
+      chunkCount: 1,
+      method: 'card',
+      ok: true,
+    });
   });
 
   it('downloads a Feishu file message and attaches it to the next text instruction', async () => {

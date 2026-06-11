@@ -216,6 +216,36 @@ logs() {
     fi
 }
 
+# 安装为用户级 systemd 服务
+install_service() {
+    local systemd_dir="$HOME/.config/systemd/user"
+    local service_file="$systemd_dir/metaclaw.service"
+
+    mkdir -p "$systemd_dir"
+    cat > "$service_file" <<EOF
+[Unit]
+Description=MetaClaw Gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$NODE_BIN $APP_ENTRY
+Restart=on-failure
+RestartSec=3
+Environment=METACLAW_HOME=$HOME/.metaclaw
+
+[Install]
+WantedBy=default.target
+EOF
+
+    log_info "已安装用户级服务: $service_file"
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload 2>/dev/null || true
+        log_info "可执行: systemctl --user enable --now metaclaw.service"
+    fi
+}
+
 # 主逻辑
 case "${1:-}" in
     start)
@@ -236,13 +266,41 @@ case "${1:-}" in
     logs)
         logs "${2:-}"
         ;;
-    gateway)
+    install)
         ensure_built
+        install_service
+        ;;
+    gateway)
         shift
-        exec "$NODE_BIN" "$APP_ENTRY" gateway "$@"
+        case "${1:-run}" in
+            install)
+                ensure_built
+                install_service
+                ;;
+            start)
+                start
+                ;;
+            stop)
+                stop
+                ;;
+            restart)
+                restart
+                ;;
+            status)
+                status
+                ;;
+            run|setup|doctor|pairing|"")
+                ensure_built
+                exec "$NODE_BIN" "$APP_ENTRY" gateway "$@"
+                ;;
+            *)
+                ensure_built
+                exec "$NODE_BIN" "$APP_ENTRY" gateway "$@"
+                ;;
+        esac
         ;;
     *)
-        echo "用法: $0 {start|connect|stop|restart|status|logs [-f]|gateway [setup|run|status]}"
+        echo "用法: $0 {start|connect|stop|restart|status|logs [-f]|install|gateway [setup|run|install|start|stop|restart|status|doctor|pairing]}"
         echo ""
         echo "命令:"
         echo "  start    - 启动 Metaclaw"
@@ -251,7 +309,8 @@ case "${1:-}" in
         echo "  restart  - 重启 Metaclaw"
         echo "  status   - 查看运行状态"
         echo "  logs     - 查看日志 (加 -f 实时跟踪)"
-        echo "  gateway  - Gateway 子命令透传，例如 gateway setup"
+        echo "  install  - 安装用户级 systemd 服务"
+        echo "  gateway  - Gateway 子命令，例如 gateway setup / gateway pairing list / gateway status"
         exit 1
         ;;
 esac

@@ -477,6 +477,7 @@ export interface Config {
         event_port?: number;
         event_path?: string;
         verification_token?: string;
+        encrypt_key_env?: string;
         access?: {
           dm_policy?: 'pairing' | 'allow_all' | 'allowlist';
           allowed_users?: string[];

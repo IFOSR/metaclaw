@@ -56,13 +56,14 @@ Executor prerequisites:
 - Install and log in to OpenAI Codex CLI if you want the default `codex-cli` executor.
 - Install and log in to Pi Agent and Hermes Agent if you want research routed through the parallel research race.
 
-Feishu prerequisites, only if you use Feishu integration:
+Feishu prerequisites, only if you use Feishu Gateway integration:
 
 - A Feishu app with message receive/send permissions.
 - An app secret stored in an environment variable such as `FEISHU_APP_SECRET`.
-- Event subscription configured for `im.message.receive_v1` if using two-way Feishu chat.
+- Event subscription configured for `im.message.receive_v1`.
 - File upload/send-message permissions if you want generated artifacts sent back as Feishu file messages.
-- A public reverse proxy or tunnel if Feishu must reach your local event endpoint or Markdown preview server.
+- WebSocket event delivery is recommended because it does not require a public callback URL.
+- A public reverse proxy or tunnel is only required for webhook mode or external Markdown preview links.
 
 Markdown preview prerequisites:
 
@@ -316,6 +317,16 @@ Runtime utilities:
 ./metaclaw.sh stop
 ```
 
+Install or manage MetaClaw as a user-level service:
+
+```bash
+./metaclaw.sh gateway install
+./metaclaw.sh gateway start
+./metaclaw.sh gateway status
+./metaclaw.sh gateway restart
+./metaclaw.sh gateway stop
+```
+
 Direct Gateway modes:
 
 ```bash
@@ -356,16 +367,31 @@ notifications:
     webhook_url: ""
     secret: ""
 
-integrations:
-  feishu:
-    enabled: false
-    mode: websocket
-    app_id: ""
-    app_secret_env: FEISHU_APP_SECRET
-    event_port: 8787
-    event_path: /feishu/events
-    verification_token: ""
+gateway:
+  enabled: true
+  platforms:
+    feishu:
+      enabled: true
+      domain: feishu
+      connection_mode: websocket
+      app_id: ""
+      app_secret_env: FEISHU_APP_SECRET
+      event_port: 8787
+      event_path: /feishu/events
+      verification_token: ""
+      encrypt_key_env: FEISHU_ENCRYPT_KEY
+      home_channel: ""
+      access:
+        dm_policy: pairing
+        allowed_users: []
+        group_policy: open
+        require_mention: true
+      delivery:
+        final_markdown_mode: card
+        fallback_mode: post
+        final_file_fallback: true
 
+integrations:
   markdown_preview:
     enabled: true
     host: 127.0.0.1
@@ -380,19 +406,38 @@ export FEISHU_APP_SECRET="your Feishu app secret"
 ./metaclaw.sh start
 ```
 
-## Feishu Delivery And Markdown Preview
+## Feishu Gateway Delivery And Markdown Preview
 
 MetaClaw separates document generation from Feishu delivery:
 
 - The executor writes Markdown or other files into the task output directory.
 - MetaClaw records those files as task artifacts.
-- The Feishu backend sends the final answer back to chat.
-- The Feishu backend uploads generated artifact files when file upload is available.
+- The Feishu Gateway sends the final answer back to the origin chat.
+- The Feishu Gateway uploads generated artifact files when file upload is available.
 - Markdown artifacts get online preview links when Markdown Preview is configured.
+- Delivery attempts are written to `~/.metaclaw/gateway-audit.jsonl`.
 
-Executors should not call Feishu Docs or cloud-document APIs directly. If a user asks for a "Feishu cloud document" or "online preview", MetaClaw instructs the executor to produce local Markdown artifacts; the backend handles Feishu synchronization and preview links.
+Executors should not call Feishu Docs or cloud-document APIs directly. If a user asks for a "Feishu cloud document" or "online preview", MetaClaw instructs the executor to produce local Markdown artifacts; the Gateway handles Feishu synchronization and preview links.
 
 Feishu progress cards show the execution chain explicitly. MetaClaw first sends the request to `codex-cli` for intent parsing and execution preparation, then shows the router decision, routing reason, and the actual executor that starts the task. Research workflows can show a `pi-agent + hermes-agent` race, where the first returned result is kept and the slower executor is aborted. This prevents Feishu users from mistaking the intent parser for the final executor.
+
+Final Feishu replies use Markdown message cards first. Long answers are split into multiple cards. If a card chunk fails, MetaClaw retries that chunk as a rich-text post; if any chunk still cannot be delivered, MetaClaw uploads the complete final answer as a Markdown file so the user does not receive a partial result.
+
+Access control is handled by the Gateway:
+
+- Direct messages default to `dm_policy: pairing`. The first DM user is approved automatically; later users can be approved or revoked with `metaclaw gateway pairing`.
+- Group chats default to `group_policy: open` with `require_mention: true`.
+- `/sethome` sent in a Feishu chat records that chat as `gateway.platforms.feishu.home_channel`.
+- Legacy `integrations.feishu` settings are still read as a compatibility source, but new deployments should use `gateway.platforms.feishu`.
+
+Useful Feishu Gateway commands:
+
+```bash
+metaclaw gateway doctor
+metaclaw gateway pairing list
+metaclaw gateway pairing approve <open_id>
+metaclaw gateway pairing revoke <open_id>
+```
 
 Default preview URL:
 

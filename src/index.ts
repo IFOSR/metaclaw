@@ -24,6 +24,8 @@ import { resolveGatewaySocketPath } from './gateway/gateway-paths.js';
 import { MarkdownPreviewServer } from './integrations/markdown-preview.js';
 import { runGatewaySetup } from './gateway/setup.js';
 import { startFeishuRuntimeBridge } from './gateway/feishu-runtime.js';
+import { runGatewayPairingCommand } from './gateway/pairing-cli.js';
+import { formatGatewayDoctorChecks, runGatewayDoctor } from './gateway/doctor.js';
 
 async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
@@ -45,8 +47,26 @@ async function main() {
     return;
   }
 
+  if (cliArgs.gatewayCommand === 'pairing') {
+    runGatewayPairingCommand({
+      metaclawDir,
+      command: cliArgs.gatewayPairingCommand ?? 'list',
+      userId: cliArgs.gatewayPairingUserId,
+    });
+    return;
+  }
+
+  if (cliArgs.gatewayCommand === 'doctor') {
+    const configPath = resolve(metaclawDir, 'config.yaml');
+    migrateLegacyFeishuConfigFileToGateway(configPath);
+    const config = loadConfig(configPath);
+    console.log(formatGatewayDoctorChecks(runGatewayDoctor({ config, metaclawDir })));
+    return;
+  }
+
   if (
-    cliArgs.gatewayCommand === 'start'
+    cliArgs.gatewayCommand === 'install'
+    || cliArgs.gatewayCommand === 'start'
     || cliArgs.gatewayCommand === 'stop'
     || cliArgs.gatewayCommand === 'restart'
     || cliArgs.gatewayCommand === 'status'

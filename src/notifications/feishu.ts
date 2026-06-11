@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import type { Config } from '../core/types.js';
-import { createFeishuWebhookMarkdownCard } from '../integrations/feishu-app.js';
+import { createFeishuWebhookMarkdownCard, FeishuAppClient, resolveAppSecret, type FeishuAppConfig } from '../integrations/feishu-app.js';
+import { resolveFeishuGatewayConfig, toFeishuAppConfig } from '../gateway/feishu-config.js';
 import { NoopNotificationService, type MemoryCandidateNotification, type NotificationService } from './types.js';
 
 export interface FeishuNotificationConfig {
@@ -19,6 +20,8 @@ interface FeishuNotifierDeps {
   postJson?: (url: string, body: Record<string, unknown>) => Promise<JsonResponse>;
   nowSeconds?: () => number;
 }
+
+type FeishuHomeClient = Pick<FeishuAppClient, 'sendMarkdownCardToChat'>;
 
 export function createFeishuSign(timestamp: string, secret: string): string {
   const stringToSign = `${timestamp}\n${secret}`;
@@ -44,7 +47,7 @@ export class FeishuNotifier implements NotificationService {
 
     const body: Record<string, unknown> = {
       msg_type: 'interactive',
-      ...createFeishuWebhookMarkdownCard(this.formatMemoryCandidateText(input)),
+      ...createFeishuWebhookMarkdownCard(formatMemoryCandidateText(input)),
     };
 
     if (this.config.secret) {
@@ -59,23 +62,49 @@ export class FeishuNotifier implements NotificationService {
       throw new Error(`飞书通知发送失败: HTTP ${response.status} ${responseText}`);
     }
   }
+}
 
-  private formatMemoryCandidateText(input: MemoryCandidateNotification): string {
-    const sourceText = input.source === 'high-confidence'
-      ? '高置信偏好识别'
-      : '重复模式识别';
+export class FeishuGatewayHomeNotifier implements NotificationService {
+  constructor(
+    private readonly input: {
+      config: FeishuAppConfig;
+      homeChannel: string;
+      client?: FeishuHomeClient;
+    },
+  ) {}
 
-    return [
-      'Metaclaw 检测到候选偏好',
-      '',
-      `来源：${sourceText}`,
-      `候选：${input.pattern}`,
-      `ID：${input.observationId}`,
-      '',
-      '当前任务不会等待用户确认。系统只会自动写入低风险、高置信偏好；其余候选仅保留备查。',
-      `如需长期保存，可稍后在 Metaclaw 输入 /memory confirm ${input.observationId}；不需要则输入 /memory reject ${input.observationId}。`,
-    ].join('\n');
+  async notifyMemoryCandidate(input: MemoryCandidateNotification): Promise<void> {
+    const client = this.input.client ?? this.createClient();
+    await client.sendMarkdownCardToChat(this.input.homeChannel, formatMemoryCandidateText(input));
   }
+
+  private createClient(): FeishuAppClient {
+    const appSecret = resolveAppSecret(this.input.config);
+    if (!this.input.config.app_id || !appSecret) {
+      throw new Error('飞书 Gateway home channel 通知缺少 app_id 或 app_secret');
+    }
+    return new FeishuAppClient({
+      app_id: this.input.config.app_id,
+      app_secret: appSecret,
+    });
+  }
+}
+
+function formatMemoryCandidateText(input: MemoryCandidateNotification): string {
+  const sourceText = input.source === 'high-confidence'
+    ? '高置信偏好识别'
+    : '重复模式识别';
+
+  return [
+    'Metaclaw 检测到候选偏好',
+    '',
+    `来源：${sourceText}`,
+    `候选：${input.pattern}`,
+    `ID：${input.observationId}`,
+    '',
+    '当前任务不会等待用户确认。系统只会自动写入低风险、高置信偏好；其余候选仅保留备查。',
+    `如需长期保存，可稍后在 Metaclaw 输入 /memory confirm ${input.observationId}；不需要则输入 /memory reject ${input.observationId}。`,
+  ].join('\n');
 }
 
 async function defaultPostJson(url: string, body: Record<string, unknown>): Promise<JsonResponse> {
@@ -92,9 +121,18 @@ async function defaultPostJson(url: string, body: Record<string, unknown>): Prom
 
 export function createNotificationService(config: Config): NotificationService {
   const feishu = config.notifications?.feishu;
-  if (!feishu?.enabled || !feishu.webhook_url) {
-    return new NoopNotificationService();
+  if (feishu?.enabled && feishu.webhook_url) {
+    return new FeishuNotifier(feishu);
   }
 
-  return new FeishuNotifier(feishu);
+  const gatewayFeishu = resolveFeishuGatewayConfig(config);
+  const homeChannel = config.gateway?.platforms?.feishu?.home_channel;
+  if (gatewayFeishu.enabled && gatewayFeishu.appId && homeChannel) {
+    return new FeishuGatewayHomeNotifier({
+      config: toFeishuAppConfig(gatewayFeishu),
+      homeChannel,
+    });
+  }
+
+  return new NoopNotificationService();
 }

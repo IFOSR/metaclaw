@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { basename, resolve } from 'path';
+import { createDecipheriv, createHash } from 'crypto';
 import * as Lark from '@larksuiteoapi/node-sdk';
 import type { Config } from '../core/types.js';
 import type { SessionSnapshot } from '../session/metaclaw-session.js';
@@ -8,6 +9,15 @@ import type { MetaclawSession } from '../session/metaclaw-session.js';
 import { resolveMetaclawDir } from '../utils/paths.js';
 import { createMarkdownPreviewBaseUrl, createMarkdownPreviewLinks } from './markdown-preview.js';
 import { resolveFeishuGatewayConfig, toFeishuAppConfig } from '../gateway/feishu-config.js';
+import {
+  evaluateFeishuGatewayPolicy,
+  FeishuPairingStore,
+  type FeishuGatewayAccessPolicy,
+  type FeishuGatewayInboundIdentity,
+} from '../gateway/feishu-policy.js';
+import { dump, load } from 'js-yaml';
+import { GatewayAuditLog } from '../gateway/audit.js';
+import { normalizeFeishuInboundEvent, type FeishuRawMessageEvent } from '../gateway/feishu-events.js';
 
 export interface FeishuAppConfig {
   enabled: boolean;
@@ -18,6 +28,7 @@ export interface FeishuAppConfig {
   event_port: number;
   event_path: string;
   verification_token?: string;
+  encrypt_key_env?: string;
 }
 
 interface JsonResponse {
@@ -388,6 +399,7 @@ interface FeishuEventBridgeDeps {
   client: FeishuMessageClient;
   session: MetaclawSession;
   config: FeishuAppConfig;
+  gatewayConfig?: ResolvedFeishuRuntimeBridgeConfig;
   markdownPreview?: FeishuMessageHandlerDeps['markdownPreview'];
 }
 
@@ -396,14 +408,7 @@ export interface FeishuBridge {
   stop(): Promise<void>;
 }
 
-interface FeishuIncomingMessageEvent {
-  message?: {
-    message_id?: unknown;
-    chat_id?: unknown;
-    message_type?: unknown;
-    content?: unknown;
-  };
-}
+type FeishuIncomingMessageEvent = FeishuRawMessageEvent;
 
 interface FeishuMessageSession {
   getSnapshot(): Pick<SessionSnapshot, 'output'>;
@@ -427,9 +432,30 @@ interface FeishuMessageHandlerDeps {
   client: FeishuMessageClient;
   session: FeishuMessageSession;
   seenMessageIds: Set<string>;
+  accessPolicy?: FeishuGatewayAccessPolicy;
+  pairingStore?: FeishuPairingStore;
+  setHomeChannel?: (chatId: string) => void;
+  audit?: FeishuDeliveryAudit;
+  transport?: 'websocket' | 'webhook';
   pendingResourcesByChatId?: Map<string, string[]>;
   uploadDir?: string;
   markdownPreview?: FeishuMarkdownPreviewOptions;
+}
+
+interface FeishuDeliveryAudit {
+  record(event: FeishuDeliveryAuditEvent): void;
+}
+
+interface FeishuDeliveryAuditEvent {
+  kind: 'inbound' | 'policy' | 'session' | 'progress' | 'final' | 'artifact' | 'fallback';
+  chatId: string;
+  requestId?: string;
+  reason?: string;
+  chunkIndex?: number;
+  chunkCount?: number;
+  method: 'card' | 'post' | 'file' | 'notice' | 'skipped';
+  ok: boolean;
+  error?: string;
 }
 
 type FeishuWebSocketEventHandlers = Parameters<InstanceType<typeof Lark.EventDispatcher>['register']>[0];
@@ -478,7 +504,7 @@ export class FeishuEventBridge {
     }
 
     try {
-      const payload = JSON.parse(await readRequestBody(request)) as Record<string, unknown>;
+      const payload = this.decryptPayloadIfNeeded(JSON.parse(await readRequestBody(request)) as Record<string, unknown>);
       const challenge = this.extractChallenge(payload);
       if (challenge) {
         writeJson(response, 200, { challenge });
@@ -506,6 +532,18 @@ export class FeishuEventBridge {
     return typeof event?.challenge === 'string' ? event.challenge : null;
   }
 
+  private decryptPayloadIfNeeded(payload: Record<string, unknown>): Record<string, unknown> {
+    if (typeof payload.encrypt !== 'string') {
+      return payload;
+    }
+    const encryptKeyEnv = this.deps.config.encrypt_key_env;
+    const encryptKey = encryptKeyEnv ? process.env[encryptKeyEnv] : undefined;
+    if (!encryptKey) {
+      throw new Error(`飞书事件已加密，但缺少 encrypt key 环境变量 ${encryptKeyEnv ?? 'FEISHU_ENCRYPT_KEY'}`);
+    }
+    return decryptFeishuEventPayload(payload.encrypt, encryptKey);
+  }
+
   private isVerified(payload: Record<string, unknown>): boolean {
     const expectedToken = this.deps.config.verification_token;
     if (!expectedToken) {
@@ -528,6 +566,13 @@ export class FeishuEventBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      accessPolicy: this.deps.gatewayConfig?.accessPolicy,
+      pairingStore: this.deps.gatewayConfig ? new FeishuPairingStore() : undefined,
+      setHomeChannel: this.deps.gatewayConfig
+        ? chatId => writeFeishuHomeChannel(this.deps.gatewayConfig!.configPath, chatId)
+        : undefined,
+      audit: createFeishuDeliveryAudit(),
+      transport: 'webhook',
       pendingResourcesByChatId: this.pendingResourcesByChatId,
       markdownPreview: this.deps.markdownPreview,
     });
@@ -540,7 +585,13 @@ interface FeishuWebSocketBridgeDeps {
   appId: string;
   appSecret: string;
   verificationToken?: string;
+  gatewayConfig?: ResolvedFeishuRuntimeBridgeConfig;
   markdownPreview?: FeishuMessageHandlerDeps['markdownPreview'];
+}
+
+interface ResolvedFeishuRuntimeBridgeConfig {
+  accessPolicy: FeishuGatewayAccessPolicy;
+  configPath: string;
 }
 
 export class FeishuWebSocketBridge implements FeishuBridge {
@@ -562,6 +613,13 @@ export class FeishuWebSocketBridge implements FeishuBridge {
       client: this.deps.client,
       session: this.deps.session,
       seenMessageIds: this.seenMessageIds,
+      accessPolicy: this.deps.gatewayConfig?.accessPolicy,
+      pairingStore: this.deps.gatewayConfig ? new FeishuPairingStore() : undefined,
+      setHomeChannel: this.deps.gatewayConfig
+        ? chatId => writeFeishuHomeChannel(this.deps.gatewayConfig!.configPath, chatId)
+        : undefined,
+      audit: createFeishuDeliveryAudit(),
+      transport: 'websocket',
       pendingResourcesByChatId: this.pendingResourcesByChatId,
       markdownPreview: this.deps.markdownPreview,
     }));
@@ -606,20 +664,48 @@ export async function handleFeishuMessageEvent(
   event: FeishuIncomingMessageEvent | undefined,
   deps: FeishuMessageHandlerDeps,
 ): Promise<boolean> {
+  const normalizedEvent = event
+    ? normalizeFeishuInboundEvent(event, { transport: deps.transport ?? 'websocket' })
+    : null;
   const message = event?.message;
-  if (!message) {
+  if (!message || !normalizedEvent) {
     return false;
   }
-  const messageId = message?.message_id;
-  const chatId = message?.chat_id;
-  const messageType = message?.message_type;
-  if (typeof messageId !== 'string' || typeof chatId !== 'string' || typeof messageType !== 'string') {
-    return false;
-  }
+  const messageId = normalizedEvent.messageId;
+  const chatId = normalizedEvent.chatId;
+  const messageType = normalizedEvent.messageType;
   if (deps.seenMessageIds.has(messageId)) {
     return false;
   }
   deps.seenMessageIds.add(messageId);
+  recordFeishuAudit(deps, {
+    kind: 'inbound',
+    chatId,
+    requestId: messageId,
+    method: 'skipped',
+    ok: true,
+  });
+
+  if (deps.accessPolicy) {
+    const identity = extractFeishuGatewayInboundIdentity(event, chatId);
+    const decision = evaluateFeishuGatewayPolicy(identity, deps.accessPolicy, deps.pairingStore);
+    recordFeishuAudit(deps, {
+      kind: 'policy',
+      chatId,
+      requestId: messageId,
+      method: 'skipped',
+      ok: decision.allowed,
+      reason: decision.reason,
+    });
+    if (!decision.allowed) {
+      if (decision.reason === 'dm_pairing_pending') {
+        await deps.client.sendMarkdownCardToChat(chatId, '已收到你的授权请求。请等待 MetaClaw 管理员批准后再继续使用。')
+          .catch(error => deps.session.appendSystemMessage(`⚠️ 飞书授权提示发送失败: ${(error as Error).message}`));
+      }
+      deps.session.appendSystemMessage(`→ 飞书消息已被 Gateway 策略拦截: ${decision.reason}`);
+      return true;
+    }
+  }
 
   if (messageType !== 'text') {
     return await handleFeishuResourceMessage(message, {
@@ -633,9 +719,16 @@ export async function handleFeishuMessageEvent(
     });
   }
 
-  const text = parseFeishuTextContent(message.content);
+  const text = normalizedEvent.text;
   if (!text) {
     return false;
+  }
+
+  if (isFeishuSetHomeCommand(text)) {
+    deps.setHomeChannel?.(chatId);
+    await deps.client.sendMarkdownCardToChat(chatId, `已将当前飞书会话设置为 MetaClaw home channel：${chatId}`);
+    deps.session.appendSystemMessage(`→ 飞书 home channel 已更新: ${chatId}`);
+    return true;
   }
 
   let typingReactionId: string | null = null;
@@ -762,12 +855,17 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
     app_secret: appSecret,
   });
   const markdownPreview = buildFeishuMarkdownPreviewOptions(config);
+  const gatewayConfig = {
+    accessPolicy: buildFeishuGatewayAccessPolicy(config),
+    configPath: resolve(resolveMetaclawDir(), 'config.yaml'),
+  };
 
   if (gatewayFeishu.connectionMode === 'webhook') {
     return new FeishuEventBridge({
       config: feishu,
       session,
       client,
+      gatewayConfig,
       markdownPreview,
     });
   }
@@ -778,11 +876,43 @@ export function createFeishuBridge(config: Config, session: MetaclawSession): Fe
     appId: gatewayFeishu.appId,
     appSecret,
     verificationToken: gatewayFeishu.verificationToken,
+    gatewayConfig,
     markdownPreview,
   });
 }
 
 export const createFeishuEventBridge = createFeishuBridge;
+
+function buildFeishuGatewayAccessPolicy(config: Config): FeishuGatewayAccessPolicy {
+  const feishu = config.gateway?.platforms?.feishu;
+  return {
+    dmPolicy: feishu?.access?.dm_policy ?? 'pairing',
+    allowedUsers: feishu?.access?.allowed_users ?? [],
+    groupPolicy: feishu?.access?.group_policy ?? 'open',
+    requireMention: feishu?.access?.require_mention ?? true,
+    ...(process.env.FEISHU_BOT_OPEN_ID ? { botOpenId: process.env.FEISHU_BOT_OPEN_ID } : {}),
+  };
+}
+
+function createFeishuDeliveryAudit(): FeishuDeliveryAudit {
+  const auditLog = new GatewayAuditLog();
+  return {
+    record(event) {
+      auditLog.record({
+        platform: 'feishu',
+        kind: event.kind,
+        target: event.chatId,
+        method: event.method,
+        ok: event.ok,
+        ...(event.requestId ? { requestId: event.requestId } : {}),
+        ...(event.reason ? { reason: event.reason } : {}),
+        ...(event.chunkIndex !== undefined ? { chunkIndex: event.chunkIndex } : {}),
+        ...(event.chunkCount !== undefined ? { chunkCount: event.chunkCount } : {}),
+        ...(event.error ? { error: event.error } : {}),
+      });
+    },
+  };
+}
 
 export function buildFeishuMarkdownPreviewOptions(config: Config, workspaceRoot = process.cwd()): FeishuMarkdownPreviewOptions | undefined {
   const previewConfig = config.integrations?.markdown_preview;
@@ -1309,6 +1439,84 @@ export function parseFeishuTextContent(content: unknown): string | null {
   }
 }
 
+export function decryptFeishuEventPayload(encryptedPayload: string, encryptKey: string): Record<string, unknown> {
+  const key = createHash('sha256').update(encryptKey).digest();
+  const encrypted = Buffer.from(encryptedPayload, 'base64');
+  if (encrypted.length <= 16) {
+    throw new Error('飞书加密事件格式无效');
+  }
+  const iv = encrypted.subarray(0, 16);
+  const ciphertext = encrypted.subarray(16);
+  const decipher = createDecipheriv('aes-256-cbc', key, iv);
+  const decrypted = Buffer.concat([
+    decipher.update(ciphertext),
+    decipher.final(),
+  ]).toString('utf-8');
+  return JSON.parse(decrypted) as Record<string, unknown>;
+}
+
+function extractFeishuGatewayInboundIdentity(
+  event: FeishuIncomingMessageEvent | undefined,
+  chatId: string,
+): FeishuGatewayInboundIdentity {
+  const senderId = stringValue(event?.sender?.sender_id?.open_id)
+    ?? stringValue(event?.sender?.sender_id?.user_id)
+    ?? stringValue(event?.sender?.sender_id?.union_id);
+  const chatType = normalizeFeishuChatType(event?.message?.chat_type);
+  return {
+    chatId,
+    chatType,
+    ...(senderId ? { senderId } : {}),
+    ...(typeof event?.sender?.sender_type === 'string' ? { senderType: event.sender.sender_type } : {}),
+    mentionOpenIds: (event?.message?.mentions ?? [])
+      .map(mention => stringValue(mention.id?.open_id) ?? stringValue(mention.id?.user_id))
+      .filter((value): value is string => Boolean(value)),
+  };
+}
+
+function normalizeFeishuChatType(value: unknown): FeishuGatewayInboundIdentity['chatType'] {
+  if (value === 'group' || value === 'chat') {
+    return 'group';
+  }
+  if (value === 'p2p' || value === 'dm') {
+    return 'dm';
+  }
+  return 'unknown';
+}
+
+function isFeishuSetHomeCommand(text: string): boolean {
+  return text.trim().toLowerCase() === '/sethome';
+}
+
+function writeFeishuHomeChannel(configPath: string, chatId: string): void {
+  const rawConfig = existsSync(configPath)
+    ? objectValue(load(readFileSync(configPath, 'utf-8')))
+    : {};
+  const gateway = objectValue(rawConfig.gateway);
+  const platforms = objectValue(gateway.platforms);
+  const feishu = objectValue(platforms.feishu);
+  rawConfig.gateway = {
+    ...gateway,
+    enabled: gateway.enabled ?? true,
+    platforms: {
+      ...platforms,
+      feishu: {
+        ...feishu,
+        home_channel: chatId,
+      },
+    },
+  };
+  writeFileSync(configPath, dump(rawConfig, { lineWidth: 120 }), 'utf-8');
+}
+
+function objectValue(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' ? value as Record<string, any> : {};
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
 function parseFeishuResourceContent(content: unknown): {
   fileKey: string;
   fileName?: string;
@@ -1664,13 +1872,32 @@ async function sendArtifactFilesToFeishu(
     '**任务产物已同步到飞书**',
     ...artifactPaths.map(path => `- ${basename(path)}`),
   ].join('\n'));
+  recordFeishuAudit(deps, {
+    kind: 'artifact',
+    chatId,
+    method: 'notice',
+    ok: true,
+  });
 
   for (const artifactPath of artifactPaths) {
     try {
       const fileKey = await deps.client.uploadFile(artifactPath);
       await deps.client.sendFileToChat(chatId, fileKey);
+      recordFeishuAudit(deps, {
+        kind: 'artifact',
+        chatId,
+        method: 'file',
+        ok: true,
+      });
     } catch (error) {
       deps.session.appendSystemMessage(`⚠️ 飞书任务产物同步失败: ${artifactPath}: ${(error as Error).message}`);
+      recordFeishuAudit(deps, {
+        kind: 'artifact',
+        chatId,
+        method: 'file',
+        ok: false,
+        error: (error as Error).message,
+      });
       await deps.client.sendMarkdownCardToChat(chatId, `⚠️ 任务产物同步失败：${basename(artifactPath)}`);
     }
   }
@@ -1690,8 +1917,25 @@ async function sendFeishuFinalReplyChunks(
     try {
       await deps.client.sendMarkdownCardToChat(chatId, chunk);
       sent = true;
+      recordFeishuAudit(deps, {
+        kind: 'final',
+        chatId,
+        chunkIndex: index,
+        chunkCount: chunks.length,
+        method: 'card',
+        ok: true,
+      });
     } catch (error) {
       errors.push(`消息卡: ${(error as Error).message}`);
+      recordFeishuAudit(deps, {
+        kind: 'final',
+        chatId,
+        chunkIndex: index,
+        chunkCount: chunks.length,
+        method: 'card',
+        ok: false,
+        error: (error as Error).message,
+      });
       deps.session.appendSystemMessage(`⚠️ 飞书 Markdown 消息卡分片 ${index + 1}/${chunks.length} 回发失败，改用富文本: ${(error as Error).message}`);
     }
 
@@ -1703,8 +1947,25 @@ async function sendFeishuFinalReplyChunks(
       try {
         await deps.client.sendMarkdownPostToChat(chatId, chunk);
         sent = true;
+        recordFeishuAudit(deps, {
+          kind: 'final',
+          chatId,
+          chunkIndex: index,
+          chunkCount: chunks.length,
+          method: 'post',
+          ok: true,
+        });
       } catch (error) {
         errors.push(`富文本: ${(error as Error).message}`);
+        recordFeishuAudit(deps, {
+          kind: 'final',
+          chatId,
+          chunkIndex: index,
+          chunkCount: chunks.length,
+          method: 'post',
+          ok: false,
+          error: (error as Error).message,
+        });
         deps.session.appendSystemMessage(`⚠️ 飞书富文本分片 ${index + 1}/${chunks.length} 回发失败: ${(error as Error).message}`);
       }
     } else {
@@ -1731,7 +1992,20 @@ async function sendFeishuCompleteReplyFallback(
   const warning = `⚠️ 飞书部分回复分片未能直接送达（${failedLabels}）。下面将同步完整答案文件，避免内容缺失。`;
   try {
     await deps.client.sendMarkdownCardToChat(chatId, warning);
+    recordFeishuAudit(deps, {
+      kind: 'fallback',
+      chatId,
+      method: 'notice',
+      ok: true,
+    });
   } catch (error) {
+    recordFeishuAudit(deps, {
+      kind: 'fallback',
+      chatId,
+      method: 'notice',
+      ok: false,
+      error: (error as Error).message,
+    });
     deps.session.appendSystemMessage(`⚠️ 飞书完整答案兜底提示发送失败: ${(error as Error).message}`);
   }
 
@@ -1747,8 +2021,32 @@ async function sendFeishuCompleteReplyFallback(
     writeFileSync(filePath, fullReply.trimEnd() + '\n', 'utf-8');
     const fileKey = await deps.client.uploadFile(filePath);
     await deps.client.sendFileToChat(chatId, fileKey);
+    recordFeishuAudit(deps, {
+      kind: 'fallback',
+      chatId,
+      method: 'file',
+      ok: true,
+    });
   } catch (error) {
+    recordFeishuAudit(deps, {
+      kind: 'fallback',
+      chatId,
+      method: 'file',
+      ok: false,
+      error: (error as Error).message,
+    });
     deps.session.appendSystemMessage(`⚠️ 飞书完整答案文件兜底失败: ${(error as Error).message}`);
+  }
+}
+
+function recordFeishuAudit(
+  deps: FeishuMessageHandlerDeps,
+  event: FeishuDeliveryAuditEvent,
+): void {
+  try {
+    deps.audit?.record(event);
+  } catch (error) {
+    deps.session.appendSystemMessage(`⚠️ 飞书投递审计写入失败: ${(error as Error).message}`);
   }
 }
 
