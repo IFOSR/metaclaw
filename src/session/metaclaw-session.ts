@@ -27,9 +27,9 @@ import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
 import {
   classifyNaturalLanguageInput,
+  fallbackTaskStateOwnership,
   filterDurableTasks,
   parseTaskClearInstruction,
-  parseTaskStatusQuery,
   type TaskStatusQueryScope,
 } from '../core/task-routing.js';
 import { ResumeContextBuilder } from '../core/resume-context-builder.js';
@@ -2200,7 +2200,7 @@ export class MetaclawSession {
       return;
     }
 
-    if (this.maybeHandleNaturalLanguageTaskStatusQuery(userInput)) {
+    if (await this.maybeHandleNaturalLanguageTaskStatusQuery(userInput)) {
       return;
     }
 
@@ -2471,12 +2471,33 @@ export class MetaclawSession {
     return true;
   }
 
-  private maybeHandleNaturalLanguageTaskStatusQuery(userInput: string): boolean {
-    const scope = parseTaskStatusQuery(userInput);
-    if (!scope) {
+  private async maybeHandleNaturalLanguageTaskStatusQuery(userInput: string): Promise<boolean> {
+    const durableTasks = filterDurableTasks(this.deps.taskEngine.list());
+    const recentTasks = durableTasks.map(task => ({
+      id: task.id,
+      title: task.title,
+      goal: task.goal,
+      summary: task.summary,
+      status: task.status,
+    }));
+
+    const fallbackOwnership = fallbackTaskStateOwnership(userInput);
+    const resolvedOwnership = typeof this.deps.llmBridge.resolveTaskStateOwnership === 'function'
+      ? await this.awaitWithTimeout(
+          Promise.resolve(this.deps.llmBridge.resolveTaskStateOwnership(userInput, recentTasks)),
+          this.getLlmTimeoutMs(),
+          fallbackOwnership,
+        )
+      : fallbackOwnership;
+    const ownership = resolvedOwnership.owner === 'metaclaw' || fallbackOwnership.owner !== 'metaclaw' || resolvedOwnership.confidence >= 0.75
+      ? resolvedOwnership
+      : fallbackOwnership;
+
+    if (ownership.owner !== 'metaclaw' || ownership.confidence < 0.55) {
       return false;
     }
 
+    const scope = ownership.scope ?? 'dashboard';
     this.appendOutput(this.formatNaturalLanguageTaskStatus(scope));
     this.refreshRuntimeState();
     return true;
@@ -2497,6 +2518,33 @@ export class MetaclawSession {
           `    → 建议动作：/task ${task.id} unblock，或直接补充材料/说明后让我继续`,
         ].join('\n')),
       ].join('\n');
+    }
+
+    if (scope === 'running') {
+      const repo = this.deps.taskEngine['taskRepo'];
+      const runningTask = repo.findByStatus('running')[0] ?? null;
+      if (runningTask) {
+        return [
+          '当前有 1 个正在执行的任务：',
+          `  #${runningTask.id} [RUNNING] ${runningTask.title}`,
+          `    → 调度原因：${runningTask.lastSchedulingReason || '等待执行器返回'}`,
+          `    → 最近更新时间：${runningTask.updatedAt}`,
+        ].join('\n');
+      }
+
+      const activeTasks = filterDurableTasks(repo.findActive());
+      const latestDone = filterDurableTasks(repo.findByStatus('done'))[0] ?? null;
+      const lines = [
+        '当前没有正在执行的任务。',
+        `  总览：待执行 ${activeTasks.filter(task => task.status === 'ready' || task.status === 'created').length} / 挂起 ${activeTasks.filter(task => task.status === 'parked').length} / 阻塞 ${activeTasks.filter(task => task.status === 'blocked').length}`,
+      ];
+      if (latestDone) {
+        lines.push(`  最近完成：#${latestDone.id} ${latestDone.title}`);
+        if (latestDone.summary) {
+          lines.push(`  摘要：${latestDone.summary}`);
+        }
+      }
+      return lines.join('\n');
     }
 
     const dashboard = this.deps.orchestration.getDashboard();

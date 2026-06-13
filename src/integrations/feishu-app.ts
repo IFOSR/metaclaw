@@ -2121,7 +2121,9 @@ async function waitForFeishuReplyOutputLines(
         ? filterFeishuOutputLinesForTask(lines, targetTaskId)
         : lines;
       if (isFeishuPendingTerminal(scopedLines)) {
-        finish(scopedLines);
+        if (submitSettled) {
+          finish(scopedLines);
+        }
         return;
       }
       if (isFeishuExecutionTerminal(scopedLines)) {

@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
-import type { NaturalLanguageRoute } from './task-routing.js';
+import type { NaturalLanguageRoute, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
 
 export interface TaskSummary {
   id: string;
@@ -149,6 +149,27 @@ export class LlmBridge {
     }
   }
 
+  async resolveTaskStateOwnership(
+    userInput: string,
+    recentTasks: TaskSummary[],
+  ): Promise<TaskStateOwnershipResult> {
+    try {
+      const raw = await this.query(this.buildTaskStateOwnershipPrompt(userInput, recentTasks));
+      return this.normalizeTaskStateOwnershipResult(
+        this.parseTaskStateOwnershipResult(raw),
+        recentTasks,
+      );
+    } catch {
+      return {
+        owner: 'none',
+        scope: null,
+        taskId: null,
+        confidence: 0,
+        reason: 'LLM task state ownership 调用失败，fallback',
+      };
+    }
+  }
+
   async resolveTaskPriority(userInput: string): Promise<TaskPriorityResult> {
     try {
       const raw = await this.query(this.buildTaskPriorityPrompt(userInput));
@@ -272,6 +293,43 @@ export class LlmBridge {
       taskList,
       '',
       '返回格式：{"route":"conversation"|"task_control"|"durable_task","reason":"简短原因"}',
+    ].join('\n');
+  }
+
+  private buildTaskStateOwnershipPrompt(userInput: string, tasks: TaskSummary[]): string {
+    const taskList = tasks.length === 0
+      ? '  （当前没有历史任务）'
+      : tasks.map(task =>
+        `  ${task.id}: [${task.status}] ${task.title} / ${task.goal}${task.summary ? ` / 摘要: ${task.summary.slice(0, 80)}` : ''}`
+      ).join('\n');
+
+    return [
+      '判断用户这句话问的是 MetaClaw 的任务池/调度状态，还是要交给 Executor 执行具体工作。',
+      '必须做语义判断，不要只看关键词。',
+      '',
+      'owner=metaclaw：用户在问 MetaClaw 自己维护的任务状态、任务池、调度、队列、阻塞、挂起、运行中、是否完成、为什么没收到结果、任务卡在哪里、当前有什么任务。',
+      '这些状态只能由 MetaClaw 根据任务数据库/调度器回答，不能交给 Executor 猜。',
+      '',
+      'owner=executor：用户要检查、分析、改写、继续生成实际交付内容，或要求查看文件/代码/报告/产物是否正确、完整、能否运行。',
+      '这些需要 Executor 使用工具或围绕交付物内容工作，即使文字里出现“任务、结果、完成、检查”。',
+      '',
+      'owner=none：普通闲聊、偏好设置、记忆、或无法判断为任务状态/执行工作的输入。',
+      '',
+      'scope 只在 owner=metaclaw 时填写：',
+      'running：问当前是否在执行、刚才/这个任务是否完成、为什么没收到结果、卡在哪里。',
+      'blocked：问阻塞任务、被卡住且缺什么条件/材料。',
+      'dashboard：问任务池总览、有哪些任务、队列/挂起/待执行/所有任务状态。',
+      '',
+      '如果用户语义是在问 MetaClaw 的调度事实，优先 owner=metaclaw；不要因为句子里没有固定关键词而返回 executor。',
+      '如果用户明确要“检查某个文件/生成内容/报告/代码是否完整或正确”，返回 owner=executor。',
+      '只返回 JSON，不要其他内容。',
+      '',
+      `用户输入：${userInput}`,
+      '',
+      '最近任务：',
+      taskList,
+      '',
+      '返回格式：{"owner":"metaclaw"|"executor"|"none","scope":"running"|"blocked"|"dashboard"|null,"taskId":"task_xxx"|null,"confidence":0到1,"reason":"简短语义依据"}',
     ].join('\n');
   }
 
@@ -454,6 +512,42 @@ export class LlmBridge {
     return { route: 'unknown', reason: 'route 解析失败，fallback' };
   }
 
+  private parseTaskStateOwnershipResult(raw: string): TaskStateOwnershipResult {
+    try {
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      const owner = parsed.owner === 'metaclaw' || parsed.owner === 'executor' || parsed.owner === 'none'
+        ? parsed.owner
+        : 'none';
+      const scope = this.parseTaskStatusQueryScope(parsed.scope);
+      const confidence = typeof parsed.confidence === 'number'
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0;
+
+      return {
+        owner,
+        scope: owner === 'metaclaw' ? scope : null,
+        taskId: typeof parsed.taskId === 'string' ? parsed.taskId : null,
+        confidence,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : 'LLM 语义判断任务状态归属',
+      };
+    } catch {}
+
+    return {
+      owner: 'none',
+      scope: null,
+      taskId: null,
+      confidence: 0,
+      reason: 'task state ownership 解析失败，fallback',
+    };
+  }
+
+  private parseTaskStatusQueryScope(value: unknown): TaskStatusQueryScope | null {
+    return value === 'blocked' || value === 'running' || value === 'dashboard'
+      ? value
+      : null;
+  }
+
   private parseTaskPriorityResult(raw: string): TaskPriorityResult {
     try {
       const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -497,6 +591,25 @@ export class LlmBridge {
     return candidates.some(task => task.id === result.taskId)
       ? result
       : { action: 'none', taskId: null, reason: 'LLM 返回了无效恢复任务 ID，fallback', confidence: 0 };
+  }
+
+  private normalizeTaskStateOwnershipResult(
+    result: TaskStateOwnershipResult,
+    candidates: TaskSummary[],
+  ): TaskStateOwnershipResult {
+    const taskId = result.taskId && candidates.some(task => task.id === result.taskId)
+      ? result.taskId
+      : null;
+
+    if (result.owner !== 'metaclaw') {
+      return { ...result, scope: null, taskId };
+    }
+
+    return {
+      ...result,
+      scope: result.scope ?? 'dashboard',
+      taskId,
+    };
   }
 
   private shouldRetryWithParkedTasks(

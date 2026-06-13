@@ -2,7 +2,16 @@ import type { Task, TaskStatus } from './types.js';
 
 export type NaturalLanguageRoute = 'conversation' | 'task_control' | 'durable_task';
 export type TaskClearScope = 'all' | 'parked' | 'blocked';
-export type TaskStatusQueryScope = 'blocked' | 'dashboard';
+export type TaskStatusQueryScope = 'blocked' | 'running' | 'dashboard';
+export type TaskStateOwner = 'metaclaw' | 'executor' | 'none';
+
+export interface TaskStateOwnershipResult {
+  owner: TaskStateOwner;
+  scope: TaskStatusQueryScope | null;
+  taskId: string | null;
+  confidence: number;
+  reason: string;
+}
 
 export const MANAGEABLE_TASK_STATUSES: TaskStatus[] = ['created', 'ready', 'running', 'parked', 'blocked'];
 
@@ -117,12 +126,12 @@ export function parseTaskStatusQuery(input: string): TaskStatusQueryScope | null
     return null;
   }
 
-  const asksAboutTasks = /(任务|task|tasks|队列|状态|进度|盘面|阻塞|blocked|挂起|parked)/i.test(normalized);
+  const asksAboutTasks = /(任务|task|tasks|队列|状态|进度|盘面|阻塞|blocked|挂起|parked|执行|完成|结果|卡住|卡在哪里)/i.test(normalized);
   if (!asksAboutTasks) {
     return null;
   }
 
-  const isQuery = /(有没有|是否有|有哪些|查看|检查|列出|显示|看一下|看下|多少|几个|状态|进度|盘面|清单|列表)/.test(normalized);
+  const isQuery = /(有没有|是否有|有哪些|查看|检查|列出|显示|看一下|看下|多少|几个|状态|进度|盘面|清单|列表|了吗|什么|哪里|当前|正在|还没有|没收到)/.test(normalized);
   if (!isQuery) {
     return null;
   }
@@ -131,11 +140,36 @@ export function parseTaskStatusQuery(input: string): TaskStatusQueryScope | null
     return 'blocked';
   }
 
+  if (/(正在执行|当前执行|执行什么|什么任务|完成了吗|是否完成|有没有完成|没收到结果|没有收到结果|卡在哪里|卡住|running)/i.test(normalized)) {
+    return 'running';
+  }
+
   if (/(任务状态|任务进度|任务盘面|任务清单|任务列表|队列|当前任务|所有任务|有哪些任务|有什么任务)/i.test(normalized)) {
     return 'dashboard';
   }
 
   return null;
+}
+
+export function fallbackTaskStateOwnership(input: string): TaskStateOwnershipResult {
+  const scope = parseTaskStatusQuery(input);
+  if (!scope) {
+    return {
+      owner: 'none',
+      scope: null,
+      taskId: null,
+      confidence: 0,
+      reason: '规则兜底未识别为 MetaClaw 任务状态问题',
+    };
+  }
+
+  return {
+    owner: 'metaclaw',
+    scope,
+    taskId: null,
+    confidence: 0.68,
+    reason: 'LLM 不可用时，规则兜底识别为 MetaClaw 任务状态问题',
+  };
 }
 
 export function isConversationInput(input: string): boolean {

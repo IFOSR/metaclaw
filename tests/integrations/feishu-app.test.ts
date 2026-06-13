@@ -2694,6 +2694,68 @@ describe('Feishu app helpers', () => {
     expect(client.sendMarkdownCardToChat).not.toHaveBeenCalledWith('oc_chat', '已处理。');
   });
 
+  it('waits for the final answer after a queued task later completes', async () => {
+    let output = ['before'];
+    let listener: ((snapshot: { output: string[] }) => void) | null = null;
+    const append = (...lines: string[]) => {
+      output = [...output, ...lines];
+      listener?.({ output: [...output] });
+    };
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((next: (snapshot: { output: string[] }) => void) => {
+        listener = next;
+        next({ output: [...output] });
+        return () => {
+          listener = null;
+        };
+      }),
+      submit: vi.fn().mockImplementation(async () => {
+        append(
+          '> 云文档的预览版也生成一下。',
+          '任务 #task_queued_done 已创建：云文档的预览版也生成一下。',
+          '→ 任务 #task_queued_done 已进入待执行队列',
+        );
+        await new Promise(resolve => setTimeout(resolve, 5));
+        append(
+          '→ 正在执行任务 #task_queued_done...',
+          '✓ 任务完成 (1.0s)',
+          '',
+          '┌─ 任务结果 ───────────────────────────────────────┐',
+          '│ 摘要: 已生成云文档预览版 Markdown 文件。',
+          '│ 下一步: 可同步飞书并追加在线预览链接',
+          '└──────────────────────────────────────────────────┘',
+          '',
+          '已生成云文档预览版 Markdown 文件，后端可据此同步飞书并追加在线预览链接。',
+        );
+        return { exitRequested: false };
+      }),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_queued_done',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"云文档的预览版也生成一下。"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts).toContain('已生成云文档预览版 Markdown 文件，后端可据此同步飞书并追加在线预览链接。');
+    expect(sentTexts).not.toContain('任务 #task_queued_done 已进入待执行队列，等待当前任务完成后会继续执行。');
+  });
+
   it('can format plain conversation output without task result framing', () => {
     expect(formatFeishuReply(['> 你好', '你好，我在。'])).toBe('你好，我在。');
   });

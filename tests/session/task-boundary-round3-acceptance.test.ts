@@ -312,6 +312,293 @@ describe('Round 3 task boundary acceptance', () => {
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
 
+  it('answers current running task queries from MetaClaw state without creating a task', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_query_running_task',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    const runningTask = taskEngine.create({ title: '正在生成报告', goal: '生成报告' });
+    taskEngine.transition(runningTask.id, 'ready');
+    taskEngine.transition(runningTask.id, 'running');
+
+    await session.submit('你当前正在执行什么任务？', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('当前有 1 个正在执行的任务');
+    expect(snapshot).toContain(`#${runningTask.id} [RUNNING] 正在生成报告`);
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('answers completion checks from MetaClaw state when no task is running', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_query_completion_no_running',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    const doneTask = taskEngine.create({ title: '刚才的任务', goal: '刚才的任务' });
+    taskEngine.transition(doneTask.id, 'ready');
+    taskEngine.transition(doneTask.id, 'running');
+    taskRepo.update(doneTask.id, { summary: '已经完成并生成最终结果' });
+    taskEngine.transition(doneTask.id, 'done');
+
+    await session.submit('这个任务执行完成了吗？我现在还没有收到结果', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('当前没有正在执行的任务。');
+    expect(snapshot).toContain(`最近完成：#${doneTask.id} 刚才的任务`);
+    expect(snapshot).toContain('摘要：已经完成并生成最终结果');
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('routes semantic scheduler-state questions to MetaClaw without requiring keyword coverage', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveTaskStateOwnership: vi.fn().mockResolvedValue({
+        owner: 'metaclaw',
+        scope: 'running',
+        taskId: null,
+        confidence: 0.91,
+        reason: '用户在问 MetaClaw 是否还有未交付的调度事实',
+      }),
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_semantic_scheduler_state',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    await session.submit('我这边一直没等到，你那边到底还在忙吗？', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('当前没有正在执行的任务。');
+    expect(taskRepo.findAll()).toHaveLength(0);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveTaskStateOwnership).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('keeps deliverable-content checks on the Executor side even when task words appear', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '检查完成：文档内容完整。',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveTaskStateOwnership: vi.fn().mockResolvedValue({
+        owner: 'executor',
+        scope: null,
+        taskId: null,
+        confidence: 0.9,
+        reason: '用户要求检查交付物内容，不是查询 MetaClaw 调度状态',
+      }),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '检查交付物需要执行器' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新检查任务' }),
+      resolveTaskPriority: vi.fn().mockResolvedValue({ priority: 'normal', reason: '普通检查' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_deliverable_check_executor',
+      contextRecaller,
+      llmBridge,
+      availableExecutorCommands: new Set(['codex']),
+    });
+
+    session.initialize();
+
+    await session.submit('检查这个任务生成的 Markdown 文档内容是否完整', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('任务 #');
+    expect(snapshot).toContain('检查完成：文档内容完整。');
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveTaskStateOwnership).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveRoute).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps continuation/generation work on the Executor side instead of treating it as status', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '已继续生成预览版。',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveTaskStateOwnership: vi.fn().mockResolvedValue({
+        owner: 'executor',
+        scope: null,
+        taskId: null,
+        confidence: 0.92,
+        reason: '用户要求继续生成交付物',
+      }),
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'durable_task', reason: '继续生成需要执行器' }),
+      resolveIntent: vi.fn().mockResolvedValue({ type: 'new', taskId: null, reason: '新生成任务' }),
+      resolveTaskPriority: vi.fn().mockResolvedValue({ priority: 'normal', reason: '普通生成' }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_generation_executor',
+      contextRecaller,
+      llmBridge,
+      availableExecutorCommands: new Set(['codex']),
+    });
+
+    session.initialize();
+
+    await session.submit('继续把这个任务的预览版生成出来', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('已继续生成预览版。');
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveTaskStateOwnership).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveRoute).toHaveBeenCalledTimes(1);
+    expect(llmBridge.resolveIntent).toHaveBeenCalledTimes(1);
+  });
+
   it('handles natural language clearing of all manageable tasks and aborts running work', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
