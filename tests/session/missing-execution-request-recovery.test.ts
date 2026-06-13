@@ -276,4 +276,124 @@ describe('session dispatch recovery', () => {
     expect(taskRepo.findById(task.id)?.status).toBe('done');
     expect(session.getSnapshot().output.join('\n')).toContain(`任务 #${task.id} 缺少待执行上下文，已根据持久化任务信息重建执行请求`);
   });
+
+  it('auto-resumes a blocked task when new user input satisfies the blocker', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-blocked-material');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const task = taskEngine.create({ title: '飞书 Client API 调研', goal: '整理飞书 Client API 访问用户文档的方法' });
+    taskEngine.transition(task.id, 'ready');
+    taskEngine.transition(task.id, 'running');
+    taskEngine.block(task.id, {
+      taskId: task.id,
+      type: 'manual',
+      description: '等待补充飞书 Client API 权限材料',
+      status: 'waiting',
+    });
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '补充材料后已继续完成飞书 Client API 调研',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      resolveTaskPriority: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_auto_resume_blocked_material',
+      contextRecaller,
+      llmBridge,
+      executorFactory: () => executor,
+    });
+
+    await session.submit('补充飞书 Client API 权限材料：需要 docs:document:readonly 权限，可以用 user_access_token 调用', { awaitAsyncWork: true });
+
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+    const executionInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(executionInput.task.id).toBe(task.id);
+    expect(executionInput.executionContextBundle.mode).toBe('resume-blocked');
+    expect(taskRepo.findById(task.id)?.status).toBe('done');
+    const output = session.getSnapshot().output.join('\n');
+    expect(output).toContain(`检测到任务 #${task.id} 的阻塞条件已满足`);
+    expect(output).toContain('补充材料后已继续完成飞书 Client API 调研');
+  });
+
+  it('does not auto-resume blocked tasks when the satisfying input is ambiguous', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-blocked-ambiguous');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    for (const title of ['飞书 Client API 调研', '飞书权限清单整理']) {
+      const task = taskEngine.create({ title, goal: title });
+      taskEngine.transition(task.id, 'ready');
+      taskEngine.transition(task.id, 'running');
+      taskEngine.block(task.id, {
+        taskId: task.id,
+        type: 'manual',
+        description: '等待补充材料',
+        status: 'waiting',
+      });
+    }
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({ route: 'conversation', reason: '普通补充说明' }),
+      resolveIntent: vi.fn(),
+      resolveTaskPriority: vi.fn(),
+      resolveTaskResumeIntent: vi.fn().mockResolvedValue({ action: 'none', taskId: null, reason: '不明确', confidence: 0 }),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_auto_resume_blocked_ambiguous',
+      contextRecaller,
+      llmBridge,
+      executorFactory: () => executor,
+    });
+
+    await session.submit('我补充一下飞书材料：需要 user_access_token', { awaitAsyncWork: true });
+
+    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls
+      .some(call => call[0].executionContextBundle?.mode === 'resume-blocked')).toBe(false);
+    expect(taskRepo.findByStatus('blocked')).toHaveLength(2);
+  });
 });

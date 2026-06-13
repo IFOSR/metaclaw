@@ -468,6 +468,17 @@ export function App(props: AppProps) {
   }, []);
 
   useEffect(() => {
+    const session = sessionRef.current!;
+    const timer = setInterval(() => {
+      void session.maybeReviewTaskPoolOnTimer().catch(error => {
+        session.appendSystemMessage(`错误: ${(error as Error).message}`);
+      });
+    }, session.getBlockedRecheckIntervalMs());
+
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       const isRunning = Boolean(snapshot.runtimeState.runningTaskId);
       if (!isRunning) {

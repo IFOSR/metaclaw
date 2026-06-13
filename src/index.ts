@@ -167,6 +167,7 @@ async function main() {
 
   await gatewayServer.start();
   let gatewayFeishuBridge: Awaited<ReturnType<typeof startFeishuRuntimeBridge>> = null;
+  let gatewayBlockedRecheckTimer: NodeJS.Timeout | null = null;
   if (cliArgs.gateway) {
     const gatewaySession = new (await import('./session/metaclaw-session.js')).MetaclawSession({
       taskEngine,
@@ -182,13 +183,20 @@ async function main() {
     });
     gatewaySession.initialize({ resumeStartupTasks: false, showDashboard: false });
     gatewayFeishuBridge = await startFeishuRuntimeBridge(config, gatewaySession);
+    gatewayBlockedRecheckTimer = setInterval(() => {
+      void gatewaySession.maybeReviewTaskPoolOnTimer().catch(error => {
+        gatewaySession.appendSystemMessage(`错误: ${(error as Error).message}`);
+      });
+    }, gatewaySession.getBlockedRecheckIntervalMs());
   }
   process.once('exit', () => {
+    if (gatewayBlockedRecheckTimer) clearInterval(gatewayBlockedRecheckTimer);
     void gatewayFeishuBridge?.stop();
     void markdownPreviewServer?.stop();
     void gatewayServer.stop();
   });
   process.once('SIGINT', () => {
+    if (gatewayBlockedRecheckTimer) clearInterval(gatewayBlockedRecheckTimer);
     void Promise.all([
       gatewayFeishuBridge?.stop() ?? Promise.resolve(),
       gatewayServer.stop(),
@@ -196,6 +204,7 @@ async function main() {
     ]).finally(() => process.exit(0));
   });
   process.once('SIGTERM', () => {
+    if (gatewayBlockedRecheckTimer) clearInterval(gatewayBlockedRecheckTimer);
     void Promise.all([
       gatewayFeishuBridge?.stop() ?? Promise.resolve(),
       gatewayServer.stop(),

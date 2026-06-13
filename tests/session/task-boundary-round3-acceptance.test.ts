@@ -201,6 +201,117 @@ describe('Round 3 task boundary acceptance', () => {
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
 
+  it('answers blocked-task status queries from MetaClaw state without calling the executor', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_query_blocked_tasks',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    const blockedTask = taskEngine.create({ title: '飞书客户端接入', goal: '修复飞书链路' });
+    taskEngine.transition(blockedTask.id, 'ready');
+    taskEngine.transition(blockedTask.id, 'running');
+    taskEngine.block(blockedTask.id, {
+      taskId: blockedTask.id,
+      type: 'manual',
+      description: '执行器网络连接失败，请检查网络或代理配置',
+      status: 'waiting',
+    });
+
+    await session.submit('当前有没有被阻塞的任务？', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('当前有 1 个阻塞任务');
+    expect(snapshot).toContain(`#${blockedTask.id} [BLOCKED] 飞书客户端接入`);
+    expect(snapshot).toContain('执行器网络连接失败，请检查网络或代理配置');
+    expect(taskRepo.findById(blockedTask.id)?.status).toBe('blocked');
+    expect(taskRepo.findAll()).toHaveLength(1);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('answers no blocked tasks from MetaClaw state without creating a task', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '不应执行',
+        exitCode: 0,
+        durationMs: 1,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn(),
+      resolveIntent: vi.fn(),
+      rankInteractions: vi.fn(),
+    } as unknown as LlmBridge;
+
+    const session = new MetaclawSession({
+      taskEngine,
+      memoryEngine,
+      orchestration,
+      executor,
+      db,
+      config: createConfig(),
+      sessionId: 'sess_query_no_blocked_tasks',
+      contextRecaller,
+      llmBridge,
+    });
+
+    session.initialize();
+
+    await session.submit('检查一下有没有 blocked 任务', { awaitAsyncWork: true });
+
+    const snapshot = session.getSnapshot().output.join('\n');
+    expect(snapshot).toContain('当前没有阻塞任务。');
+    expect(taskRepo.findAll()).toHaveLength(0);
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+  });
+
   it('handles natural language clearing of all manageable tasks and aborts running work', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);

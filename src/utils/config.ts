@@ -19,6 +19,8 @@ const DEFAULT_CONFIG: Config = {
     reminder_enabled: true,
     reminder_throttle: 300,
     top_k_preferences: 5,
+    blocked_recheck_enabled: true,
+    blocked_recheck_interval: 60,
   },
   ui: {
     language: 'zh-CN',

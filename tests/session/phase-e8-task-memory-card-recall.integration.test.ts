@@ -113,7 +113,7 @@ describe('Phase E8 TaskMemoryCard recall integration', () => {
     });
 
     session.initialize();
-    await session.submit('整理 Phoenix 本周周报，补齐经营数据栏目');
+    await session.submit('整理 Phoenix 本周周报，补齐经营数据栏目', { awaitAsyncWork: true });
 
     const output = session.getSnapshot().output.join('\n');
     expect(output).not.toContain('记忆召回确认');

@@ -2,6 +2,7 @@ import type { Task, TaskStatus } from './types.js';
 
 export type NaturalLanguageRoute = 'conversation' | 'task_control' | 'durable_task';
 export type TaskClearScope = 'all' | 'parked' | 'blocked';
+export type TaskStatusQueryScope = 'blocked' | 'dashboard';
 
 export const MANAGEABLE_TASK_STATUSES: TaskStatus[] = ['created', 'ready', 'running', 'parked', 'blocked'];
 
@@ -105,6 +106,33 @@ export function parseTaskClearInstruction(input: string): TaskClearScope | null 
 
   if (/(所有|全部|全部的|所有的|all|active|可执行|待执行|进行中|当前)/i.test(normalized)) {
     return 'all';
+  }
+
+  return null;
+}
+
+export function parseTaskStatusQuery(input: string): TaskStatusQueryScope | null {
+  const normalized = input.replace(/\s+/g, '');
+  if (!normalized) {
+    return null;
+  }
+
+  const asksAboutTasks = /(任务|task|tasks|队列|状态|进度|盘面|阻塞|blocked|挂起|parked)/i.test(normalized);
+  if (!asksAboutTasks) {
+    return null;
+  }
+
+  const isQuery = /(有没有|是否有|有哪些|查看|检查|列出|显示|看一下|看下|多少|几个|状态|进度|盘面|清单|列表)/.test(normalized);
+  if (!isQuery) {
+    return null;
+  }
+
+  if (/(阻塞|blocked)/i.test(normalized)) {
+    return 'blocked';
+  }
+
+  if (/(任务状态|任务进度|任务盘面|任务清单|任务列表|队列|当前任务|所有任务|有哪些任务|有什么任务)/i.test(normalized)) {
+    return 'dashboard';
   }
 
   return null;

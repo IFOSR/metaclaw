@@ -431,6 +431,8 @@ export interface Config {
     reminder_enabled: boolean;
     reminder_throttle: number;
     top_k_preferences: number;
+    blocked_recheck_enabled?: boolean;
+    blocked_recheck_interval?: number;
   };
   ui: {
     language: string;

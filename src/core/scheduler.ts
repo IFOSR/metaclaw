@@ -17,7 +17,7 @@ export interface SubmitOptions {
 }
 
 export interface DispatchContext {
-  executionMode?: 'fresh' | 'resume-parked';
+  executionMode?: 'fresh' | 'resume-parked' | 'resume-blocked';
   schedulingReason?: string;
 }
 

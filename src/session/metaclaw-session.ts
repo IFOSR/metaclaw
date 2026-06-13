@@ -25,7 +25,13 @@ import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
 import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
-import { classifyNaturalLanguageInput, filterDurableTasks, parseTaskClearInstruction } from '../core/task-routing.js';
+import {
+  classifyNaturalLanguageInput,
+  filterDurableTasks,
+  parseTaskClearInstruction,
+  parseTaskStatusQuery,
+  type TaskStatusQueryScope,
+} from '../core/task-routing.js';
 import { ResumeContextBuilder } from '../core/resume-context-builder.js';
 import { RecallPolicyService } from '../core/recall-policy-service.js';
 import { CommandRouter } from '../commands/router.js';
@@ -46,6 +52,7 @@ import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js'
 import { parseSkillUsageEventLine } from '../executor/skill-usage-event-parser.js';
 import { ExecutorRouter, type ExecutorRouteDecision } from '../core/executor-router.js';
 import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
+import { reconcileBlockedTasksFromInput } from '../core/blocked-task-reconciler.js';
 import {
   buildSchedulingReason,
   extractPatterns,
@@ -219,6 +226,10 @@ export class MetaclawSession {
   private runningExecutorNameByTask = new Map<string, string>();
   private lastReminderAt: number | null = null;
   private lastReminderFingerprint: string | null = null;
+  private lastTaskPoolWatchdogReminderAt: number | null = null;
+  private lastTaskPoolWatchdogFingerprint: string | null = null;
+  private lastBlockedRecheckAt: number | null = null;
+  private blockedRecheckInFlight = false;
   private readonly resumeContextBuilder: ResumeContextBuilder;
   private readonly router: CommandRouter;
   private readonly scheduler: SchedulerEngine;
@@ -420,6 +431,205 @@ export class MetaclawSession {
       ...suggestion.reasons.map(reason => `   → ${reason}`),
     );
     return true;
+  }
+
+  async maybeReconcileBlockedTasksOnTimer(nowMs = Date.now()): Promise<boolean> {
+    if (this.blockedRecheckInFlight) {
+      return false;
+    }
+
+    const orchestrationConfig = this.deps.config.orchestration;
+    if (orchestrationConfig.blocked_recheck_enabled === false) {
+      return false;
+    }
+
+    const intervalMs = Math.max(orchestrationConfig.blocked_recheck_interval ?? 60, 5) * 1000;
+    if (
+      this.lastBlockedRecheckAt !== null
+      && nowMs - this.lastBlockedRecheckAt < intervalMs
+    ) {
+      return false;
+    }
+
+    const candidates = this.findTimerRecheckableBlockedTasks();
+    if (candidates.length === 0) {
+      this.lastBlockedRecheckAt = nowMs;
+      return false;
+    }
+
+    this.lastBlockedRecheckAt = nowMs;
+    this.blockedRecheckInFlight = true;
+    try {
+      const executorAvailable = await this.deps.executor.isAvailable();
+      if (!executorAvailable) {
+        return false;
+      }
+
+      const target = candidates[0];
+      this.deps.taskEngine.unblock(target.id);
+      this.setCurrentTaskId(target.id);
+      this.setFocusContext({ kind: 'task', taskId: target.id });
+      this.appendOutput(
+        `→ 定时检查：任务 #${target.id} 的阻塞条件可能已恢复`,
+        `→ 原阻塞原因：${this.getWaitingBlockReason(target) || '未知原因'}`,
+        '→ 已解除阻塞并重新进入调度',
+      );
+      await this.prepareTaskExecution(target.id, {
+        userPrompt: target.goal,
+        contextTaskId: target.id,
+        executionMode: 'resume-blocked',
+        schedulingReason: '定时检查确认执行器可用，恢复阻塞任务',
+      });
+      return true;
+    } finally {
+      this.blockedRecheckInFlight = false;
+      this.refreshRuntimeState();
+    }
+  }
+
+  getBlockedRecheckIntervalMs(): number {
+    const seconds = this.deps.config.orchestration.blocked_recheck_interval ?? 60;
+    return Math.max(seconds, 5) * 1000;
+  }
+
+  async maybeReviewTaskPoolOnTimer(nowMs = Date.now()): Promise<boolean> {
+    if (await this.maybeReconcileBlockedTasksOnTimer(nowMs)) {
+      return true;
+    }
+
+    const beforeState = this.scheduler.getRuntimeState();
+    const scheduledTaskId = await this.scheduler.scheduleNext();
+    this.refreshRuntimeState();
+
+    if (!beforeState.runningTaskId && scheduledTaskId) {
+      const task = this.deps.taskEngine['taskRepo'].findById(scheduledTaskId);
+      if (task) {
+        this.appendOutput(
+          `→ 任务池看护：发现可执行任务 #${task.id} ${task.title}`,
+          '→ 已自动进入调度执行',
+        );
+      }
+      return true;
+    }
+
+    return this.maybeEmitTaskPoolWatchdogReminder(nowMs);
+  }
+
+  private findTimerRecheckableBlockedTasks(): Task[] {
+    return filterDurableTasks(this.deps.taskEngine.list())
+      .filter(task => task.status === 'blocked')
+      .filter(task => this.isTimerRecheckableBlockedTask(task))
+      .sort((left, right) => new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime());
+  }
+
+  private isTimerRecheckableBlockedTask(task: Task): boolean {
+    const reason = this.getWaitingBlockReason(task);
+    if (!reason) {
+      return false;
+    }
+
+    if (isPermissionFailure(reason)) {
+      return false;
+    }
+
+    if (/材料|文件|链接|文档|资料|补充|缺少|等待|授权|权限|permission|authorized|access/i.test(reason)) {
+      return false;
+    }
+
+    return isRecoverableExecutorFailure(reason);
+  }
+
+  private getWaitingBlockReason(task: Task): string {
+    return task.dependencies
+      .filter(dependency => dependency.status === 'waiting')
+      .map(dependency => dependency.description)
+      .filter(Boolean)
+      .join('；');
+  }
+
+  private maybeEmitTaskPoolWatchdogReminder(nowMs: number): boolean {
+    if (!this.deps.config.orchestration.reminder_enabled) {
+      return false;
+    }
+
+    const blockedTasks = filterDurableTasks(this.deps.taskEngine.list())
+      .filter(task => task.status === 'blocked');
+    const parkedTasks = filterDurableTasks(this.deps.taskEngine.list())
+      .filter(task => task.status === 'parked');
+    if (blockedTasks.length === 0 && parkedTasks.length === 0) {
+      return false;
+    }
+
+    const fingerprint = [
+      ...blockedTasks.map(task => `b:${task.id}:${this.getWaitingBlockReason(task)}`),
+      ...parkedTasks.map(task => `p:${task.id}:${task.lastInterruptionReason}:${task.snapshots.at(-1)?.nextStep ?? ''}`),
+    ].join('|');
+    const throttleMs = this.deps.config.orchestration.reminder_throttle * 1000;
+    if (
+      this.lastTaskPoolWatchdogFingerprint === fingerprint
+      && this.lastTaskPoolWatchdogReminderAt !== null
+      && nowMs - this.lastTaskPoolWatchdogReminderAt < throttleMs
+    ) {
+      return false;
+    }
+
+    this.lastTaskPoolWatchdogFingerprint = fingerprint;
+    this.lastTaskPoolWatchdogReminderAt = nowMs;
+    this.appendOutput(...this.formatTaskPoolWatchdogReminder(blockedTasks, parkedTasks));
+    return true;
+  }
+
+  private formatTaskPoolWatchdogReminder(blockedTasks: Task[], parkedTasks: Task[]): string[] {
+    const lines = [
+      '',
+      '┌─ 任务池看护提醒 ─────────────────────────────────┐',
+      `│ 当前不可自动执行：阻塞 ${blockedTasks.length} / 挂起 ${parkedTasks.length}`,
+    ];
+
+    if (blockedTasks.length > 0) {
+      lines.push('│ 阻塞任务：');
+      for (const task of blockedTasks.slice(0, TASK_QUEUE_SNAPSHOT_LIMIT)) {
+        const reason = this.getWaitingBlockReason(task) || '等待解除阻塞';
+        lines.push(`│   #${task.id} ${task.title}`);
+        lines.push(`│     原因：${reason}`);
+        lines.push(`│     还差：${this.describeBlockedTaskMissingCondition(reason, task.id)}`);
+      }
+      if (blockedTasks.length > TASK_QUEUE_SNAPSHOT_LIMIT) {
+        lines.push(`│   ... 还有 ${blockedTasks.length - TASK_QUEUE_SNAPSHOT_LIMIT} 个阻塞任务`);
+      }
+    }
+
+    if (parkedTasks.length > 0) {
+      lines.push('│ 挂起任务：');
+      for (const task of parkedTasks.slice(0, TASK_QUEUE_SNAPSHOT_LIMIT)) {
+        const latestSnapshot = task.snapshots.at(-1);
+        lines.push(`│   #${task.id} ${task.title}`);
+        lines.push(`│     原因：${task.lastInterruptionReason || latestSnapshot?.pauseReason || '等待恢复'}`);
+        lines.push(`│     下一步：${latestSnapshot?.nextStep || '继续推进当前任务'}`);
+      }
+      if (parkedTasks.length > TASK_QUEUE_SNAPSHOT_LIMIT) {
+        lines.push(`│   ... 还有 ${parkedTasks.length - TASK_QUEUE_SNAPSHOT_LIMIT} 个挂起任务`);
+      }
+    }
+
+    lines.push('└──────────────────────────────────────────────────┘');
+    return lines;
+  }
+
+  private describeBlockedTaskMissingCondition(reason: string, taskId: string): string {
+    if (/材料|文件|链接|文档|资料|补充|缺少|等待/i.test(reason)) {
+      return `补充材料/文件/链接后，我会自动恢复；也可执行 /task ${taskId} unblock [材料路径]`;
+    }
+
+    if (/授权|权限|permission|authorized|access/i.test(reason)) {
+      return `确认权限/授权后，直接说“已授权，继续任务 ${taskId}”或执行 /task ${taskId} unblock`;
+    }
+
+    if (isRecoverableExecutorFailure(reason)) {
+      return '等待执行器或网络恢复；定时检查会自动重试';
+    }
+
+    return `确认阻塞条件已解除后执行 /task ${taskId} unblock`;
   }
 
   private notify(): void {
@@ -1636,6 +1846,38 @@ export class MetaclawSession {
     return true;
   }
 
+  private async maybeAutoResumeSatisfiedBlockedTask(userInput: string): Promise<boolean> {
+    const decision = reconcileBlockedTasksFromInput(
+      filterDurableTasks(this.deps.taskEngine.list()),
+      userInput,
+    );
+    if (!decision) {
+      return false;
+    }
+
+    for (const resourcePath of decision.newlyProvidedResources) {
+      this.deps.taskEngine.attachResource(decision.task.id, resourcePath);
+    }
+    this.deps.taskEngine.unblock(decision.task.id);
+    this.setCurrentTaskId(decision.task.id);
+    this.setFocusContext({ kind: 'task', taskId: decision.task.id });
+    this.appendOutput(
+      `→ 检测到任务 #${decision.task.id} 的阻塞条件已满足`,
+      `→ 原因：${decision.reason}`,
+      decision.newlyProvidedResources.length > 0
+        ? `→ 已自动关联 ${decision.newlyProvidedResources.length} 份补充材料`
+        : '→ 任务已解除阻塞，继续执行',
+    );
+    await this.prepareTaskExecution(decision.task.id, {
+      userPrompt: userInput,
+      contextTaskId: decision.task.id,
+      executionMode: 'resume-blocked',
+      schedulingReason: `阻塞条件已满足：${decision.reason}`,
+      newlyProvidedResources: decision.newlyProvidedResources,
+    });
+    return true;
+  }
+
   private async handleCommand(userInput: string): Promise<boolean> {
     const result = await this.router.execute(userInput, {
       taskEngine: this.deps.taskEngine,
@@ -1958,7 +2200,15 @@ export class MetaclawSession {
       return;
     }
 
+    if (this.maybeHandleNaturalLanguageTaskStatusQuery(userInput)) {
+      return;
+    }
+
     if (await this.maybeHandleNaturalLanguageTaskResume(userInput)) {
+      return;
+    }
+
+    if (await this.maybeAutoResumeSatisfiedBlockedTask(userInput)) {
       return;
     }
 
@@ -2219,6 +2469,63 @@ export class MetaclawSession {
     this.refreshRuntimeState();
     this.appendOutput(formatTaskClearResult(scope, result.cancelled, result.runningCancelled));
     return true;
+  }
+
+  private maybeHandleNaturalLanguageTaskStatusQuery(userInput: string): boolean {
+    const scope = parseTaskStatusQuery(userInput);
+    if (!scope) {
+      return false;
+    }
+
+    this.appendOutput(this.formatNaturalLanguageTaskStatus(scope));
+    this.refreshRuntimeState();
+    return true;
+  }
+
+  private formatNaturalLanguageTaskStatus(scope: TaskStatusQueryScope): string {
+    if (scope === 'blocked') {
+      const blockedTasks = this.deps.orchestration.getBlockedTasks();
+      if (blockedTasks.length === 0) {
+        return '当前没有阻塞任务。';
+      }
+
+      return [
+        `当前有 ${blockedTasks.length} 个阻塞任务：`,
+        ...blockedTasks.map(task => [
+          `  #${task.id} [BLOCKED] ${task.title}`,
+          `    → 阻塞原因：${task.blockReason}`,
+          `    → 建议动作：/task ${task.id} unblock，或直接补充材料/说明后让我继续`,
+        ].join('\n')),
+      ].join('\n');
+    }
+
+    const dashboard = this.deps.orchestration.getDashboard();
+    const lines = [
+      '当前任务状态：',
+      `  总览：活跃 ${dashboard.summary.active} / 阻塞 ${dashboard.summary.blocked} / 挂起 ${dashboard.summary.parked} / 已完成 ${dashboard.summary.done}`,
+    ];
+
+    if (dashboard.blockedTasks.length > 0) {
+      lines.push('  阻塞任务：');
+      lines.push(...dashboard.blockedTasks.map(task => `    #${task.id} ${task.title}，原因：${task.blockReason}`));
+    }
+
+    if (dashboard.readyTasks.length > 0) {
+      lines.push('  待执行任务：');
+      lines.push(...dashboard.readyTasks.slice(0, TASK_QUEUE_SNAPSHOT_LIMIT).map(task => `    #${task.id} ${task.title}`));
+      if (dashboard.readyTasks.length > TASK_QUEUE_SNAPSHOT_LIMIT) {
+        lines.push(`    ... 还有 ${dashboard.readyTasks.length - TASK_QUEUE_SNAPSHOT_LIMIT} 个待执行任务`);
+      }
+    }
+
+    if (!dashboard.priorityTask) {
+      lines.push('  当前没有需要优先提示的任务。');
+    } else {
+      lines.push(`  建议优先：#${dashboard.priorityTask.id} ${dashboard.priorityTask.title}`);
+      lines.push(...dashboard.priorityTask.reasons.map(reason => `    → ${reason}`));
+    }
+
+    return lines.join('\n');
   }
 
   private async resolveRouteDecision(
