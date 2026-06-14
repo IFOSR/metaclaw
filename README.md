@@ -18,6 +18,42 @@ It is built for teams who need AI agents to keep working across interruptions, r
 - Sends Feishu chat replies, file artifacts, and Markdown preview links through the backend delivery layer.
 - Provides a local Gateway so multiple terminals can connect to one MetaClaw runtime.
 
+## Core Architecture
+
+MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, and audited.
+
+```text
+User Input
+    │
+    ▼
+Input Boundary
+    ├── conversation
+    ├── task_control
+    └── durable_task
+          │
+          ▼
+Task Runtime
+    ├── TaskEngine: task state machine
+    ├── SchedulerEngine: queue, priority, preemption, resume
+    ├── OrchestrationEngine: dashboard, guidance, blocked/parked review
+    ├── MemoryEngine: preferences, task memory, recall review
+    └── MetaclawSession: interactive/script/gateway runtime coordinator
+          │
+          ▼
+Execution Layer
+    ├── ExecutorRouter: intent-aware executor selection
+    ├── Executor adapters: Codex, Pi, Hermes, custom CLI
+    └── Backend delivery: Feishu, artifacts, Markdown preview
+```
+
+The conversation/task boundary matters:
+
+- Conversation: answer now, do not create durable state. Good for explanations, clarification, and status questions.
+- Task control: inspect or change existing task state. Good for "what is running?", "resume that task", or "clear blocked tasks".
+- Durable task: create or continue work that needs execution, persistence, artifacts, recovery, scheduling, or later retrieval.
+
+Current planning focus is documented in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md). The next upgrade line prioritizes task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, and aggregation/verification. It explicitly does not prioritize Executor Discovery, remote registries, or broad multi-client Gateway expansion in this cycle.
+
 ## Current Executors
 
 MetaClaw supports these executor adapters:
@@ -356,6 +392,8 @@ orchestration:
   reminder_enabled: true
   reminder_throttle: 300
   top_k_preferences: 5
+  blocked_recheck_enabled: true
+  blocked_recheck_interval: 60
 
 ui:
   language: en-US
@@ -510,7 +548,10 @@ MetaClaw uses a single active executor with a scheduler in front of it.
 - Urgency is based on structured semantic priority, not keyword matching.
 - Executable parked tasks auto-resume when the system is idle.
 - Semantically urgent parked tasks resume before normal parked tasks.
-- Blocked or not-ready tasks do not auto-run.
+- The task pool watchdog periodically surfaces blocked and parked tasks with the missing condition or next step.
+- Recoverable executor failures can be rechecked on a timer and moved back into scheduling when the executor is available again.
+- Material, permission, authorization, and access blocks stay blocked until the user provides the missing input or explicitly unblocks the task.
+- Not-ready tasks do not auto-run.
 
 This prevents queued work from wasting compute while preserving task safety.
 
