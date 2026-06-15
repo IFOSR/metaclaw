@@ -5,6 +5,12 @@ import { TaskRepo } from './storage/task-repo.js';
 import { PreferenceRepo } from './storage/preference-repo.js';
 import { ObservationRepo } from './storage/observation-repo.js';
 import { TaskMemoryCardRepo } from './storage/task-memory-card-repo.js';
+import { TaskSearchIndexRepo } from './storage/task-search-index-repo.js';
+import { TaskRelationRepo } from './storage/task-relation-repo.js';
+import { TaskMemoryEmbeddingRepo } from './storage/task-memory-embedding-repo.js';
+import { RecallFeedbackRepo } from './storage/recall-feedback-repo.js';
+import { HybridMemoryRecaller } from './core/hybrid-memory-recaller.js';
+import { HybridTaskRetriever } from './core/hybrid-task-retriever.js';
 import { TaskEngine } from './core/task-engine.js';
 import { MemoryEngine } from './core/memory-engine.js';
 import { OrchestrationEngine } from './core/orchestration.js';
@@ -100,18 +106,35 @@ async function main() {
   const db = createDatabase(resolve(metaclawDir, 'metaclaw.db'));
 
   // 4. 初始化 Repos
-  const taskRepo = new TaskRepo(db);
+  const taskSearchIndexRepo = new TaskSearchIndexRepo(db);
+  const taskRepo = new TaskRepo(db, taskSearchIndexRepo);
   const prefRepo = new PreferenceRepo(db);
   const obsRepo = new ObservationRepo(db);
+  const taskRelationRepo = new TaskRelationRepo(db);
+  const taskMemoryEmbeddingRepo = new TaskMemoryEmbeddingRepo(db);
+  const recallFeedbackRepo = new RecallFeedbackRepo(db);
 
-  const taskMemoryCardRepo = new TaskMemoryCardRepo(db);
+  const taskMemoryCardRepo = new TaskMemoryCardRepo(db, taskSearchIndexRepo);
 
   // 5. 初始化执行器语义桥接
   const llmBridge = new LlmBridge(config.executor.command);
 
   // 6. 初始化引擎
   const taskEngine = new TaskEngine(taskRepo, snapshotDir);
-  const memoryEngine = new MemoryEngine(prefRepo, obsRepo, undefined, undefined, taskMemoryCardRepo, llmBridge);
+  const hybridTaskRetriever = new HybridTaskRetriever({
+    taskRepo,
+    taskSearchIndexRepo,
+    taskRelationRepo,
+    taskMemoryEmbeddingRepo,
+    recallFeedbackRepo,
+  });
+  const hybridMemoryRecaller = new HybridMemoryRecaller({
+    taskRepo,
+    taskMemoryEmbeddingRepo,
+    recallFeedbackRepo,
+    hybridTaskRetriever,
+  });
+  const memoryEngine = new MemoryEngine(prefRepo, obsRepo, undefined, hybridMemoryRecaller, taskMemoryCardRepo, llmBridge);
   const orchestration = new OrchestrationEngine(taskEngine);
 
   // 7. 初始化执行器

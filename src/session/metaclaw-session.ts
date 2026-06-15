@@ -3412,6 +3412,9 @@ export class MetaclawSession {
     }
 
     if (artifactPaths.length > 0) {
+      if (artifactPaths.length === 1) {
+        return `已写入任务文件：${artifactPaths[0]}`;
+      }
       return `已写入 ${artifactPaths.length} 个任务文件到 ${workspaceContext.targetPaths[0]}`;
     }
 
@@ -3436,9 +3439,16 @@ export class MetaclawSession {
       for (const artifactPath of artifactPaths) {
         normalized = normalized.replace(artifactPath, '').trim();
       }
+      normalized = normalized
+        .replace(/`{1,3}\s*`{1,3}/g, '')
+        .replace(/["“”'‘’]\s*["“”'‘’]/g, '')
+        .trim();
       normalized = normalized.replace(/[：:，,\-]+$/u, '').trim();
 
       if (!normalized) {
+        continue;
+      }
+      if (/^(已创建文件|已保存文件|文件已创建|保存路径|路径)$/u.test(normalized)) {
         continue;
       }
       if (/<[a-z][^>]*>/i.test(normalized)) {

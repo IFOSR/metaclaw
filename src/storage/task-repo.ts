@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { Task, TaskSnapshot, TaskStatus, PrioritySignals, Dependency } from '../core/types.js';
+import type { TaskSearchIndexRepo } from './task-search-index-repo.js';
 
 interface TaskRow {
   id: string;
@@ -44,7 +45,10 @@ function rowToTask(row: TaskRow): Task {
 }
 
 export class TaskRepo {
-  constructor(private db: Database.Database) {}
+  constructor(
+    private db: Database.Database,
+    private readonly taskSearchIndexRepo?: TaskSearchIndexRepo,
+  ) {}
 
   insert(task: Task): void {
     this.db.prepare(`
@@ -60,6 +64,7 @@ export class TaskRepo {
       JSON.stringify(task.injectedPreferences), task.lastSchedulingReason,
       task.lastInterruptionReason, task.interruptionCount, task.createdAt, task.updatedAt,
     );
+    this.taskSearchIndexRepo?.indexTask(task);
   }
 
   findById(id: string): Task | null {
@@ -105,6 +110,10 @@ export class TaskRepo {
 
     values.push(id);
     this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    const updatedTask = this.findById(id);
+    if (updatedTask) {
+      this.taskSearchIndexRepo?.indexTask(updatedTask);
+    }
   }
 
   updateStatus(id: string, status: TaskStatus): void {

@@ -2,6 +2,7 @@ import type { CommandHandler, CommandContext, CommandResult } from './router.js'
 import { filterDurableTasks, MANAGEABLE_TASK_STATUSES, type TaskClearScope } from '../core/task-routing.js';
 import { buildMaterialSummary, extractMaterialTextSnippets, isWebLink, splitTaskResources } from '../core/material-utils.js';
 import type { Task, TaskStatus } from '../core/types.js';
+import { TaskSearchIndexRepo } from '../storage/task-search-index-repo.js';
 
 const CLEAR_SCOPE_STATUSES: Record<TaskClearScope, TaskStatus[]> = {
   all: MANAGEABLE_TASK_STATUSES,
@@ -236,10 +237,45 @@ export const tasksCommand: CommandHandler = {
 export const taskCommand: CommandHandler = {
   name: 'task',
   aliases: [],
-  description: '任务操作：/task <id> [pause|resume|block|unblock|cancel|done]',
+  description: '任务操作：/task <id> [pause|resume|block|unblock|cancel|done]；/task index rebuild|search <query>',
   async execute(args, context) {
     if (args.length === 0) {
-      return { type: 'text', content: '用法: /task <id> [action]' };
+      return { type: 'text', content: '用法: /task <id> [action]；/task index rebuild|search <query>' };
+    }
+
+    if (args[0] === 'index') {
+      const action = args[1];
+      const indexRepo = new TaskSearchIndexRepo(context.db);
+
+      if (action === 'rebuild') {
+        const count = indexRepo.rebuild();
+        return { type: 'text', content: `任务检索索引已重建：${count} 条索引记录` };
+      }
+
+      if (action === 'search') {
+        const query = args.slice(2).join(' ').trim();
+        if (!query) {
+          return { type: 'text', content: '用法: /task index search <query>' };
+        }
+
+        const results = indexRepo.search(query, 10);
+        if (results.length === 0) {
+          return { type: 'text', content: '任务检索索引没有命中结果' };
+        }
+
+        return {
+          type: 'text',
+          content: [
+            `任务检索索引命中 ${results.length} 条：`,
+            ...results.map(result => {
+              const snippet = result.snippet.replace(/\s+/g, ' ').trim();
+              return `  - #${result.taskId} [${result.sourceKind}] ${result.title || result.sourceId}: ${snippet}`;
+            }),
+          ].join('\n'),
+        };
+      }
+
+      return { type: 'text', content: '用法: /task index rebuild|search <query>' };
     }
 
     const taskId = args[0];

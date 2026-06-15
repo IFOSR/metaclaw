@@ -14,6 +14,7 @@ import type { PreferenceEmbeddingRecord } from '../storage/preference-embedding-
 import type { TaskMemoryEmbeddingRecord } from '../storage/task-memory-embedding-repo.js';
 import type { RecallFeedbackAction, RecallFeedbackRecord } from '../storage/recall-feedback-repo.js';
 import type { MemoryRecallEventRecord } from '../storage/memory-recall-event-repo.js';
+import type { HybridTaskRetriever } from './hybrid-task-retriever.js';
 
 interface PreferenceRepoLike {
   findById(id: string): Preference | null;
@@ -51,6 +52,7 @@ interface HybridMemoryRecallerDeps {
   taskMemoryEmbeddingRepo?: TaskMemoryEmbeddingRepoLike;
   memoryRecallEventRepo?: MemoryRecallEventRepoLike;
   recallFeedbackRepo?: RecallFeedbackRepoLike;
+  hybridTaskRetriever?: Pick<HybridTaskRetriever, 'retrieve' | 'toTaskMemoryCandidates'>;
 }
 
 export interface HybridMemoryRecallInput {
@@ -198,6 +200,16 @@ export class HybridMemoryRecaller {
   private async buildSemanticTaskCandidates(
     input: HybridMemoryRecallInput,
   ): Promise<TaskMemoryCandidate[]> {
+    if (this.deps.hybridTaskRetriever) {
+      const retrievedTasks = await this.deps.hybridTaskRetriever.retrieve({
+        queryText: input.queryText,
+        keywords: input.keywords,
+        currentTaskId: input.taskId ?? null,
+        topK: input.topK ?? DEFAULT_TOP_K,
+      });
+      return this.deps.hybridTaskRetriever.toTaskMemoryCandidates(retrievedTasks);
+    }
+
     if (
       !this.deps.embeddingProvider
       || !this.deps.taskMemoryEmbeddingRepo

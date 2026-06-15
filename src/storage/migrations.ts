@@ -424,6 +424,50 @@ const MIGRATIONS: Migration[] = [
         ON executor_route_events(task_id, created_at);
     `,
   },
+  {
+    version: 14,
+    up: `
+      CREATE VIRTUAL TABLE IF NOT EXISTS task_search_index USING fts5(
+        task_id UNINDEXED,
+        source_kind UNINDEXED,
+        source_id UNINDEXED,
+        title,
+        body,
+        tags,
+        created_at UNINDEXED,
+        updated_at UNINDEXED,
+        tokenize = 'trigram'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS trg_task_search_index_interactions_insert
+      AFTER INSERT ON interactions
+      WHEN NEW.task_id IS NOT NULL
+      BEGIN
+        DELETE FROM task_search_index
+          WHERE source_kind = 'interaction' AND source_id = NEW.id;
+        INSERT INTO task_search_index (
+          task_id, source_kind, source_id, title, body, tags, created_at, updated_at
+        ) VALUES (
+          NEW.task_id,
+          'interaction',
+          NEW.id,
+          '',
+          substr(COALESCE(NEW.user_input, '') || char(10) || COALESCE(NEW.system_output, ''), 1, 4000),
+          'interaction',
+          NEW.created_at,
+          NEW.created_at
+        );
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_task_search_index_interactions_delete
+      AFTER DELETE ON interactions
+      WHEN OLD.task_id IS NOT NULL
+      BEGIN
+        DELETE FROM task_search_index
+          WHERE source_kind = 'interaction' AND source_id = OLD.id;
+      END;
+    `,
+  },
 ];
 
 function columnExists(db: Database.Database, table: string, column: string): boolean {

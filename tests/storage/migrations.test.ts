@@ -71,7 +71,7 @@ describe('runMigrations', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const versions = db.prepare('SELECT version FROM schema_version ORDER BY version').all() as Array<{ version: number }>;
-    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
 
     const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
     expect(taskColumns.map(column => column.name)).toEqual(expect.arrayContaining([
@@ -109,6 +109,18 @@ describe('runMigrations', () => {
       'runtime_args_json',
       'runtime_check_command',
       'project_url',
+    ]));
+
+    const taskSearchIndexColumns = db.prepare('PRAGMA table_info(task_search_index)').all() as Array<{ name: string }>;
+    expect(taskSearchIndexColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'task_id',
+      'source_kind',
+      'source_id',
+      'title',
+      'body',
+      'tags',
+      'created_at',
+      'updated_at',
     ]));
 
     const repo = new TaskRepo(db);

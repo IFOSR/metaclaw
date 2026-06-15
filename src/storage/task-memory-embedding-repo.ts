@@ -107,6 +107,19 @@ export class TaskMemoryEmbeddingRepo {
     return rows.map(rowToTaskMemoryEmbedding);
   }
 
+  findByTaskIds(taskIds: string[]): TaskMemoryEmbeddingRecord[] {
+    const uniqueTaskIds = Array.from(new Set(taskIds));
+    if (uniqueTaskIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = uniqueTaskIds.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM task_memory_embeddings WHERE task_id IN (${placeholders}) ORDER BY updated_at DESC`
+    ).all(...uniqueTaskIds) as TaskMemoryEmbeddingRow[];
+    return rows.map(rowToTaskMemoryEmbedding);
+  }
+
   findAll(): TaskMemoryEmbeddingRecord[] {
     const rows = this.db.prepare(
       'SELECT * FROM task_memory_embeddings ORDER BY updated_at DESC'

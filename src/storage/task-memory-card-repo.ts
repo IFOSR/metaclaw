@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { TaskSearchIndexRepo } from './task-search-index-repo.js';
 
 interface TaskMemoryCardRow {
   id: string;
@@ -202,7 +203,10 @@ function calculateRelevanceScore(card: TaskMemoryCardRecord, request: TaskMemory
 }
 
 export class TaskMemoryCardRepo {
-  constructor(private readonly db: Database.Database) {}
+  constructor(
+    private readonly db: Database.Database,
+    private readonly taskSearchIndexRepo?: TaskSearchIndexRepo,
+  ) {}
 
   insert(record: TaskMemoryCardInsert): void {
     this.db.prepare(`
@@ -239,6 +243,7 @@ export class TaskMemoryCardRepo {
       record.createdAt,
       record.updatedAt,
     );
+    this.taskSearchIndexRepo?.indexMemoryCard(record);
   }
 
   findByTaskId(taskId: string): TaskMemoryCardRecord | null {
