@@ -127,12 +127,21 @@ Markdown 在线预览前提：
 
 ## 安装
 
-推荐使用一键 setup：
+大多数用户按这个顺序安装和验证：
 
 ```bash
 git clone https://github.com/IFOSR/metaclaw.git
 cd metaclaw
 ./setup.sh
+metaclaw --help
+npm run smoke:metaclaw
+```
+
+看到 `metaclaw --help` 能打印 CLI 帮助，并且 `npm run smoke:metaclaw` 最后输出下面内容，才说明安装后真实用户路径可用：
+
+```text
+MetaClaw real task smoke passed.
+Artifact: /tmp/.../smoke-result.md
 ```
 
 `setup.sh` 会安装 MetaClaw 本身、构建 CLI、执行 `npm link`、生成 `~/.metaclaw/config.yaml`，并自动检测当前系统里的 Executor。
@@ -142,6 +151,21 @@ cd metaclaw
 ```bash
 npm install -g @openai/codex
 ```
+
+如果 setup 过程中刚安装了 Codex CLI，先打开一次 Codex 并完成登录，再运行真实任务：
+
+```bash
+codex
+```
+
+安装核验清单：
+
+- `node --version` 是 `>=20`。
+- `./setup.sh` 最后显示“安装完成”。
+- `~/.metaclaw/config.yaml` 已生成。
+- 新开一个 shell 后，`metaclaw --help` 可用。
+- 默认 executor 命令可用，例如 `codex --help`。
+- `npm run smoke:metaclaw` 通过，并打印生成的 artifact 路径。
 
 setup 可选参数：
 
@@ -175,6 +199,8 @@ npm link
 ```bash
 metaclaw --help
 ```
+
+如果 setup 后提示找不到 `metaclaw` 命令，先新开一个 shell，让 `PATH` 重新加载 npm global link。如果仍然找不到，重新执行手动安装 fallback，并用 `npm config get prefix` 检查 npm global bin 目录是否在 `PATH` 中。
 
 ## 安装执行器
 

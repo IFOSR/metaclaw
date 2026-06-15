@@ -514,6 +514,7 @@ main() {
   echo "下一步："
   echo "  metaclaw --help"
   echo "  metaclaw"
+  echo "  npm run smoke:metaclaw"
   echo ""
   echo "或使用项目启动脚本："
   echo "  ./metaclaw.sh start"
@@ -521,6 +522,8 @@ main() {
   echo ""
   echo "如果刚安装 Codex CLI，请先完成登录："
   echo "  codex"
+  echo ""
+  echo "看到 smoke 输出 \"MetaClaw real task smoke passed.\" 才表示真实任务路径可用。"
 }
 
 main "$@"

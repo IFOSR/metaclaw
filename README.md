@@ -130,12 +130,21 @@ Markdown preview prerequisites:
 
 ## Install
 
-Recommended one-command setup:
+For most users, install and verify in this order:
 
 ```bash
 git clone https://github.com/IFOSR/metaclaw.git
 cd metaclaw
 ./setup.sh
+metaclaw --help
+npm run smoke:metaclaw
+```
+
+The install is usable when `metaclaw --help` prints the CLI help and `npm run smoke:metaclaw` ends with:
+
+```text
+MetaClaw real task smoke passed.
+Artifact: /tmp/.../smoke-result.md
 ```
 
 `setup.sh` installs MetaClaw itself, builds the local CLI, links `metaclaw`, creates `~/.metaclaw/config.yaml`, and detects installed executors on `PATH`.
@@ -145,6 +154,21 @@ In an interactive terminal it shows the detected executor list, lets you choose 
 ```bash
 npm install -g @openai/codex
 ```
+
+If Codex CLI was installed during setup, open it once and finish login before running real tasks:
+
+```bash
+codex
+```
+
+Install checklist:
+
+- `node --version` is `>=20`.
+- `./setup.sh` finishes with "安装完成".
+- `~/.metaclaw/config.yaml` exists.
+- `metaclaw --help` works from a new shell.
+- The default executor command works, for example `codex --help`.
+- `npm run smoke:metaclaw` passes and prints the generated artifact path.
 
 Setup options:
 
@@ -178,6 +202,8 @@ Check the CLI:
 ```bash
 metaclaw --help
 ```
+
+If `metaclaw` is not found after setup, first open a new shell so your `PATH` picks up the npm global link. If it is still missing, run the manual fallback again and check `npm config get prefix` to confirm that npm's global bin directory is on `PATH`.
 
 ## Install Executors
 
