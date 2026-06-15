@@ -2,9 +2,9 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-MetaClaw is an agentic operations workbench for long-running knowledge work. It keeps tasks, memory, executor routing, Feishu delivery, and generated artifacts in one auditable local system.
+MetaClaw is a local AI Task OS for agentic work. It turns natural-language requests into durable, searchable, schedulable, and verifiable tasks that can survive interruptions, recall prior context, route work to the right executor, and deliver artifacts back to the places where people review them.
 
-It is built for teams who need AI agents to keep working across interruptions, recover context precisely, route work to the right executor, and deliver results back to the places where people actually review them.
+It is built for teams who need agents to do more than answer the current turn. MetaClaw gives long-running AI work a task state machine, memory boundary, executor routing layer, verification loop, local Gateway, Feishu delivery path, and real end-to-end smoke gate.
 
 ## What MetaClaw Does
 
@@ -12,15 +12,19 @@ It is built for teams who need AI agents to keep working across interruptions, r
 - Restores interrupted work with resume context instead of restarting from scratch.
 - Auto-resumes executable parked tasks when the scheduler is idle.
 - Uses semantic priority, not keyword matching, to decide urgent preemption and resume ordering.
-- Routes work across multiple executors by task intent and ownership boundaries.
+- Searches historical tasks with a local SQLite FTS index and hybrid retrieval.
+- Plans complex work as explicit work units with acceptance criteria and aggregation rules.
+- Routes work across executors by task intent, executor capability, and ownership boundaries.
+- Provides a tested Agentic Loop core that aggregates executor results, checks evidence, and feeds failures back for retry.
 - Recalls only clearly applicable preferences and task memory; uncertain recall is skipped by default so Feishu and unattended executors never wait for confirmation.
 - Captures generated files as task artifacts.
 - Sends Feishu chat replies, file artifacts, and Markdown preview links through the backend delivery layer.
 - Provides a local Gateway so multiple terminals can connect to one MetaClaw runtime.
+- Ships with `npm run smoke:metaclaw`, a real MetaClaw end-to-end smoke gate that runs the CLI, executor, artifact capture, and regression checks.
 
 ## Core Architecture
 
-MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, and audited.
+MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, verified, and audited.
 
 ```text
 User Input
@@ -40,8 +44,24 @@ Task Runtime
     └── MetaclawSession: interactive/script/gateway runtime coordinator
           │
           ▼
-Execution Layer
+Task Retrieval Layer
+    ├── TaskSearchIndexRepo: SQLite FTS task index
+    └── HybridTaskRetriever: explicit, focus, FTS, relation, recent, feedback, semantic rerank
+          │
+          ▼
+Execution Strategy Layer
     ├── ExecutorRouter: intent-aware executor selection
+    ├── ExecutionStrategyPlanner: single executor or multi-executor work units
+    └── Acceptance criteria: user request, tests, sources, artifacts, review verdicts
+          │
+          ▼
+Agentic Verification Layer
+    ├── MultiExecutorOrchestrator: sequential/parallel work-unit fan-out
+    ├── ExecutionAggregator: merge, verify, flag conflicts, collect artifacts
+    └── AgenticLoopController: retry failed units until pass or blocked
+          │
+          ▼
+Executor And Delivery Layer
     ├── Executor adapters: Codex, Pi, Hermes, custom CLI
     └── Backend delivery: Feishu, artifacts, Markdown preview
 ```
@@ -52,7 +72,9 @@ The conversation/task boundary matters:
 - Task control: inspect or change existing task state. Good for "what is running?", "resume that task", or "clear blocked tasks".
 - Durable task: create or continue work that needs execution, persistence, artifacts, recovery, scheduling, or later retrieval.
 
-Current planning focus is documented in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md). The next upgrade line prioritizes task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, and aggregation/verification. It explicitly does not prioritize Executor Discovery, remote registries, or broad multi-client Gateway expansion in this cycle.
+The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is now reflected in the codebase: task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
+
+Important runtime boundary: the Agentic Loop is implemented as a core architecture layer and tested directly. The current interactive/script session path still uses the existing session runtime unless a feature path explicitly calls the strategy/orchestration loop.
 
 ## Current Executors
 
@@ -506,12 +528,13 @@ MetaClaw will:
 
 1. Classify the input as conversation, task control, or durable work.
 2. Create or resolve the target task.
-3. Apply semantic task priority.
-4. Ask for recall review if relevant memory is available.
+3. Retrieve relevant historical task context when available.
+4. Apply semantic task priority.
 5. Route the task to the best executor.
-6. Execute and stream progress.
-7. Store result summaries, artifacts, and task memory.
-8. Suggest what to do next.
+6. For complex work, build work units and acceptance criteria.
+7. Execute and stream progress.
+8. Store result summaries, artifacts, and task memory.
+9. Suggest what to do next.
 
 Useful commands:
 
@@ -531,6 +554,8 @@ Useful commands:
 /task <id> unblock /tmp/evidence-v3.pdf
 /task <id> cancel
 /task <id> done
+/task index rebuild
+/task index search <query>
 
 /dashboard
 /attach [taskId] <file paths...>
@@ -539,6 +564,29 @@ Useful commands:
 /help
 /exit
 ```
+
+## Task Search And Hybrid Retrieval
+
+MetaClaw keeps a local SQLite FTS5 search index for tasks and task-related text. This makes historical work recoverable even when the user does not remember the exact task id.
+
+Commands:
+
+```bash
+/task index rebuild
+/task index search contract risk matrix
+```
+
+The hybrid retriever combines several signals:
+
+- Explicit task references from the current request.
+- Focused task context from the current session.
+- Full-text matches from the task search index.
+- Related tasks through task relations.
+- Recent task activity.
+- Feedback and prior execution traces.
+- Semantic reranking across the candidate set.
+
+Implicit recall excludes the current task, so a task does not accidentally recall itself during first execution. Uncertain memory is not injected blindly; unattended Gateway and Feishu flows keep moving instead of blocking on confirmation prompts.
 
 ## Scheduler And Priority Model
 
@@ -565,6 +613,26 @@ Routing is intent-first:
 - Explicit executor names are respected when available.
 
 The router records selected executor, confidence, primary intent, matched boundary, rejected candidates, and routing reason.
+
+## Complex Task Strategy And Agentic Loop
+
+MetaClaw can represent complex requests as a strategy instead of a single undifferentiated prompt. The strategy planner decides between:
+
+- `single_executor`: one executor is enough.
+- `multi_executor`: split the request into work units with executor hints, dependencies, inputs, expected output type, risk level, and acceptance checks.
+
+The planner uses complexity signals such as explicit multi-agent wording, multiple capability domains, staged dependencies, high-risk validation, multiple resources, and relevant historical tasks.
+
+For multi-executor strategies, the Agentic Loop core is:
+
+1. Run work units through `MultiExecutorOrchestrator`.
+2. Aggregate results with `ExecutionAggregator`.
+3. Check required evidence: user request coverage, patch test evidence, research sources, artifact paths, review verdicts, missing work units, and cross-unit conflicts.
+4. If verification passes, produce the final aggregated result.
+5. If verification has concerns, append targeted feedback to failed work units and retry until the strategy passes or reaches `maxIterations`.
+6. If it still fails, return `blocked` with the reason instead of silently shipping an unverified result.
+
+This is the acceptance layer for agentic work: executor output is not treated as final just because a worker returned text. The core modules are implemented and tested; integration into each user-facing execution path is intentionally staged so existing runtime behavior remains stable.
 
 ## Executors Vs Skills
 
