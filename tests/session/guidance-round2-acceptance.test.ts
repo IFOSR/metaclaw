@@ -12,6 +12,7 @@ import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
+import type { NotificationService } from '../../src/notifications/types.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -42,7 +43,7 @@ function createConfig(overrides?: Partial<Config['orchestration']>): Config {
   };
 }
 
-function createSession(config: Config) {
+function createSession(config: Config, notifier?: NotificationService) {
   const db = createTestDb();
   const taskRepo = new TaskRepo(db);
   const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -76,6 +77,7 @@ function createSession(config: Config) {
     sessionId: 'sess_guidance_round2',
     contextRecaller,
     llmBridge,
+    notifier,
   });
 
   return { session, taskEngine, taskRepo, executor };
@@ -164,6 +166,45 @@ describe('Round 2 guidance acceptance', () => {
     expect(executionInput.executionContextBundle.mode).toBe('resume-blocked');
     expect(taskRepo.findById(task.id)?.status).toBe('done');
     expect(session.getSnapshot().output.join('\n')).toContain('定时检查');
+  });
+
+  it('notifies when a system-resumed blocked task completes in the background', async () => {
+    const notifier: NotificationService = {
+      notifyMemoryCandidate: vi.fn().mockResolvedValue(undefined),
+      notifyTaskCompleted: vi.fn().mockResolvedValue(undefined),
+    };
+    const { session, taskEngine, taskRepo } = createSession(createConfig({
+      blocked_recheck_enabled: true,
+      blocked_recheck_interval: 5,
+    }), notifier);
+
+    const task = taskEngine.create({ title: '后台恢复任务', goal: '继续执行后台恢复任务' });
+    taskEngine.transition(task.id, 'ready');
+    taskEngine.transition(task.id, 'running');
+    taskEngine.block(task.id, {
+      taskId: task.id,
+      type: 'manual',
+      description: '执行器网络连接失败，请检查网络或代理配置',
+      status: 'waiting',
+    });
+
+    session.initialize();
+    await session.maybeReconcileBlockedTasksOnTimer(1_000);
+    await session.waitForAsyncWork();
+
+    expect(taskRepo.findById(task.id)?.status).toBe('done');
+    expect(notifier.notifyTaskCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: task.id,
+      title: '后台恢复任务',
+      summary: 'ok',
+      executionMode: 'resume-blocked',
+      origin: 'system',
+      recoveryTrigger: expect.objectContaining({
+        kind: 'timer-recheck',
+        blockedReason: '执行器网络连接失败，请检查网络或代理配置',
+        triggerReason: '定时检查确认执行器可用',
+      }),
+    }));
   });
 
   it('does not periodically resume blocked tasks that still need user materials', async () => {

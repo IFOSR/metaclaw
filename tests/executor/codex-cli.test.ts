@@ -179,12 +179,17 @@ describe('CodexCliAdapter', () => {
   });
 
   describe('spawn args', () => {
-    it('uses codex exec with full permissions by default', () => {
+    it('uses codex exec non-interactively with full autonomy by default', () => {
       const adapter = new CodexCliAdapter({ command: 'codex', timeout: 300 });
       const args = (adapter as any).buildSpawnArgs('test prompt');
 
       expect(args[0]).toBe('exec');
       expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(args).toContain('--dangerously-bypass-hook-trust');
+      expect(args).toContain('--skip-git-repo-check');
+      expect(args).toContain('--ephemeral');
+      expect(args).toContain('--color');
+      expect(args).toContain('never');
       expect(args).toContain('test prompt');
     });
   });

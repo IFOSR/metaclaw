@@ -427,6 +427,10 @@ export function App(props: AppProps) {
   }, []);
 
   useEffect(() => {
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
+
     const session = sessionRef.current!;
     let stopped = false;
     let runtimeBridge: Awaited<ReturnType<typeof startFeishuRuntimeBridge>> = null;
@@ -463,6 +467,7 @@ export function App(props: AppProps) {
       if (Date.now() - lastInputAtRef.current < 2_000) return;
       session.maybeEmitIdleGuidance();
     }, 1_000);
+    timer.unref?.();
 
     return () => clearInterval(timer);
   }, []);
@@ -474,6 +479,7 @@ export function App(props: AppProps) {
         session.appendSystemMessage(`错误: ${(error as Error).message}`);
       });
     }, session.getBlockedRecheckIntervalMs());
+    timer.unref?.();
 
     return () => clearInterval(timer);
   }, []);
@@ -489,6 +495,7 @@ export function App(props: AppProps) {
       const shouldShow = Date.now() - lastOutputAtRef.current >= 80;
       setShowWaitingIndicator(previous => (previous === shouldShow ? previous : shouldShow));
     }, 50);
+    timer.unref?.();
 
     return () => clearInterval(timer);
   }, [snapshot.runtimeState.runningTaskId]);

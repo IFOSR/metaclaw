@@ -1,4 +1,7 @@
-import { ExecutorRouter, type ExecutorAvailability, type ExecutorProfile, type ExecutorRiskLevel } from '../core/executor-router.js';
+import type { ExecutorAvailability, ExecutorProfile, ExecutorRiskLevel, TaskRouteIntent } from '../core/executor-router.js';
+import { ExecutionPlanningService } from '../core/execution-planning-service.js';
+import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
+import type { Task } from '../core/types.js';
 import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
@@ -61,6 +64,111 @@ function formatProfile(profile: ExecutorProfile): string {
     ? `runtime=${profile.runtimeCommand} ${(profile.runtimeArgs ?? []).join(' ')}`.trim()
     : 'runtime=-';
   return `  ${profile.name} status=${profile.availability} domains=${profile.domains.join(',') || '-'} capabilities=${profile.capabilities.join(',') || '-'} intents=${intents || '-'} risk=${profile.riskLevel} success=${profile.historicalSuccess} ${runtime}`;
+}
+
+function createPreviewTask(userInput: string): Task {
+  const now = new Date().toISOString();
+  return {
+    id: `route_preview_${generateInteractionId()}`,
+    title: userInput.slice(0, 50) || 'Executor route preview',
+    goal: userInput,
+    status: 'created',
+    summary: '',
+    snapshots: [],
+    resources: [],
+    artifacts: [],
+    dependencies: [],
+    prioritySignals: {
+      dueAt: null,
+      isReady: true,
+      progressRatio: 0,
+      blocksOthers: false,
+      idleHours: 0,
+    },
+    injectedPreferences: [],
+    lastSchedulingReason: '',
+    lastInterruptionReason: '',
+    interruptionCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function inferPreviewPrimaryIntent(userInput: string): TaskRouteIntent {
+  const normalized = userInput.toLowerCase();
+  if (/实现|修复|修改|代码|测试|bug|patch|repo|仓库/i.test(normalized)) {
+    return 'repo_execution';
+  }
+  if (/deepseek|算法|推理|边界条件|数学|技术分析/i.test(normalized)) {
+    return 'technical_reasoning';
+  }
+  if (/长期记忆|多工具|自动化|消息网关|通知客户|发送给客户|memory|mcp/i.test(normalized)) {
+    return 'memory_agent_ops';
+  }
+  if (/调研|研究|报告|市场|竞品|资料|research/i.test(normalized)) {
+    return 'research_workflow';
+  }
+  return 'general';
+}
+
+function inferPreviewExecutionMode(userInput: string): IntentExecutionMode {
+  return /多个 agent|多执行器|并行|分别做|多视角|subagent/i.test(userInput)
+    ? 'multi_executor'
+    : /竞速|race/i.test(userInput)
+      ? 'race_executors'
+      : 'single_executor';
+}
+
+function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile[], defaultExecutorName: string): IntentDecisionV2 {
+  const primaryIntent = inferPreviewPrimaryIntent(userInput);
+  const matchingProfiles = profiles
+    .filter(profile => profile.availability === 'available')
+    .filter(profile => {
+      const searchable = [
+        profile.name,
+        ...profile.domains,
+        ...profile.capabilities,
+        ...(profile.primaryUseCases ?? []),
+      ].join('\n');
+      if (primaryIntent === 'general') {
+        return /合同|条款|法务|legal|contract|风险矩阵/i.test(userInput)
+          && /legal|contract|合同|法务|risk_matrix/i.test(searchable);
+      }
+      return true;
+    });
+  const selectedExecutor = matchingProfiles.find(profile => profile.name !== defaultExecutorName)?.name
+    ?? matchingProfiles[0]?.name
+    ?? defaultExecutorName;
+
+  return {
+    interactionType: 'executor_dispatch',
+    confidence: 0.72,
+    reason: 'executor route preview uses ExecutionPlanningService from a conservative command intent decision',
+    clarificationQuestion: null,
+    risk: {
+      level: /合同|条款|法务|legal|contract|发送给客户|通知客户/i.test(userInput) ? 'high' : 'medium',
+      requiresConfirmation: /合同|条款|法务|legal|contract|发送给客户|通知客户/i.test(userInput),
+      reasons: [],
+    },
+    task: {
+      binding: 'none',
+      taskId: null,
+      control: 'none',
+      scope: null,
+    },
+    execution: {
+      mode: inferPreviewExecutionMode(userInput),
+      complexity: 'simple',
+      selectedExecutor,
+      candidateExecutors: matchingProfiles.map(profile => profile.name),
+      requiresVerification: primaryIntent === 'repo_execution',
+      canModifyFiles: primaryIntent === 'repo_execution',
+      requiresExternalGateway: primaryIntent === 'memory_agent_ops',
+      primaryIntent,
+      matchedBoundary: primaryIntent === 'general' ? [] : [primaryIntent],
+    },
+    hints: [],
+  };
 }
 
 export const executorCommand: CommandHandler = {
@@ -145,7 +253,7 @@ export const executorCommand: CommandHandler = {
       }
       const profiles = profileRepo.findAll();
       const defaultExecutorName = context.executor.name;
-      const decision = new ExecutorRouter([
+      const routeProfiles = [
         ...profiles,
         ...(profiles.some(profile => profile.name === defaultExecutorName)
           ? []
@@ -164,7 +272,22 @@ export const executorCommand: CommandHandler = {
             availability: 'available' as const,
             historicalSuccess: 0.5,
           }]),
-      ]).route({ userInput, defaultExecutorName });
+      ];
+      const plan = new ExecutionPlanningService().plan({
+        task: createPreviewTask(userInput),
+        userPrompt: userInput,
+        taskExecutionPlan: {
+          mode: 'reuse-existing',
+          executionTaskId: 'route-preview',
+          contextTaskId: 'route-preview',
+          transitions: [],
+        },
+        intentDecision: buildPreviewIntentDecision(userInput, routeProfiles, defaultExecutorName),
+        executorProfiles: routeProfiles,
+        defaultExecutorName,
+        resources: [],
+      });
+      const decision = plan.routeDecision;
       new ExecutorRouteEventRepo(context.db).insert({
         id: `route_${generateInteractionId()}`,
         taskId: null,

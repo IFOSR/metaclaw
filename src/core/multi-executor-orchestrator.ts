@@ -63,7 +63,7 @@ export class MultiExecutorOrchestrator {
         };
       }
 
-      const batchResults = await Promise.all(runnable.map(unit => this.runWorkUnit(unit, input)));
+      const batchResults = await Promise.all(runnable.map(unit => this.runWorkUnit(unit, input, results)));
       for (const result of batchResults) {
         results.push(result);
         if (result.status !== 'success') {
@@ -93,6 +93,7 @@ export class MultiExecutorOrchestrator {
   private async runWorkUnit(
     unit: ExecutionWorkUnit,
     input: MultiExecutorOrchestratorInput,
+    completedResults: WorkUnitResult[],
   ): Promise<WorkUnitResult> {
     const executor = input.executors.get(unit.executorHint) ?? input.defaultExecutor;
     const startedAt = new Date().toISOString();
@@ -101,7 +102,7 @@ export class MultiExecutorOrchestrator {
       preferences: input.baseExecutorInput?.preferences ?? [],
       conversationHistory: input.baseExecutorInput?.conversationHistory ?? [],
       executionContextBundle: input.baseExecutorInput?.executionContextBundle,
-      userPrompt: this.buildWorkUnitPrompt(input.userPrompt, unit),
+      userPrompt: this.buildWorkUnitPrompt(input.userPrompt, unit, completedResults),
       onProgress: input.baseExecutorInput?.onProgress,
     });
     const finishedAt = new Date().toISOString();
@@ -118,12 +119,24 @@ export class MultiExecutorOrchestrator {
     };
   }
 
-  private buildWorkUnitPrompt(userPrompt: string, unit: ExecutionWorkUnit): string {
+  private buildWorkUnitPrompt(
+    userPrompt: string,
+    unit: ExecutionWorkUnit,
+    completedResults: WorkUnitResult[],
+  ): string {
+    const dependencyOutputs = completedResults
+      .filter(result => unit.dependsOn.includes(result.workUnitId))
+      .map(result => [
+        `Dependency ${result.workUnitId} (${result.executorName}, ${result.status}):`,
+        result.output.trim() || '(no output)',
+      ].join('\n'));
+
     return [
       `Main task prompt: ${userPrompt}`,
       `Work unit: ${unit.title}`,
       `Goal: ${unit.goal}`,
       `Expected output: ${unit.expectedOutput}`,
+      dependencyOutputs.length > 0 ? `Previous work unit outputs:\n\n${dependencyOutputs.join('\n\n')}` : '',
       unit.acceptance.length > 0 ? `Acceptance:\n${unit.acceptance.map(item => `- ${item}`).join('\n')}` : '',
       unit.inputs.resources.length > 0 ? `Resources:\n${unit.inputs.resources.join('\n')}` : '',
       unit.inputs.recalledTaskIds.length > 0 ? `Recalled task ids:\n${unit.inputs.recalledTaskIds.join('\n')}` : '',

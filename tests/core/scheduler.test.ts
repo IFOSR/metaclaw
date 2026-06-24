@@ -93,7 +93,7 @@ describe('SchedulerEngine', () => {
     expect(scheduledTaskId).toBe(urgentTaskId);
     expect(taskRepo.findById(urgentTaskId)?.status).toBe('running');
     expect(taskRepo.findById(normalTaskId)?.status).toBe('created');
-    expect(onDispatch).toHaveBeenCalledWith(urgentTaskId, undefined);
+    expect(onDispatch).toHaveBeenCalledWith(urgentTaskId, { missingExecutionRequest: true });
   });
 
   it('parks the current task when a higher-priority task arrives', async () => {
@@ -348,5 +348,188 @@ describe('SchedulerEngine', () => {
     expect(taskRepo.findById(urgentParkedId)?.prioritySignals.semanticPriority).toBe('urgent');
     expect(taskRepo.findById(urgentParkedId)?.status).toBe('running');
     expect(taskRepo.findById(normalParkedId)?.status).toBe('ready');
+  });
+
+  it('owns active dispatch tracking and waitForIdle lifecycle', async () => {
+    const taskId = createReadyTask({ title: '异步派发任务' });
+    let releaseDispatch!: () => void;
+    let dispatchCompleted = false;
+    const onDispatch = vi.fn(() => new Promise<void>(resolve => {
+      releaseDispatch = () => {
+        dispatchCompleted = true;
+        resolve();
+      };
+    }));
+    const scheduler = new SchedulerEngine(taskEngine, orchestration, executor, onDispatch);
+
+    await scheduler.scheduleNext();
+
+    let idle = false;
+    const idlePromise = scheduler.waitForIdle().then(() => {
+      idle = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(idle).toBe(false);
+    expect(dispatchCompleted).toBe(false);
+
+    releaseDispatch();
+    await idlePromise;
+
+    expect(idle).toBe(true);
+    expect(dispatchCompleted).toBe(true);
+  });
+
+  it('waits for dispatches that are active when waitForIdle starts without self-waiting on chained dispatches', async () => {
+    const firstTaskId = createReadyTask({
+      title: '当前运行任务',
+      dueAt: '2026-04-16T01:00:00Z',
+      progressRatio: 0.8,
+      blocksOthers: true,
+    });
+    const secondTaskId = createReadyTask({ title: '后续排队任务' });
+    const dispatches: string[] = [];
+    let scheduler!: SchedulerEngine;
+    const onDispatch = vi.fn(async taskId => {
+      dispatches.push(taskId);
+      if (taskId === firstTaskId) {
+        await scheduler.markDispatchFinished(firstTaskId, {
+          taskId: firstTaskId,
+          executionId: 'exec_first',
+          status: 'success',
+          reason: 'first done',
+        });
+      }
+    });
+    scheduler = new SchedulerEngine(taskEngine, orchestration, executor, onDispatch);
+
+    await scheduler.scheduleNext();
+    await scheduler.submit(secondTaskId, { reason: '排队执行' });
+    await scheduler.waitForIdle();
+
+    expect(dispatches).toEqual([firstTaskId, secondTaskId]);
+    expect(taskRepo.findById(firstTaskId)?.status).toBe('done');
+    expect(taskRepo.findById(secondTaskId)?.status).toBe('running');
+  });
+
+  it('owns queued execution requests and passes them to dispatch when a queued task later starts', async () => {
+    const runningTaskId = createReadyTask({
+      title: '当前运行任务',
+      dueAt: '2026-04-16T01:00:00Z',
+      progressRatio: 0.8,
+      blocksOthers: true,
+    });
+    const queuedTaskId = createReadyTask({ title: '待派发任务' });
+    const dispatches: Array<{ taskId: string; request?: { userPrompt: string }; missing?: boolean }> = [];
+    const scheduler = new SchedulerEngine<{ userPrompt: string }>(
+      taskEngine,
+      orchestration,
+      executor,
+      (taskId, context) => {
+        dispatches.push({
+          taskId,
+          request: context?.executionRequest,
+          missing: context?.missingExecutionRequest,
+        });
+      },
+    );
+    await scheduler.scheduleNext();
+
+    const submitResult = await scheduler.submit(queuedTaskId, {
+      reason: '排队执行',
+      executionRequest: { userPrompt: '实现排队任务' },
+    });
+    taskEngine.transition(runningTaskId, 'done');
+
+    const scheduledTaskId = await scheduler.scheduleNext();
+
+    expect(submitResult.action).toBe('queued');
+    expect(scheduledTaskId).toBe(queuedTaskId);
+    expect(dispatches).toEqual([
+      { taskId: runningTaskId, request: undefined, missing: true },
+      { taskId: queuedTaskId, request: { userPrompt: '实现排队任务' }, missing: false },
+    ]);
+  });
+
+  it('marks dispatch finished and schedules the next queued task through the bridge contract', async () => {
+    const runningTaskId = createReadyTask({
+      title: '当前运行任务',
+      dueAt: '2026-04-16T01:00:00Z',
+      progressRatio: 0.8,
+      blocksOthers: true,
+    });
+    const queuedTaskId = createReadyTask({ title: '后续任务' });
+    const dispatches: string[] = [];
+    const scheduler = new SchedulerEngine(
+      taskEngine,
+      orchestration,
+      executor,
+      taskId => {
+        dispatches.push(taskId);
+      },
+    );
+    await scheduler.scheduleNext();
+    await scheduler.submit(queuedTaskId, { reason: '排队执行' });
+
+    await scheduler.markDispatchFinished(runningTaskId, {
+      taskId: runningTaskId,
+      executionId: 'exec_1',
+      status: 'success',
+      reason: 'done',
+    });
+
+    expect(taskRepo.findById(runningTaskId)?.status).toBe('done');
+    expect(taskRepo.findById(queuedTaskId)?.status).toBe('running');
+    expect(dispatches).toEqual([runningTaskId, queuedTaskId]);
+  });
+
+  it('marks dispatch blocked and schedules the next queued task through the bridge contract', async () => {
+    const runningTaskId = createReadyTask({
+      title: '当前运行任务',
+      dueAt: '2026-04-16T01:00:00Z',
+      progressRatio: 0.8,
+      blocksOthers: true,
+    });
+    const queuedTaskId = createReadyTask({ title: '后续任务' });
+    const dispatches: string[] = [];
+    const scheduler = new SchedulerEngine(
+      taskEngine,
+      orchestration,
+      executor,
+      taskId => {
+        dispatches.push(taskId);
+      },
+    );
+    await scheduler.scheduleNext();
+    await scheduler.submit(queuedTaskId, { reason: '排队执行' });
+
+    await scheduler.markDispatchBlocked(runningTaskId, '等待测试证据');
+
+    expect(taskRepo.findById(runningTaskId)?.status).toBe('blocked');
+    expect(taskRepo.findById(runningTaskId)?.dependencies).toEqual([
+      expect.objectContaining({
+        description: '等待测试证据',
+        status: 'waiting',
+      }),
+    ]);
+    expect(taskRepo.findById(queuedTaskId)?.status).toBe('running');
+    expect(dispatches).toEqual([runningTaskId, queuedTaskId]);
+  });
+
+  it('does not auto-resume a task parked because execution failed', async () => {
+    const failedTaskId = createReadyTask({ title: '失败后挂起任务' });
+    const scheduler = new SchedulerEngine(taskEngine, orchestration, executor);
+    await scheduler.scheduleNext();
+
+    taskEngine.park(failedTaskId, '执行失败: 普通失败', {
+      done: [],
+      pending: ['失败后等待用户处理'],
+      nextStep: '检查失败原因后手动恢复',
+      pauseReason: '执行失败: 普通失败',
+    });
+
+    const nextTaskId = await scheduler.scheduleNext();
+
+    expect(nextTaskId).toBeNull();
+    expect(taskRepo.findById(failedTaskId)?.status).toBe('parked');
   });
 });

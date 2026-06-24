@@ -493,6 +493,8 @@ export class FeishuEventBridge {
     const server = this.server;
     this.server = null;
     return new Promise((resolve, reject) => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
       server.close(error => error ? reject(error) : resolve());
     });
   }

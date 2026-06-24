@@ -1,6 +1,7 @@
 import type { Task, TaskStatus } from './types.js';
 
-export type NaturalLanguageRoute = 'conversation' | 'task_control' | 'durable_task';
+export type NaturalLanguageRoute = 'conversation' | 'metaclaw_status' | 'task_control' | 'durable_task';
+export type NaturalLanguageRouteAction = NaturalLanguageRoute | 'ask_clarification' | 'unknown';
 export type TaskClearScope = 'all' | 'parked' | 'blocked';
 export type TaskStatusQueryScope = 'blocked' | 'running' | 'dashboard';
 export type TaskStateOwner = 'metaclaw' | 'executor' | 'none';
@@ -15,48 +16,7 @@ export interface TaskStateOwnershipResult {
 
 export const MANAGEABLE_TASK_STATUSES: TaskStatus[] = ['created', 'ready', 'running', 'parked', 'blocked'];
 
-const TASK_CONTROL_PATTERNS = [
-  /继续之前挂起的任务/,
-  /把之前挂起的任务继续完成/,
-  /继续刚才那个任务/,
-  /继续刚才的任务/,
-  /恢复刚才/,
-  /暂停刚才/,
-  /挂起刚才/,
-  /网络恢复了.*继续/,
-  /网络好了.*继续/,
-  /清空.*任务/,
-  /取消.*任务/,
-  /删除.*任务/,
-];
-
-const CONVERSATION_PATTERNS = [
-  /^hi$/i,
-  /^hello$/i,
-  /^hey$/i,
-  /^你好$/,
-  /^在吗$/,
-  /^收到$/,
-  /^ok$/i,
-  /^好的$/,
-  /^请只回复[:：]/,
-  /^退出$/,
-  /你以后就是我的大管家/,
-  /你的名字叫/,
-  /我是磊哥/,
-  /记住了吗/,
-  /刚才咱们聊了啥/,
-  /刚才咱们跑了什么任务/,
-  /刚才让你做了一个.*还记得/,
-  /我们之前是不是做了一个/,
-  /你说的是哪个项目/,
-  /我们进行到哪里了/,
-  /你还记得不/,
-  /你还记得我/,
-  /hi，刚才/,
-];
-
-const DURABLE_WORK_PATTERNS = [
+export const DURABLE_WORK_PATTERNS = [
   /调研/,
   /分析/,
   /方案/,
@@ -71,27 +31,23 @@ const DURABLE_WORK_PATTERNS = [
   /产品/,
   /项目/,
   /新能源/,
+  /实现/,
+  /修复/,
+  /review/i,
+  /test/i,
   /memory/i,
   /agent/i,
   /search engine/i,
 ];
 
-export function classifyNaturalLanguageInput(input: string, tasks: Task[]): NaturalLanguageRoute {
-  if (isTaskControlInstruction(input) && hasManageableTask(tasks)) {
-    return 'task_control';
-  }
-
-  if (isConversationInput(input)) {
-    return 'conversation';
-  }
-
-  return 'durable_task';
+export function matchesDurableWorkPattern(input: string): boolean {
+  return DURABLE_WORK_PATTERNS.some(pattern => pattern.test(input));
 }
 
 export function isTaskControlInstruction(input: string): boolean {
   const normalized = input.trim();
   return parseTaskClearInstruction(normalized) !== null
-    || TASK_CONTROL_PATTERNS.some(pattern => pattern.test(normalized));
+    || /继续之前挂起的任务|把之前挂起的任务继续完成|继续刚才那个任务|继续刚才的任务|恢复刚才|暂停刚才|挂起刚才|网络恢复了.*继续|网络好了.*继续/.test(normalized);
 }
 
 export function parseTaskClearInstruction(input: string): TaskClearScope | null {
@@ -151,34 +107,12 @@ export function parseTaskStatusQuery(input: string): TaskStatusQueryScope | null
   return null;
 }
 
-export function fallbackTaskStateOwnership(input: string): TaskStateOwnershipResult {
-  const scope = parseTaskStatusQuery(input);
-  if (!scope) {
-    return {
-      owner: 'none',
-      scope: null,
-      taskId: null,
-      confidence: 0,
-      reason: '规则兜底未识别为 MetaClaw 任务状态问题',
-    };
-  }
-
-  return {
-    owner: 'metaclaw',
-    scope,
-    taskId: null,
-    confidence: 0.68,
-    reason: 'LLM 不可用时，规则兜底识别为 MetaClaw 任务状态问题',
-  };
-}
-
 export function isConversationInput(input: string): boolean {
-  const normalized = input.trim();
-  return CONVERSATION_PATTERNS.some(pattern => pattern.test(normalized));
+  return /^(hi|hello|hey|你好|在吗|收到|ok|好的)$/i.test(input.trim());
 }
 
 export function isDurableTask(task: Task): boolean {
-  if (!['done', 'cancelled', 'archived'].includes(task.status)) {
+  if (['created', 'ready', 'running', 'parked', 'blocked'].includes(task.status)) {
     return true;
   }
 
@@ -196,13 +130,9 @@ export function isDurableTask(task: Task): boolean {
     return false;
   }
 
-  return DURABLE_WORK_PATTERNS.some(pattern => pattern.test(sample)) || sample.length >= 8;
+  return matchesDurableWorkPattern(sample) || sample.length >= 8;
 }
 
 export function filterDurableTasks(tasks: Task[]): Task[] {
   return tasks.filter(task => isDurableTask(task));
-}
-
-function hasManageableTask(tasks: Task[]): boolean {
-  return tasks.some(task => MANAGEABLE_TASK_STATUSES.includes(task.status));
 }

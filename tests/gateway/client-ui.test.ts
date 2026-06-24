@@ -71,10 +71,13 @@ describe('GatewayClientApp', () => {
     expect(app.lastFrame()).toContain('模式 client | session sess_gateway_test | gateway /tmp/metaclaw.sock');
     expect(app.lastFrame()).toContain('status: client:connected');
     expect(app.lastFrame()).toContain('当前输入');
+
+    app.unmount();
+    app.cleanup();
   });
 
   it('sends typed input to the gateway socket', async () => {
-    render(React.createElement(GatewayClientApp, { socketPath: '/tmp/metaclaw.sock' }));
+    const app = render(React.createElement(GatewayClientApp, { socketPath: '/tmp/metaclaw.sock' }));
     await flushUpdates();
 
     inputCapture.handler?.('h', {});
@@ -82,5 +85,8 @@ describe('GatewayClientApp', () => {
     inputCapture.handler?.('', { return: true });
 
     expect(socketState.socket?.writes).toContain('{"type":"input","text":"hi"}\n');
+
+    app.unmount();
+    app.cleanup();
   });
 });

@@ -60,10 +60,8 @@ function flushUpdates() {
 }
 
 async function typeAndSubmit(text: string) {
-  for (const char of text) {
-    await inputCapture.handler?.(char, {});
-    await flushUpdates();
-  }
+  await inputCapture.handler?.(text, {});
+  await flushUpdates();
 
   await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
   await flushUpdates();
@@ -86,19 +84,12 @@ describe('App task-boundary visibility', () => {
 
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn()
-        .mockResolvedValueOnce({
-          success: true,
-          output: '强模型减少的是脚手架式 harness，不会消灭操作系统式 harness。',
-          exitCode: 0,
-          durationMs: 80,
-        })
-        .mockResolvedValueOnce({
-          success: true,
-          output: '三点结论：1. 强模型减少脚手架；2. 任务状态仍需系统层管理；3. 调度和恢复最难被替代。',
-          exitCode: 0,
-          durationMs: 90,
-        }),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '三点结论：1. 强模型减少脚手架；2. 任务状态仍需系统层管理；3. 调度和恢复最难被替代。',
+        exitCode: 0,
+        durationMs: 90,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -130,6 +121,7 @@ describe('App task-boundary visibility', () => {
         sessionId: 'sess_task_boundary_visibility_followup',
         contextRecaller,
         llmBridge,
+        executorFactory: () => executor,
       }),
     );
 
@@ -152,7 +144,7 @@ describe('App task-boundary visibility', () => {
     parkedTaskId = parkedTask.id;
 
     await typeAndSubmit('未来随着基座模型的能力越来越强，是否还需要 harness');
-    await typeAndSubmit('把刚才那段分析整理成三点结论');
+    await typeAndSubmit('把刚才那段回答整理成三点结论');
 
     expect(app.lastFrame()).toContain('按当前对话创建跟进任务');
     expect(app.lastFrame()).not.toContain(`关联到任务 #${parkedTaskId}`);
@@ -188,19 +180,12 @@ describe('App task-boundary visibility', () => {
 
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn()
-        .mockResolvedValueOnce({
-          success: true,
-          output: '强模型减少的是脚手架式 harness，不会消灭操作系统式 harness。',
-          exitCode: 0,
-          durationMs: 80,
-        })
-        .mockResolvedValueOnce({
-          success: true,
-          output: '最容易被替代的是通用 prompt 编排，最难被替代的是调度、状态与恢复。',
-          exitCode: 0,
-          durationMs: 90,
-        }),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '最容易被替代的是通用 prompt 编排，最难被替代的是调度、状态与恢复。',
+        exitCode: 0,
+        durationMs: 90,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -232,6 +217,7 @@ describe('App task-boundary visibility', () => {
         sessionId: 'sess_task_boundary_visibility_conversation',
         contextRecaller,
         llmBridge,
+        executorFactory: () => executor,
       }),
     );
 

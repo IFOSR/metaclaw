@@ -193,8 +193,8 @@ describe('App guidance blocks', () => {
       }),
     );
 
-    await typeAndSubmit('先分析动力电池市场份额');
-    await typeAndSubmit('再整理佛塑科技的一页结论');
+    await typeAndSubmit('先完成普通执行任务甲');
+    await typeAndSubmit('再完成普通执行任务乙');
 
     firstDeferred.resolve({
       success: true,
@@ -203,7 +203,7 @@ describe('App guidance blocks', () => {
       durationMs: 500,
     });
     await waitFor(() => {
-      const queuedTask = taskEngine.list().find(task => task.title.includes('再整理佛塑科技'));
+      const queuedTask = taskEngine.list().find(task => task.title.includes('再完成普通执行任务乙'));
       expect(queuedTask).toBeDefined();
       expect(app.lastFrame()).toContain('当前建议');
       expect(app.lastFrame()).toContain('场景: 完成后建议');

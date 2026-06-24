@@ -102,8 +102,8 @@ describe('ExecutorRouter', () => {
     });
 
     expect(decision.selectedExecutor).toBe('legal-contract');
-    expect(decision.action).toBe('fallback_default');
-    expect(decision.reason).toContain('legal');
+    expect(decision.action).toBe('ask_clarification');
+    expect(decision.reason).toContain('contract_review');
     expect(decision.candidates[0]).toMatchObject({
       executorName: 'legal-contract',
     });

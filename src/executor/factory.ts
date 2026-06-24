@@ -6,6 +6,10 @@ import { HermesAgentAdapter } from './hermes-agent.js';
 import { OpenClawAdapter } from './openclaw.js';
 import { PiAgentAdapter } from './pi-agent.js';
 
+/**
+ * @deprecated Legacy compatibility factory. Production entrypoints must use
+ * createDefaultExecutor()/ExecutorRegistry from core/execution-runtime instead.
+ */
 export function createExecutor(config: { command: string; timeout: number; maxDuration?: number; workspaceRoot?: string }): ExecutorAdapter {
   if (config.command === 'codex') {
     return new CodexCliAdapter(config);
@@ -42,6 +46,10 @@ function withLongResearchTimeoutDefaults<T extends { timeout: number; maxDuratio
   };
 }
 
+/**
+ * @deprecated Legacy compatibility factory. Production runtime selection must
+ * use ExecutorRegistry from core/execution-runtime instead.
+ */
 export function createExecutorByName(
   name: string,
   config: { timeout: number; maxDuration?: number; workspaceRoot?: string },

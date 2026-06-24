@@ -233,7 +233,12 @@ describe('App input availability', () => {
     const firstDeferred = createDeferredResult();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise),
+      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise).mockResolvedValue({
+        success: true,
+        output: 'queued done',
+        exitCode: 0,
+        durationMs: 500,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -366,7 +371,7 @@ describe('App input availability', () => {
     app.cleanup();
   });
 
-  it('falls back quickly when llm routing is stalled while another task is already running', async () => {
+  it('keeps busy intent timeout conservative instead of queueing keyword fallback work', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -376,7 +381,12 @@ describe('App input availability', () => {
     const firstDeferred = createDeferredResult();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise),
+      execute: vi.fn().mockImplementationOnce(() => firstDeferred.promise).mockResolvedValue({
+        success: true,
+        output: 'queued done',
+        exitCode: 0,
+        durationMs: 500,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -387,7 +397,7 @@ describe('App input availability', () => {
         .mockImplementationOnce(never),
       resolveIntent: vi.fn()
         .mockResolvedValueOnce({ type: 'new', taskId: null, reason: '首个任务' })
-        .mockImplementationOnce(never),
+        .mockResolvedValueOnce({ type: 'new', taskId: null, reason: '忙时 fallback 后的新任务' }),
       rankInteractions: vi.fn().mockResolvedValue([]),
     } as unknown as LlmBridge;
 
@@ -420,10 +430,11 @@ describe('App input availability', () => {
     await new Promise(resolve => setTimeout(resolve, 600));
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('已进入待执行队列');
-    expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(1);
+    expect(app.lastFrame()).toContain('统一意图裁决置信度不足');
+    expect(app.lastFrame()).toContain('intent orchestrator timeout');
+    expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(0);
 
-    void secondSubmit;
+    await secondSubmit;
     firstDeferred.resolve({
       success: true,
       output: 'first done',

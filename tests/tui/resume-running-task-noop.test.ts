@@ -59,6 +59,16 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitForCondition(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await flushUpdates();
+  }
+}
+
 function createDeferredResult() {
   let resolve!: (value: ExecutorResult) => void;
   const promise = new Promise<ExecutorResult>(res => {
@@ -89,6 +99,10 @@ describe('App resume-running task noop', () => {
     };
 
     const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '创建调研任务',
+      }),
       resolveIntent: vi.fn().mockImplementation(async (userInput: string) => {
         if (userInput.includes('把之前挂起的任务继续完成')) {
           return {
@@ -104,6 +118,7 @@ describe('App resume-running task noop', () => {
           reason: '创建任务',
         };
       }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
     } as unknown as LlmBridge;
 
     const app = render(
@@ -117,6 +132,7 @@ describe('App resume-running task noop', () => {
         sessionId: 'sess_resume_running_noop',
         contextRecaller,
         llmBridge,
+        availableExecutorCommands: new Set(['codex']),
       }),
     );
 
@@ -129,10 +145,11 @@ describe('App resume-running task noop', () => {
       await flushUpdates();
     };
 
-    await typeAndSubmit('给agent增加memory是一个非常重要，切目前有不少开源项目都在foucs的方向。你充分调研这个');
+    await typeAndSubmit('给 agent 增加 memory 功能，请实现本地代码改动');
     const createdTask = taskRepo.findByStatus('running')[0];
     expect(createdTask).toBeTruthy();
     const taskId = createdTask!.id;
+    await waitForCondition(() => executor.execute.mock.calls.length === 1);
 
     await typeAndSubmit('把之前挂起的任务继续完成');
 

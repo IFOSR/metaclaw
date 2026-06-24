@@ -380,6 +380,11 @@ export const taskCommand: CommandHandler = {
 
         case 'unblock': {
           const newlyProvidedResources = Array.from(new Set(args.slice(2).filter(Boolean)));
+          const blockedReason = task.dependencies
+            .filter(dependency => dependency.status === 'waiting')
+            .map(dependency => dependency.description)
+            .filter(Boolean)
+            .join('；');
           for (const resourcePath of newlyProvidedResources) {
             context.taskEngine.attachResource(taskId, resourcePath);
           }
@@ -395,6 +400,7 @@ export const taskCommand: CommandHandler = {
               taskId,
               mode: 'resume-blocked',
               newlyProvidedResources,
+              blockedReason,
             },
           };
         }

@@ -115,7 +115,7 @@ describe('executor registry and route commands', () => {
 
     const route = await executorCommand.execute(['route', '请审查合同条款并输出风险矩阵'], context);
     expect(route.content).toContain('legal-contract');
-    expect(route.content).toContain('fallback_default');
+    expect(route.content).toContain('ask_review');
 
     const feedback = await executorCommand.execute(['route-feedback'], context);
     expect(feedback.content).toContain('legal-contract');

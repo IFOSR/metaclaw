@@ -1,7 +1,9 @@
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
-import type { NaturalLanguageRoute, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
+import type { NaturalLanguageRoute, NaturalLanguageRouteAction, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
+import type { ExecutorProfile, IntentDecision, IntentDecisionKind, IntentRouteAction, TaskRouteIntent } from './executor-router.js';
+import { buildCodexNonInteractiveArgs } from '../executor/codex-args.js';
 
 export interface TaskSummary {
   id: string;
@@ -16,12 +18,20 @@ export interface InteractionSummary {
   userInput: string;
 }
 
+/**
+ * @deprecated Legacy compatibility for the pre-IntentOrchestrator task-binding schema.
+ * Natural-language main paths must consume IntentDecisionV2 via IntentOrchestrator.
+ */
 export interface IntentResult {
   type: 'new' | 'reference';
   taskId: string | null;
   reason: string;
 }
 
+/**
+ * @deprecated Legacy compatibility for parked/blocked resume resolution.
+ * Use TaskSemanticService only as an adapter boundary; session must not call this directly.
+ */
 export interface TaskResumeIntentResult {
   action: 'resume' | 'none';
   taskId: string | null;
@@ -29,10 +39,27 @@ export interface TaskResumeIntentResult {
   confidence: number;
 }
 
+/**
+ * @deprecated Legacy compatibility for route-compatible schemas.
+ * Natural-language main paths must consume IntentDecisionV2 via IntentOrchestrator.
+ */
 export interface RouteResult {
-  route: NaturalLanguageRoute | 'unknown';
+  route: NaturalLanguageRouteAction;
+  confidence: number;
   reason: string;
+  statusScope?: TaskStatusQueryScope | null;
+  taskId?: string | null;
+  clarificationQuestion?: string | null;
 }
+
+/**
+ * @deprecated Legacy compatibility for the pre-IntentOrchestrator route-compatible schema.
+ * Natural-language main paths must consume IntentDecisionV2 via IntentOrchestrator.
+ */
+export type IntentDecisionResult = IntentDecision & {
+  statusScope?: TaskStatusQueryScope | null;
+  clarificationQuestion?: string | null;
+};
 
 export interface TaskPriorityResult {
   priority: 'normal' | 'high' | 'urgent';
@@ -79,11 +106,7 @@ export class LlmBridge {
 
   private buildCommandArgs(prompt: string): string[] {
     if (this.command === 'codex') {
-      return [
-        'exec',
-        '--dangerously-bypass-approvals-and-sandbox',
-        prompt,
-      ];
+      return buildCodexNonInteractiveArgs(prompt);
     }
 
     return [
@@ -93,6 +116,10 @@ export class LlmBridge {
     ];
   }
 
+  /**
+   * @deprecated Legacy compatibility for the pre-IntentOrchestrator task-binding schema.
+   * Natural-language main paths must use IntentOrchestrator.decide().
+   */
   async resolveIntent(userInput: string, recentTasks: TaskSummary[]): Promise<IntentResult> {
     if (recentTasks.length === 0) {
       return { type: 'new', taskId: null, reason: '无历史任务' };
@@ -124,6 +151,10 @@ export class LlmBridge {
     }
   }
 
+  /**
+   * @deprecated Legacy compatibility for parked/blocked resume resolution.
+   * Use TaskSemanticService only as an adapter boundary; session must not call this directly.
+   */
   async resolveTaskResumeIntent(userInput: string, candidateTasks: TaskSummary[]): Promise<TaskResumeIntentResult> {
     const resumableTasks = candidateTasks.filter(task => task.status === 'parked' || task.status === 'blocked');
     if (resumableTasks.length === 0) {
@@ -140,15 +171,45 @@ export class LlmBridge {
     }
   }
 
+  /**
+   * @deprecated Legacy compatibility for route-compatible schemas.
+   * Natural-language main paths must use IntentOrchestrator.decide().
+   */
   async resolveRoute(userInput: string, recentTasks: TaskSummary[]): Promise<RouteResult> {
     try {
       const raw = await this.query(this.buildRoutePrompt(userInput, recentTasks));
       return this.parseRouteResult(raw);
     } catch {
-      return { route: 'unknown', reason: 'LLM route 调用失败，fallback' };
+      return { route: 'unknown', confidence: 0, reason: 'LLM route 调用失败，fallback' };
     }
   }
 
+  /**
+   * @deprecated Legacy compatibility for the pre-IntentOrchestrator route-compatible schema.
+   * Natural-language main paths must use IntentOrchestrator.decide() and IntentDecisionV2.
+   */
+  async resolveIntentDecision(input: {
+    userInput: string;
+    currentFocus: string;
+    recentTasks: TaskSummary[];
+    profiles: ExecutorProfile[];
+    defaultExecutorName: string;
+    allowDurableTask: boolean;
+    allowFileModification: boolean;
+    historicalPreferenceSummary: string;
+  }): Promise<IntentDecisionResult> {
+    try {
+      const raw = await this.query(this.buildIntentDecisionPrompt(input));
+      return this.parseIntentDecisionResult(raw);
+    } catch {
+      return this.unknownIntentDecision(input.defaultExecutorName, 'LLM intent decision 调用失败');
+    }
+  }
+
+  /**
+   * @deprecated Legacy compatibility for task-status ownership checks.
+   * Natural-language main paths must use IntentOrchestrator.decide().
+   */
   async resolveTaskStateOwnership(
     userInput: string,
     recentTasks: TaskSummary[],
@@ -279,12 +340,17 @@ export class LlmBridge {
       ).join('\n');
 
     return [
-      '判断这条输入应该走哪条路由。',
-      '可选路由只有三种：conversation、task_control、durable_task。',
+      '你是 MetaClaw 自然语言入口的唯一语义路由器。后续模块只消费你的结构化裁决。',
+      '判断这条输入应该走哪条路由。禁止依赖关键词硬规则，必须做语义判断。',
+      '可选 route：conversation、metaclaw_status、task_control、durable_task、ask_clarification。',
       'conversation: 问候、闲聊、短确认、回忆对话、身份设定等，不应创建任务。',
+      'metaclaw_status: 用户在问 MetaClaw 任务池/调度/队列/运行中/阻塞/挂起/任务卡在哪/是否完成等状态，应由 MetaClaw 根据任务数据库回答。',
       'task_control: 明确针对已有任务的控制，例如恢复挂起任务、暂停当前任务、解除阻塞、重试刚才那个任务；必须有清晰的任务对象。',
       '如果输入只是“继续”“展开”“细讲”“再说说”，优先视为 conversation，而不是 task_control。',
       'durable_task: 有明确目标或交付物，需要持续管理、排队、挂起、阻塞、恢复的工作。',
+      '如果用户明确说“不要改代码、只分析、read-only”，不得路由为需要 repo mutation 的执行工作；可按 durable_task 或 conversation 由下游选择只读执行。',
+      '如果语义低置信、任务对象不清、无法判断是聊天还是恢复任务，返回 ask_clarification，不要默认创建任务或恢复旧任务。',
+      '只有 /task xxx、/resume task_xxx 这种显式命令允许确定性命令路由；自然语言必须由本裁决决定。',
       '只返回 JSON，不要其他内容。',
       '',
       `用户输入：${userInput}`,
@@ -292,7 +358,103 @@ export class LlmBridge {
       '当前任务概览：',
       taskList,
       '',
-      '返回格式：{"route":"conversation"|"task_control"|"durable_task","reason":"简短原因"}',
+      '返回格式：{"route":"conversation"|"metaclaw_status"|"task_control"|"durable_task"|"ask_clarification","confidence":0到1,"statusScope":"running|blocked|dashboard|null","taskId":"task_xxx|null","clarificationQuestion":"需要追问时的问题或 null","reason":"简短原因"}',
+    ].join('\n');
+  }
+
+  private buildIntentDecisionPrompt(input: {
+    userInput: string;
+    currentFocus: string;
+    recentTasks: TaskSummary[];
+    profiles: ExecutorProfile[];
+    defaultExecutorName: string;
+    allowDurableTask: boolean;
+    allowFileModification: boolean;
+    historicalPreferenceSummary: string;
+  }): string {
+    const taskList = input.recentTasks.length === 0
+      ? '  （当前没有可管理任务）'
+      : input.recentTasks.map(task =>
+        `  ${task.id}: [${task.status}] ${task.title} / goal=${task.goal}${task.summary ? ` / summary=${task.summary.slice(0, 80)}` : ''}`
+      ).join('\n');
+    const profileList = input.profiles.length === 0
+      ? '  （无 executor profile）'
+      : input.profiles.map(profile => [
+        `  ${profile.name}:`,
+        `    capabilities=${profile.capabilities.join(',') || '-'}`,
+        `    strengths=${profile.strengths.join(',') || '-'}`,
+        `    avoid=${profile.avoidUseCases?.join(',') || '-'}`,
+        `    risk=${profile.riskLevel}`,
+        `    availability=${profile.availability}`,
+      ].join('\n')).join('\n');
+
+    return [
+      '你是 MetaClaw 的 IntentDecision 语义裁决器。',
+      '不要做关键词匹配。必须基于用户目标、上下文、交付物、任务状态、执行风险做语义判断。',
+      '只能返回 JSON，且必须符合 IntentDecision schema；不要输出解释性文字。',
+      '',
+      '判断维度：',
+      '1. 用户是在闲聊/直接问答，还是要一个可交付结果？',
+      '2. 是否在控制已有任务，比如恢复、暂停、查询任务状态？',
+      '3. 是否需要创建 durable task？',
+      '4. 是否需要本地 repo 执行？',
+      '5. 是否需要研究/多工具/长期记忆/外部消息网关？',
+      '6. 是否存在歧义，需要先问用户？',
+      '7. 选择哪个 target 和 action，为什么？',
+      '',
+      '路由语义：',
+      'direct_reply：普通问答、解释、设计方案、短确认。不创建任务，不派发 executor，当前会话直接回复。',
+      'task_control：查询任务状态、恢复挂起任务、取消任务、暂停任务。目标必须是 metaclaw。',
+      'durable_task：有明确交付物、耗时、可中断、需要产物记录的任务。先创建/绑定任务，再派发 executor。',
+      'executor_dispatch：可以直接执行的一次性工作，比如本地代码修改、运行测试、代码审查、调研执行。是否包装成 durable task 由 needsLongRunningTask 决定。',
+      'clarification：语义不清或低置信度，比如“继续弄一下”但无法确定是继续对话、恢复任务，还是创建跟进任务。',
+      '',
+      'Executor 选择逻辑：',
+      '如果应交给 executor，route.target 必须优先选择可用 profiles 中最合适的 name。',
+      '如果是任务状态/任务控制，route.target 必须是 metaclaw。',
+      '如果需要本地 repo 修改或测试，通常选择 repo_execution 能力 executor；如果用户不允许改文件，canModifyFiles=false。',
+      '如果需要调研、多工具、长期记忆或外部消息网关，选择对应 profile，不要默认给 repo executor。',
+      '',
+      `用户原话：${input.userInput}`,
+      `当前会话焦点：${input.currentFocus}`,
+      `当前默认 executor：${input.defaultExecutorName}`,
+      `是否允许创建 durable task：${input.allowDurableTask}`,
+      `是否允许修改文件：${input.allowFileModification}`,
+      `历史偏好摘要：${input.historicalPreferenceSummary || '（无）'}`,
+      '',
+      '最近任务列表：',
+      taskList,
+      '',
+      '可用 executor profile：',
+      profileList,
+      '',
+      'JSON schema：',
+      JSON.stringify({
+        intent: 'direct_reply|task_control|durable_task|executor_dispatch|clarification',
+        confidence: '0..1',
+        needsClarification: 'boolean',
+        needsLongRunningTask: 'boolean',
+        requiresLocalRepo: 'boolean',
+        requiresResearch: 'boolean',
+        requiresMultiTool: 'boolean',
+        requiresLongTermMemory: 'boolean',
+        requiresExternalGateway: 'boolean',
+        canModifyFiles: 'boolean',
+        shouldCreateDurableTask: 'boolean',
+        statusScope: 'running|blocked|dashboard|null',
+        clarificationQuestion: 'string|null',
+        reason: 'string',
+        route: {
+          target: 'metaclaw|executor profile name',
+          action: 'none|auto_dispatch|ask_review|fallback_default|ask_clarification',
+          primaryIntent: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
+          capabilityClass: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
+          requiredCapabilities: ['capability names'],
+          matchedBoundary: ['semantic boundary labels'],
+          riskLevel: 'low|medium|high',
+          taskId: 'task_xxx|null',
+        },
+      }),
     ].join('\n');
   }
 
@@ -501,15 +663,139 @@ export class LlmBridge {
     try {
       const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const parsed = JSON.parse(cleaned);
-      if (parsed.route === 'conversation' || parsed.route === 'task_control' || parsed.route === 'durable_task') {
+      if (
+        parsed.route === 'conversation'
+        || parsed.route === 'metaclaw_status'
+        || parsed.route === 'task_control'
+        || parsed.route === 'durable_task'
+        || parsed.route === 'ask_clarification'
+      ) {
         return {
           route: parsed.route,
-          reason: parsed.reason ?? '',
+          confidence: typeof parsed.confidence === 'number'
+            ? Math.max(0, Math.min(1, parsed.confidence))
+            : 0.5,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+          statusScope: this.parseTaskStatusQueryScope(parsed.statusScope),
+          taskId: typeof parsed.taskId === 'string' ? parsed.taskId : null,
+          clarificationQuestion: typeof parsed.clarificationQuestion === 'string' ? parsed.clarificationQuestion : null,
         };
       }
     } catch {}
 
-    return { route: 'unknown', reason: 'route 解析失败，fallback' };
+    return { route: 'unknown', confidence: 0, reason: 'route 解析失败，fallback' };
+  }
+
+  private parseIntentDecisionResult(raw: string): IntentDecisionResult {
+    try {
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      const route = parsed.route && typeof parsed.route === 'object' ? parsed.route : {};
+
+      return {
+        intent: this.parseIntentDecisionKind(parsed.intent),
+        confidence: this.clampConfidence(parsed.confidence),
+        needsClarification: parsed.needsClarification === true,
+        needsLongRunningTask: parsed.needsLongRunningTask === true,
+        requiresLocalRepo: parsed.requiresLocalRepo === true,
+        requiresResearch: parsed.requiresResearch === true,
+        requiresMultiTool: parsed.requiresMultiTool === true,
+        requiresLongTermMemory: parsed.requiresLongTermMemory === true,
+        requiresExternalGateway: parsed.requiresExternalGateway === true,
+        canModifyFiles: parsed.canModifyFiles === true,
+        shouldCreateDurableTask: parsed.shouldCreateDurableTask === true,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : 'LLM intent decision',
+        statusScope: this.parseTaskStatusQueryScope(parsed.statusScope),
+        clarificationQuestion: typeof parsed.clarificationQuestion === 'string' ? parsed.clarificationQuestion : null,
+        route: {
+          target: typeof route.target === 'string' ? route.target : 'metaclaw',
+          action: this.parseIntentRouteAction(route.action),
+          primaryIntent: this.parseTaskRouteIntent(route.primaryIntent),
+          capabilityClass: this.parseTaskRouteIntent(route.capabilityClass),
+          requiredCapabilities: Array.isArray(route.requiredCapabilities)
+            ? route.requiredCapabilities.filter((item: unknown): item is string => typeof item === 'string')
+            : [],
+          matchedBoundary: Array.isArray(route.matchedBoundary)
+            ? route.matchedBoundary.filter((item: unknown): item is string => typeof item === 'string')
+            : [],
+          riskLevel: this.parseExecutorRiskLevel(route.riskLevel),
+          taskId: typeof route.taskId === 'string' ? route.taskId : null,
+        },
+      };
+    } catch {}
+
+    return this.unknownIntentDecision('metaclaw', 'intent decision 解析失败，fallback');
+  }
+
+  private unknownIntentDecision(defaultExecutorName: string, reason: string): IntentDecisionResult {
+    return {
+      intent: 'clarification',
+      confidence: 0,
+      needsClarification: true,
+      needsLongRunningTask: false,
+      requiresLocalRepo: false,
+      requiresResearch: false,
+      requiresMultiTool: false,
+      requiresLongTermMemory: false,
+      requiresExternalGateway: false,
+      canModifyFiles: false,
+      shouldCreateDurableTask: false,
+      reason,
+      statusScope: null,
+      clarificationQuestion: '我不确定你是想继续聊天、创建新任务，还是控制已有任务。请再明确一下。',
+      route: {
+        target: defaultExecutorName === 'metaclaw' ? 'metaclaw' : defaultExecutorName,
+        action: 'ask_clarification',
+        primaryIntent: 'conversation_or_control',
+        capabilityClass: 'conversation_or_control',
+        requiredCapabilities: [],
+        matchedBoundary: [],
+        riskLevel: 'low',
+        taskId: null,
+      },
+    };
+  }
+
+  private parseIntentDecisionKind(value: unknown): IntentDecisionKind {
+    return value === 'direct_reply'
+      || value === 'task_control'
+      || value === 'durable_task'
+      || value === 'executor_dispatch'
+      || value === 'clarification'
+      ? value
+      : 'clarification';
+  }
+
+  private parseIntentRouteAction(value: unknown): IntentRouteAction {
+    return value === 'none'
+      || value === 'auto_dispatch'
+      || value === 'ask_review'
+      || value === 'fallback_default'
+      || value === 'ask_clarification'
+      || value === 'race_executors'
+      ? value
+      : 'ask_clarification';
+  }
+
+  private parseTaskRouteIntent(value: unknown): TaskRouteIntent {
+    return value === 'repo_execution'
+      || value === 'technical_reasoning'
+      || value === 'research_workflow'
+      || value === 'memory_agent_ops'
+      || value === 'conversation_or_control'
+      || value === 'general'
+      ? value
+      : 'general';
+  }
+
+  private parseExecutorRiskLevel(value: unknown): 'low' | 'medium' | 'high' {
+    return value === 'low' || value === 'medium' || value === 'high' ? value : 'medium';
+  }
+
+  private clampConfidence(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(1, value))
+      : 0;
   }
 
   private parseTaskStateOwnershipResult(raw: string): TaskStateOwnershipResult {

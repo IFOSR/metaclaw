@@ -59,6 +59,16 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitUntil(assertion: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (!assertion()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('Timed out waiting for expected TUI state');
+    }
+    await flushUpdates();
+  }
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -85,11 +95,20 @@ describe('App permission failure blocking', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '明确测试任务',
+      }),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,
         reason: '新任务',
       }),
+      resolveTaskPriority: vi.fn().mockResolvedValue({
+        priority: 'normal',
+        reason: '默认优先级',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
     } as unknown as LlmBridge;
 
     const app = render(
@@ -103,6 +122,7 @@ describe('App permission failure blocking', () => {
         sessionId: 'sess_permission_block',
         contextRecaller,
         llmBridge,
+        availableExecutorCommands: new Set(['codex']),
       }),
     );
 
@@ -111,7 +131,7 @@ describe('App permission failure blocking', () => {
       await flushUpdates();
     }
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
+    await waitUntil(() => taskRepo.findByStatus('blocked').length > 0);
 
     const blockedTask = taskRepo.findByStatus('blocked')[0];
     expect(blockedTask).toBeTruthy();

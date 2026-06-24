@@ -12,6 +12,7 @@ import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
+import type { NotificationService } from '../../src/notifications/types.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -284,6 +285,10 @@ describe('session dispatch recovery', () => {
     const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
     const orchestration = new OrchestrationEngine(taskEngine);
     const contextRecaller = new ContextRecaller(db);
+    const notifier: NotificationService = {
+      notifyMemoryCandidate: vi.fn().mockResolvedValue(undefined),
+      notifyTaskCompleted: vi.fn().mockResolvedValue(undefined),
+    };
 
     const task = taskEngine.create({ title: '飞书 Client API 调研', goal: '整理飞书 Client API 访问用户文档的方法' });
     taskEngine.transition(task.id, 'ready');
@@ -324,6 +329,7 @@ describe('session dispatch recovery', () => {
       contextRecaller,
       llmBridge,
       executorFactory: () => executor,
+      notifier,
     });
 
     await session.submit('补充飞书 Client API 权限材料：需要 docs:document:readonly 权限，可以用 user_access_token 调用', { awaitAsyncWork: true });
@@ -335,7 +341,23 @@ describe('session dispatch recovery', () => {
     expect(taskRepo.findById(task.id)?.status).toBe('done');
     const output = session.getSnapshot().output.join('\n');
     expect(output).toContain(`检测到任务 #${task.id} 的阻塞条件已满足`);
+    expect(output).toContain('✓ 旧阻塞任务已完成');
+    expect(output).toContain('这是针对旧任务的答案');
+    expect(output).toContain(`任务：#${task.id} 飞书 Client API 调研`);
+    expect(output).toContain('触发方式：你刚才的补充信息解除阻塞');
+    expect(output).toContain('原阻塞原因：等待补充飞书 Client API 权限材料');
     expect(output).toContain('补充材料后已继续完成飞书 Client API 调研');
+    expect(notifier.notifyTaskCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: task.id,
+      title: '飞书 Client API 调研',
+      executionMode: 'resume-blocked',
+      origin: 'user',
+      recoveryTrigger: expect.objectContaining({
+        kind: 'user-query-unblocked',
+        blockedReason: '等待补充飞书 Client API 权限材料',
+        triggerReason: '检测到用户补充了阻塞所需信息',
+      }),
+    }));
   });
 
   it('does not auto-resume blocked tasks when the satisfying input is ambiguous', async () => {

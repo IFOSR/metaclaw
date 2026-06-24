@@ -9,7 +9,7 @@ import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { ContextRecaller } from '../core/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
 import type { NotificationService } from '../notifications/types.js';
-import { createExecutor } from '../executor/factory.js';
+import { createDefaultExecutor } from '../core/execution-runtime.js';
 import { MetaclawSession } from '../session/metaclaw-session.js';
 import { createJsonLineParser, encodeJsonLine } from './jsonl.js';
 import type { GatewayClientMessage, GatewayServerMessage } from './protocol.js';
@@ -29,6 +29,7 @@ interface GatewayServerDeps {
 
 export class MetaclawGatewayServer {
   private server: Server | null = null;
+  private readonly sockets = new Set<Socket>();
 
   constructor(private readonly deps: GatewayServerDeps) {}
 
@@ -41,6 +42,10 @@ export class MetaclawGatewayServer {
     }
 
     this.server = createServer(socket => {
+      this.sockets.add(socket);
+      socket.once('close', () => {
+        this.sockets.delete(socket);
+      });
       void this.handleConnection(socket);
     });
 
@@ -59,6 +64,10 @@ export class MetaclawGatewayServer {
     }
     const server = this.server;
     this.server = null;
+    for (const socket of this.sockets) {
+      socket.destroy();
+    }
+    this.sockets.clear();
     await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
     });
@@ -69,7 +78,7 @@ export class MetaclawGatewayServer {
 
   private async handleConnection(socket: Socket): Promise<void> {
     const sessionId = `sess_gateway_${nanoid(10)}`;
-    const executor = createExecutor({
+    const executor = createDefaultExecutor({
       command: this.deps.config.executor.command,
       timeout: this.deps.config.executor.timeout,
       maxDuration: this.deps.config.executor.max_duration,

@@ -23,6 +23,10 @@ export class TaskEngine {
     private snapshotDir: string,
   ) {}
 
+  getTaskRepo(): TaskRepo {
+    return this.taskRepo;
+  }
+
   /**
    * 列出所有任务
    */

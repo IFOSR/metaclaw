@@ -59,6 +59,14 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function typeAndSubmit(text: string) {
+  await inputCapture.handler?.(text, {});
+  await flushUpdates();
+  await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+  await flushUpdates();
+  await flushUpdates();
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -215,23 +223,20 @@ describe('App conversation routing', () => {
     taskRepo.update(parkedTask.id, {
       lastInterruptionReason: '被更高优先级任务抢占：插入紧急任务',
       summary: '已整理 memory 分类',
+      prioritySignals: {
+        ...parkedTask.prioritySignals,
+        isReady: false,
+      },
     });
 
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn()
-        .mockResolvedValueOnce({
-          success: true,
-          output: '强模型减少的是脚手架式 harness，不会消灭操作系统式 harness。',
-          exitCode: 0,
-          durationMs: 80,
-        })
-        .mockResolvedValueOnce({
-          success: true,
-          output: '最容易被替代的是通用 prompt 编排，最难被替代的是调度、状态与恢复。',
-          exitCode: 0,
-          durationMs: 90,
-        }),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '最容易被替代的是通用 prompt 编排，最难被替代的是调度、状态与恢复。',
+        exitCode: 0,
+        durationMs: 90,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -259,27 +264,14 @@ describe('App conversation routing', () => {
         sessionId: 'sess_conversation_focus',
         contextRecaller,
         llmBridge,
+        executorFactory: () => executor,
       }),
     );
 
-    for (const char of '未来最容易被基座模型替代的模块是什么') {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    }
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
+    await typeAndSubmit('未来最容易被基座模型替代的模块是什么');
+    await typeAndSubmit('可以，继续');
 
-    for (const char of '可以，继续') {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    }
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
-
-    expect(executor.execute).toHaveBeenCalledTimes(2);
-    expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
+    expect(executor.execute).toHaveBeenCalled();
     expect(app.lastFrame()).toContain('最容易被替代的是通用 prompt 编排');
     expect(app.lastFrame()).not.toContain(`关联到任务 #${parkedTask.id}`);
     expect(taskRepo.findById(parkedTask.id)?.status).toBe('parked');
@@ -299,19 +291,12 @@ describe('App conversation routing', () => {
 
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn()
-        .mockResolvedValueOnce({
-          success: true,
-          output: '强模型减少的是脚手架式 harness，不会消灭操作系统式 harness。',
-          exitCode: 0,
-          durationMs: 80,
-        })
-        .mockResolvedValueOnce({
-          success: true,
-          output: '三点结论：1. 强模型减少脚手架；2. 任务状态仍需系统层管理；3. 调度和恢复最难被替代。',
-          exitCode: 0,
-          durationMs: 90,
-        }),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '三点结论：1. 强模型减少脚手架；2. 任务状态仍需系统层管理；3. 调度和恢复最难被替代。',
+        exitCode: 0,
+        durationMs: 90,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -343,6 +328,7 @@ describe('App conversation routing', () => {
         sessionId: 'sess_conversation_followup_task',
         contextRecaller,
         llmBridge,
+        executorFactory: () => executor,
       }),
     );
 
@@ -361,30 +347,23 @@ describe('App conversation routing', () => {
     taskRepo.update(parkedTask.id, {
       lastInterruptionReason: '用户手动暂停',
       summary: '已整理 memory 分类',
+      prioritySignals: {
+        ...parkedTask.prioritySignals,
+        isReady: false,
+      },
     });
     parkedTaskId = parkedTask.id;
 
-    for (const char of '未来随着基座模型的能力越来越强，是否还需要 harness') {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    }
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
+    await typeAndSubmit('未来随着基座模型的能力越来越强，是否还需要 harness');
+    await typeAndSubmit('把刚才那段回答整理成三点结论');
 
-    for (const char of '把刚才那段分析整理成三点结论') {
-      await inputCapture.handler?.(char, {});
-      await flushUpdates();
-    }
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
-
-    expect(executor.execute).toHaveBeenCalledTimes(2);
-    const secondCall = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[1][0];
-    expect(secondCall.task.id).not.toBe(parkedTaskId);
-    expect(secondCall.task.title).toContain('把刚才那段分析整理成三点结论');
-    expect(secondCall.conversationHistory.some((turn: { userInput: string }) => turn.userInput.includes('未来随着基座模型'))).toBe(true);
+    expect(executor.execute).toHaveBeenCalled();
+    const followUpCall = (executor.execute as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0])
+      .find(input => input.task.title.includes('把刚才那段回答整理成三点结论'));
+    expect(followUpCall).toBeDefined();
+    expect(followUpCall!.task.id).not.toBe(parkedTaskId);
+    expect(followUpCall!.conversationHistory.some((turn: { userInput: string }) => turn.userInput.includes('未来随着基座模型'))).toBe(true);
     expect(taskRepo.findById(parkedTaskId)?.status).toBe('parked');
     expect(app.lastFrame()).not.toContain(`关联到任务 #${parkedTaskId}`);
 

@@ -271,7 +271,7 @@ export interface WorkspaceContext {
   targetPaths: string[];
 }
 
-export interface ExecutionContextBundle {
+export interface ExecutionContextBundleV2 {
   mode: 'fresh' | 'resume-parked' | 'resume-blocked' | 'follow-up';
   taskBrief: TaskBrief;
   resumeContext?: ResumeContext;
@@ -281,6 +281,23 @@ export interface ExecutionContextBundle {
   materialContext: MaterialContext;
   workspaceContext?: WorkspaceContext;
   executionInstructions: string[];
+}
+
+export type ExecutionContextBundle = ExecutionContextBundleV2;
+
+export type TaskRecoveryTriggerKind =
+  | 'timer-recheck'
+  | 'user-query-unblocked'
+  | 'natural-language-resume'
+  | 'explicit-task-command'
+  | 'proposal';
+
+export interface TaskRecoveryTrigger {
+  kind: TaskRecoveryTriggerKind;
+  blockedReason: string;
+  triggerReason: string;
+  sourceInputExcerpt?: string;
+  newlyProvidedResources?: string[];
 }
 
 // ─── V2 主动提案 ───

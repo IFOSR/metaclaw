@@ -1,6 +1,13 @@
 export type ExecutorRiskLevel = 'low' | 'medium' | 'high';
 export type ExecutorAvailability = 'available' | 'unavailable';
-export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default';
+export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'race_executors' | 'ask_clarification';
+export type IntentDecisionKind =
+  | 'direct_reply'
+  | 'task_control'
+  | 'durable_task'
+  | 'executor_dispatch'
+  | 'clarification';
+export type IntentRouteAction = ExecutorRouteAction | 'none' | 'ask_clarification';
 export type TaskRouteIntent =
   | 'repo_execution'
   | 'technical_reasoning'
@@ -29,6 +36,31 @@ export interface ExecutorProfile {
   projectUrl?: string | null;
 }
 
+export interface IntentDecision {
+  intent: IntentDecisionKind;
+  confidence: number;
+  needsClarification: boolean;
+  needsLongRunningTask: boolean;
+  requiresLocalRepo: boolean;
+  requiresResearch: boolean;
+  requiresMultiTool: boolean;
+  requiresLongTermMemory: boolean;
+  requiresExternalGateway: boolean;
+  canModifyFiles: boolean;
+  shouldCreateDurableTask: boolean;
+  reason: string;
+  route: {
+    target: string;
+    action: IntentRouteAction;
+    primaryIntent: TaskRouteIntent;
+    capabilityClass: TaskRouteIntent;
+    requiredCapabilities: string[];
+    matchedBoundary: string[];
+    riskLevel: ExecutorRiskLevel;
+    taskId?: string | null;
+  };
+}
+
 export interface ExecutorRouteCandidate {
   executorName: string;
   score: number;
@@ -54,67 +86,13 @@ export interface ExecutorRouteDecision {
   rejected: ExecutorRouteRejectedCandidate[];
 }
 
-interface IntentClassification {
-  primaryIntent: TaskRouteIntent;
-  matchedBoundary: string[];
-  requiresRepoMutation: boolean;
-  explicitExecutorName: string | null;
-  riskyAction: boolean;
-}
-
-const TOKEN_MAP: Record<string, string[]> = {
-  legal: ['合同', '法务', '条款', '法律', 'contract', 'legal'],
-  contract: ['合同', '条款', 'contract'],
-  software: ['代码', '测试', '实现', 'bug', '修复', 'typescript', 'react'],
-  repo: ['repo', '仓库', '代码库', '项目代码', '大代码库', '当前项目'],
-  terminal: ['terminal', 'shell', '命令行', '终端'],
-  code_review: ['review', 'code review', '代码审查', '代码 review', '评审', 'pr review'],
-  tests: ['测试', 'test', 'tests', 'tdd', 'vitest', 'jest', '跑测试', '修复测试'],
-  debugging: ['debug', '调试', '排查', 'bug', '修复'],
-  refactor: ['重构', 'refactor'],
-  reasoning: ['推理', '深度思考', '复杂推理', 'reasoning'],
-  algorithm: ['算法', 'leetcode', '数据结构', 'algorithm'],
-  math: ['数学', '公式', '证明', '推导', 'math'],
-  chinese_analysis: ['中文分析', '中文技术分析', '中文推理', '中文解释'],
-  deepseek_reasoning: ['deepseek', 'deepseek-tui', '深度求索', 'deepseek reasoning', '推理模型'],
-  agentic_tui: ['tui', 'terminal agent', '终端智能体', 'agentic'],
-  sandboxed_execution: ['sandbox', '沙箱'],
-  noninteractive_execution: ['非交互', 'non-interactive', 'ci'],
-  finance: ['财务', '投资', '估值', '收入', '利润'],
-  analysis: ['分析', '评审', '风险', 'review', 'analysis'],
-  research: ['调研', '研究', '报告', 'research', '市场', '竞品', '公司', '产品分析'],
-  reporting: ['报告', 'report', '调研报告', '研究报告'],
-  personal_assistant: ['助手', 'assistant', '个人助理'],
-  automation: ['自动化', 'automation', 'workflow', '工作流'],
-  messaging: ['消息', '通知', 'message', 'messaging'],
-  memory: ['记忆', 'memory', '长期记忆'],
-  agent_ops: ['代理', '智能体', '编排', 'orchestration'],
-  architecture: ['架构', 'architecture', '系统设计', '设计评审', 'system design', '技术取舍'],
-  multi_tool: ['多工具', '工具调用', 'tool', 'multi-tool'],
-  mcp: ['mcp', 'tool server', '工具服务器'],
-  skill_runtime: ['skill', '技能', '运行时'],
-  session_management: ['session', '会话', '跨 session', '跨session'],
-  messaging_gateway: ['gateway', '网关', '消息网关', 'whatsapp'],
-  workflow_automation: ['workflow', '工作流', '自动化'],
-  persistent_memory: ['长期记忆', 'persistent memory', '记忆'],
-  code_execution: ['执行代码', '运行代码', '代码执行'],
-  agentic_cli: ['agent cli', 'agentic cli', 'coding agent', '智能体 cli'],
-  report_generation: ['生成报告', '输出报告', '产出报告', 'report generation'],
-  subagents: ['subagent', '子代理', '子智能体'],
-  ci_noninteractive: ['ci', '非交互', 'pipeline'],
-  long_context_analysis: ['长上下文', 'large context', '大代码库'],
-  architecture_review: ['架构评审', 'architecture review'],
-  contract_review: ['审查', '合同', '条款'],
-  risk_matrix: ['风险矩阵', '风险'],
-  coding: ['代码', '实现', '修复', '写入文件', 'patch', '补丁'],
-};
-
-const EXECUTOR_ALIASES: Record<string, string[]> = {
-  'codex-cli': ['codex-cli', 'codex cli', 'codex'],
-  'deepseek-tui': ['deepseek-tui', 'deepseek tui', 'deepseek', '深度求索'],
-  'hermes-agent': ['hermes-agent', 'hermes agent', 'hermes'],
-  'pi-agent': ['pi-agent', 'pi agent', 'piagent', 'pi'],
-  'claude-code': ['claude-code', 'claude code', 'claude'],
+const FALLBACK_EXECUTORS_BY_INTENT: Record<TaskRouteIntent, string[]> = {
+  repo_execution: ['codex-cli', 'claude-code', 'deepseek-tui'],
+  technical_reasoning: ['deepseek-tui', 'claude-code', 'codex-cli'],
+  research_workflow: ['pi-agent', 'hermes-agent'],
+  memory_agent_ops: ['hermes-agent', 'pi-agent'],
+  conversation_or_control: [],
+  general: [],
 };
 
 const DEFAULT_INTENT_AFFINITY: Record<string, Partial<Record<TaskRouteIntent, number>>> = {
@@ -155,142 +133,38 @@ const DEFAULT_INTENT_AFFINITY: Record<string, Partial<Record<TaskRouteIntent, nu
   },
 };
 
-const SPECIALIZED_TOKENS = new Set([
-  'architecture',
-  'analysis',
-  'research',
-  'reasoning',
-  'algorithm',
-  'math',
-  'chinese_analysis',
-  'deepseek_reasoning',
-  'agentic_tui',
-  'architecture_review',
-  'long_context_analysis',
-  'persistent_memory',
-  'multi_tool',
-  'skill_runtime',
-  'messaging_gateway',
-  'workflow_automation',
-  'personal_assistant',
-  'reporting',
-  'report_generation',
-  'agentic_cli',
-]);
-
-const REPO_MUTATION_TOKENS = [
-  '实现', '修复', '改代码', '修改代码', '写代码', '补丁', 'patch', '跑测试', '修复测试', '重构', '写入文件', '直接修复',
-  'implement', 'fix', 'edit', 'modify', 'write file', 'run tests', 'refactor', 'commit',
-];
-const NO_MUTATION_TOKENS = ['不改文件', '不要改文件', '只分析', '仅分析', '不修改', '不动代码', 'read-only', 'no edit', 'without editing'];
-const CONVERSATION_TOKENS = ['聊聊', '解释一下', '怎么看', '想想', 'hello', '你好'];
-
-function normalize(input: string): string {
-  return input.toLowerCase().replace(/[\s_-]+/g, '');
-}
-
-function inputContainsAny(userInput: string, aliases: string[]): boolean {
-  const normalized = normalize(userInput);
-  return aliases.some(alias => normalized.includes(normalize(alias)));
-}
-
-function matchScore(userInput: string, token: string): number {
-  const aliases = TOKEN_MAP[token] ?? [token];
-  return inputContainsAny(userInput, aliases) ? 1 : 0;
+function clampScore(score: number): number {
+  return Math.max(0, Math.min(1, score));
 }
 
 function unique(items: string[]): string[] {
   return Array.from(new Set(items));
 }
 
-function clampScore(score: number): number {
-  return Math.max(0, Math.min(1, score));
+function normalizeRisk(value: ExecutorRiskLevel): number {
+  if (value === 'high') return 3;
+  if (value === 'medium') return 2;
+  return 1;
 }
 
-function detectExplicitExecutor(userInput: string, profiles: ExecutorProfile[]): string | null {
-  for (const profile of profiles) {
-    const aliases = EXECUTOR_ALIASES[profile.name] ?? [profile.name];
-    if (inputContainsAny(userInput, aliases)) {
-      return profile.name;
-    }
-  }
-  return null;
-}
-
-function classifyIntent(userInput: string, profiles: ExecutorProfile[]): IntentClassification {
-  const matchedBoundary: string[] = [];
-  const hasNoMutation = inputContainsAny(userInput, NO_MUTATION_TOKENS);
-  const requiresRepoMutation = !hasNoMutation && inputContainsAny(userInput, REPO_MUTATION_TOKENS);
-  const explicitExecutorName = detectExplicitExecutor(userInput, profiles);
-
-  if (requiresRepoMutation || matchScore(userInput, 'tests') || matchScore(userInput, 'debugging') || matchScore(userInput, 'refactor')) {
-    matchedBoundary.push('repo_mutation');
-  }
-  if (matchScore(userInput, 'code_review')) matchedBoundary.push('code_review');
-  if (matchScore(userInput, 'algorithm')) matchedBoundary.push('algorithm');
-  if (matchScore(userInput, 'math')) matchedBoundary.push('math');
-  if (matchScore(userInput, 'reasoning')) matchedBoundary.push('reasoning');
-  if (matchScore(userInput, 'architecture')) matchedBoundary.push('architecture');
-  if (matchScore(userInput, 'chinese_analysis')) matchedBoundary.push('chinese_analysis');
-  if (matchScore(userInput, 'deepseek_reasoning')) matchedBoundary.push('deepseek_reasoning');
-  if (matchScore(userInput, 'research')) matchedBoundary.push('research');
-  if (matchScore(userInput, 'multi_tool')) matchedBoundary.push('multi_tool');
-  if (matchScore(userInput, 'automation')) matchedBoundary.push('workflow_automation');
-  if (matchScore(userInput, 'memory')) matchedBoundary.push('persistent_memory');
-  if (matchScore(userInput, 'messaging') || matchScore(userInput, 'messaging_gateway')) matchedBoundary.push('messaging_gateway');
-  if (matchScore(userInput, 'skill_runtime')) matchedBoundary.push('skill_runtime');
-  if (matchScore(userInput, 'mcp')) matchedBoundary.push('mcp');
-
-  const hasTechnicalReasoning = matchedBoundary.some(boundary => [
-    'algorithm', 'math', 'reasoning', 'architecture', 'chinese_analysis', 'deepseek_reasoning', 'code_review',
-  ].includes(boundary));
-  const hasResearchWorkflow = matchedBoundary.includes('research');
-  const hasMemoryAgentOps = matchedBoundary.some(boundary => [
-    'persistent_memory', 'multi_tool', 'workflow_automation', 'messaging_gateway', 'skill_runtime', 'mcp',
-  ].includes(boundary));
-
-  let primaryIntent: TaskRouteIntent = 'general';
-  if (inputContainsAny(userInput, CONVERSATION_TOKENS) && !requiresRepoMutation && !hasResearchWorkflow && !hasMemoryAgentOps && !hasTechnicalReasoning) {
-    primaryIntent = 'conversation_or_control';
-  } else if (requiresRepoMutation) {
-    primaryIntent = 'repo_execution';
-  } else if (hasMemoryAgentOps) {
-    primaryIntent = 'memory_agent_ops';
-  } else if (hasResearchWorkflow) {
-    primaryIntent = 'research_workflow';
-  } else if (hasTechnicalReasoning || hasNoMutation) {
-    primaryIntent = 'technical_reasoning';
-  }
-
-  if (primaryIntent === 'technical_reasoning' && matchScore(userInput, 'research') && matchScore(userInput, 'deepseek_reasoning')) {
-    matchedBoundary.push('technical_research_with_deepseek');
-  }
-
-  const riskyAction = inputContainsAny(userInput, ['删除', 'drop table', '生产', '线上', 'force push', 'rm -rf', '高风险']);
-
+function normalizeDecision(decision: IntentDecision): IntentDecision {
   return {
-    primaryIntent,
-    matchedBoundary: unique(matchedBoundary),
-    requiresRepoMutation,
-    explicitExecutorName,
-    riskyAction,
+    ...decision,
+    confidence: clampScore(decision.confidence),
+    route: {
+      ...decision.route,
+      requiredCapabilities: unique(decision.route.requiredCapabilities ?? []),
+      matchedBoundary: unique(decision.route.matchedBoundary ?? []),
+    },
   };
 }
 
-function ownershipExecutorForIntent(intent: TaskRouteIntent): string | null {
-  if (intent === 'repo_execution') return 'codex-cli';
-  return null;
-}
-
-function shouldRaceResearchAgents(classification: IntentClassification): boolean {
-  return classification.primaryIntent === 'research_workflow'
-    || classification.matchedBoundary.some(boundary => [
-      'research',
-      'multi_tool',
-      'workflow_automation',
-      'skill_runtime',
-      'mcp',
-    ].includes(boundary));
+function routeActionToExecutorAction(action: IntentRouteAction): ExecutorRouteAction {
+  if (action === 'ask_review') return 'ask_review';
+  if (action === 'fallback_default') return 'fallback_default';
+  if (action === 'race_executors') return 'race_executors';
+  if (action === 'ask_clarification' || action === 'none') return 'ask_clarification';
+  return 'auto_dispatch';
 }
 
 function intentAffinity(profile: ExecutorProfile, intent: TaskRouteIntent): number {
@@ -299,126 +173,292 @@ function intentAffinity(profile: ExecutorProfile, intent: TaskRouteIntent): numb
   return DEFAULT_INTENT_AFFINITY[profile.name]?.[intent] ?? (intent === 'general' ? 0.35 : 0.25);
 }
 
-function profileMatchesUseCase(profile: ExecutorProfile, userInput: string, useCases: string[] | undefined): string[] {
-  return (useCases ?? []).filter(useCase => inputContainsAny(userInput, [useCase]));
+function hasCapabilityOverlap(profile: ExecutorProfile, requiredCapabilities: string[]): string[] {
+  const profileCapabilities = new Set([
+    ...profile.capabilities,
+    ...profile.domains,
+    ...profile.outputTypes,
+    ...profile.inputTypes,
+  ]);
+  return requiredCapabilities.filter(capability => profileCapabilities.has(capability));
+}
+
+function candidateReason(parts: string[]): string {
+  return parts.length > 0 ? parts.join(', ') : 'semantic_decision_fallback';
 }
 
 function buildRejectedCandidates(
   candidates: ExecutorRouteCandidate[],
   selectedExecutor: string,
-  classification: IntentClassification,
 ): ExecutorRouteRejectedCandidate[] {
   return candidates
     .filter(candidate => candidate.executorName !== selectedExecutor)
-    .map(candidate => {
-      const affinity = candidate.primaryIntent ? intentAffinityForCandidate(candidate) : 0;
-      let reason = 'lower intent-aware score';
-      if (classification.primaryIntent === 'repo_execution' && (candidate.executorName === 'hermes-agent' || candidate.executorName === 'pi-agent')) {
-        reason = 'task requires deterministic repo mutation';
-      } else if ((classification.primaryIntent === 'research_workflow' || classification.primaryIntent === 'memory_agent_ops') && candidate.executorName === 'codex-cli') {
-        reason = 'task is research, memory, tool orchestration, or gateway workflow rather than repo mutation';
-      } else if (classification.primaryIntent === 'research_workflow' && candidate.executorName === 'hermes-agent') {
-        reason = 'research workflow can race Pi Agent and Hermes Agent; lower primary score';
-      } else if (classification.primaryIntent === 'technical_reasoning' && (candidate.executorName === 'hermes-agent' || candidate.executorName === 'pi-agent')) {
-        reason = 'no multi-tool research, memory, or gateway requirement';
-      } else if (classification.primaryIntent === 'technical_reasoning' && candidate.executorName === 'codex-cli') {
-        reason = classification.requiresRepoMutation ? 'repo mutation owned by selected executor' : 'task does not require deterministic repo mutation';
-      } else if (affinity < 0.4) {
-        reason = `weak affinity for ${classification.primaryIntent}`;
-      }
-      return { executorName: candidate.executorName, reason, score: candidate.score };
-    });
+    .map(candidate => ({
+      executorName: candidate.executorName,
+      score: candidate.score,
+      reason: candidate.reason || 'lower semantic decision score',
+    }));
 }
 
-function intentAffinityForCandidate(candidate: ExecutorRouteCandidate): number {
-  if (!candidate.reason.includes('intent_affinity=')) return 0;
-  const match = candidate.reason.match(/intent_affinity=([0-9.]+)/);
-  return match ? Number.parseFloat(match[1] ?? '0') : 0;
+export function buildFallbackIntentDecision(input: {
+  target: string;
+  action?: IntentRouteAction;
+  primaryIntent?: TaskRouteIntent;
+  capabilityClass?: TaskRouteIntent;
+  requiredCapabilities?: string[];
+  matchedBoundary?: string[];
+  confidence?: number;
+  reason: string;
+  riskLevel?: ExecutorRiskLevel;
+  needsLongRunningTask?: boolean;
+  requiresLocalRepo?: boolean;
+  requiresResearch?: boolean;
+  requiresMultiTool?: boolean;
+  requiresLongTermMemory?: boolean;
+  requiresExternalGateway?: boolean;
+  canModifyFiles?: boolean;
+  shouldCreateDurableTask?: boolean;
+}): IntentDecision {
+  const primaryIntent = input.primaryIntent ?? input.capabilityClass ?? 'general';
+  const capabilityClass = input.capabilityClass ?? primaryIntent;
+  const action = input.action ?? 'auto_dispatch';
+  return {
+    intent: action === 'ask_clarification' ? 'clarification' : 'executor_dispatch',
+    confidence: input.confidence ?? 0.45,
+    needsClarification: action === 'ask_clarification',
+    needsLongRunningTask: input.needsLongRunningTask ?? false,
+    requiresLocalRepo: input.requiresLocalRepo ?? capabilityClass === 'repo_execution',
+    requiresResearch: input.requiresResearch ?? capabilityClass === 'research_workflow',
+    requiresMultiTool: input.requiresMultiTool ?? capabilityClass === 'memory_agent_ops',
+    requiresLongTermMemory: input.requiresLongTermMemory ?? capabilityClass === 'memory_agent_ops',
+    requiresExternalGateway: input.requiresExternalGateway ?? false,
+    canModifyFiles: input.canModifyFiles ?? capabilityClass === 'repo_execution',
+    shouldCreateDurableTask: input.shouldCreateDurableTask ?? false,
+    reason: input.reason,
+    route: {
+      target: input.target,
+      action,
+      primaryIntent,
+      capabilityClass,
+      requiredCapabilities: input.requiredCapabilities ?? [],
+      matchedBoundary: input.matchedBoundary ?? [],
+      riskLevel: input.riskLevel ?? 'medium',
+    },
+  };
 }
 
 export class ExecutorRouter {
-  constructor(private profiles: ExecutorProfile[]) {}
+  constructor(private readonly defaultProfiles: ExecutorProfile[] = []) {}
 
-  route(input: { userInput: string; defaultExecutorName: string; explicitExecutorName?: string }): ExecutorRouteDecision {
-    const availableProfiles = this.profiles.filter(profile => profile.availability === 'available');
-    const classification = classifyIntent(input.userInput, availableProfiles);
-    const explicitExecutorName = input.explicitExecutorName ?? classification.explicitExecutorName;
-    const explicitProfile = explicitExecutorName
-      ? availableProfiles.find(profile => profile.name === explicitExecutorName)
-      : null;
-
-    if (explicitExecutorName && (explicitProfile || input.explicitExecutorName)) {
-      const selectedExecutor = explicitProfile?.name ?? explicitExecutorName;
-      const candidate: ExecutorRouteCandidate = {
-        executorName: selectedExecutor,
-        score: 1,
-        reason: 'explicit_executor_override',
-        primaryIntent: classification.primaryIntent,
-        matchedBoundary: classification.matchedBoundary,
-      };
-      return {
-        selectedExecutor,
-        action: 'auto_dispatch',
-        confidence: 1,
-        candidates: [candidate],
-        reason: `用户显式指定 executor, intent=${classification.primaryIntent}, boundary=${classification.matchedBoundary.join('+') || '-'}`,
-        primaryIntent: classification.primaryIntent,
-        matchedBoundary: classification.matchedBoundary,
-        rejected: buildRejectedCandidates(
-          availableProfiles.map(profile => ({
-            executorName: profile.name,
-            score: profile.name === selectedExecutor ? 1 : 0,
-            reason: profile.name === selectedExecutor ? 'explicit_executor_override' : 'rejected_by_explicit_executor_override',
-            primaryIntent: classification.primaryIntent,
-            matchedBoundary: classification.matchedBoundary,
-          })),
-          selectedExecutor,
-          classification,
-        ),
-      };
-    }
-
-    if (classification.primaryIntent === 'conversation_or_control') {
-      return this.fallbackDecision(input.defaultExecutorName, classification, [], 'conversation_or_control 不派发 executor');
-    }
-
-    const candidates = availableProfiles
-      .map(profile => this.scoreProfile(profile, input.userInput, classification))
-      .sort((left, right) => {
-        if (right.score !== left.score) return right.score - left.score;
-        return right.reason.split(', ').length - left.reason.split(', ').length;
+  route(input: {
+    decision: IntentDecision;
+    profiles?: ExecutorProfile[];
+    defaultExecutorName: string;
+  } | {
+    userInput: string;
+    profiles?: ExecutorProfile[];
+    defaultExecutorName: string;
+  }): ExecutorRouteDecision {
+    if ('userInput' in input) {
+      const profiles = input.profiles ?? this.defaultProfiles;
+      return this.route({
+        decision: this.buildLegacyIntentDecision(input.userInput, profiles, input.defaultExecutorName),
+        profiles,
+        defaultExecutorName: input.defaultExecutorName,
       });
+    }
 
-    const selected = this.applyHardRules(candidates, input.defaultExecutorName, classification) ?? candidates[0];
-    if (!selected || selected.score < 0.45) {
-      return this.fallbackDecision(
+    const decision = normalizeDecision(input.decision);
+    const profiles = (input.profiles ?? this.defaultProfiles).filter(profile => profile.availability === 'available');
+
+    if (
+      decision.intent === 'direct_reply'
+      || decision.intent === 'task_control'
+      || decision.intent === 'clarification'
+      || decision.route.target === 'metaclaw'
+    ) {
+      return this.nonDispatchDecision(input.defaultExecutorName, decision, 'semantic decision stays inside MetaClaw');
+    }
+
+    const directProfile = profiles.find(profile => profile.name === decision.route.target);
+    if (directProfile) {
+      const candidate = this.directCandidate(directProfile, decision);
+      return this.buildDecision(candidate, profiles, decision, 'target_available');
+    }
+
+    const candidates = profiles
+      .map(profile => this.scoreFallbackProfile(profile, decision, input.defaultExecutorName))
+      .sort((left, right) => right.score - left.score);
+    const selected = candidates[0];
+
+    if (!selected || selected.score < 0.35) {
+      return this.askClarificationDecision(
         input.defaultExecutorName,
-        classification,
+        decision,
         candidates,
-        '没有足够高置信的 executor 匹配，回退默认 executor',
+        `target ${decision.route.target} unavailable and no compatible fallback found; ask before dispatch`,
       );
     }
 
-    const profile = availableProfiles.find(item => item.name === selected.executorName);
-    const action: ExecutorRouteAction = profile?.riskLevel === 'high'
-      ? 'fallback_default'
-      : 'auto_dispatch';
+    return this.buildDecision(selected, profiles, decision, `target ${decision.route.target} unavailable; semantic fallback selected`);
+  }
 
+  private buildLegacyIntentDecision(
+    userInput: string,
+    profiles: ExecutorProfile[],
+    defaultExecutorName: string,
+  ): IntentDecision {
+    const text = userInput.toLowerCase();
+    const contains = (patterns: RegExp[]) => patterns.some(pattern => pattern.test(userInput) || pattern.test(text));
+    const findProfile = (names: string[]) => names.find(name => profiles.some(profile => profile.name === name && profile.availability === 'available'));
+
+    const legalProfile = profiles.find(profile =>
+      profile.availability === 'available'
+      && [...profile.domains, ...profile.capabilities].some(item => /legal|contract|合同|法务|risk_matrix/.test(item))
+      && /合同|条款|法务|legal|contract|风险矩阵/i.test(userInput)
+    );
+    if (legalProfile) {
+      return buildFallbackIntentDecision({
+        target: legalProfile.name,
+        action: 'auto_dispatch',
+        primaryIntent: 'general',
+        capabilityClass: 'general',
+        requiredCapabilities: legalProfile.capabilities,
+        matchedBoundary: ['legal', 'contract_review'],
+        confidence: 0.78,
+        reason: 'legacy route preview matched legal/contract profile',
+        riskLevel: legalProfile.riskLevel,
+      });
+    }
+
+    const requiresMessagingGateway = contains([/消息网关/u, /通知客户/u, /发送给客户/u, /messaging gateway/i]);
+    if (requiresMessagingGateway) {
+      return buildFallbackIntentDecision({
+        target: defaultExecutorName,
+        action: 'ask_clarification',
+        primaryIntent: 'memory_agent_ops',
+        capabilityClass: 'memory_agent_ops',
+        requiredCapabilities: ['messaging_gateway'],
+        matchedBoundary: ['messaging_gateway', 'external_action'],
+        confidence: 0.62,
+        reason: 'legacy route preview detected external messaging gateway work',
+        riskLevel: 'high',
+      });
+    }
+
+    const requiresRepoMutation = contains([/修复/u, /实现/u, /修改/u, /代码/u, /补丁/u, /\bbug\b/i, /\btest(s)?\b/i, /\bpatch\b/i, /\brepo\b/i, /PR review/i]);
+    const requiresTechnicalReasoning = contains([/DeepSeek/i, /算法/u, /数学/u, /推理/u, /边界条件/u, /中文技术分析/u])
+      || (/分析这段代码/u.test(userInput) && /不改文件/u.test(userInput))
+      || (/代码 review/i.test(userInput) && /算法正确性/u.test(userInput));
+    const requiresMemoryOps = contains([/长期记忆/u, /多工具/u, /自动化/u, /multi[- ]?tool/i, /memory/i]);
+    const requiresResearch = contains([/调研/u, /研究/u, /市场/u, /报告/u, /趋势/u, /\bresearch\b/i]);
+    const requiresArchitecture = contains([/架构/u, /长上下文/u, /系统设计/u, /large[- ]?context/i]);
+
+    if (requiresArchitecture) {
+      const target = findProfile(['claude-code']) ?? defaultExecutorName;
+      return buildFallbackIntentDecision({
+        target,
+        action: 'auto_dispatch',
+        primaryIntent: 'technical_reasoning',
+        capabilityClass: 'technical_reasoning',
+        requiredCapabilities: ['architecture_review', 'long_context_analysis'],
+        matchedBoundary: ['architecture', 'long_context'],
+        confidence: 0.76,
+        reason: 'legacy route preview detected architecture/large-context work',
+      });
+    }
+
+    if (requiresTechnicalReasoning) {
+      const target = findProfile(['deepseek-tui']) ?? defaultExecutorName;
+      return buildFallbackIntentDecision({
+        target,
+        action: 'auto_dispatch',
+        primaryIntent: 'technical_reasoning',
+        capabilityClass: 'technical_reasoning',
+        requiredCapabilities: ['deepseek_reasoning', 'algorithm', 'code_review'],
+        matchedBoundary: ['reasoning', 'algorithm', 'chinese_analysis'],
+        confidence: 0.78,
+        reason: 'legacy route preview detected reasoning/algorithm work',
+        canModifyFiles: !/不改文件/u.test(userInput),
+      });
+    }
+
+    if (requiresMemoryOps) {
+      const target = requiresResearch
+        ? findProfile(['pi-agent', 'hermes-agent']) ?? defaultExecutorName
+        : findProfile(['hermes-agent', 'pi-agent']) ?? defaultExecutorName;
+      return buildFallbackIntentDecision({
+        target,
+        action: 'auto_dispatch',
+        primaryIntent: 'memory_agent_ops',
+        capabilityClass: 'memory_agent_ops',
+        requiredCapabilities: ['persistent_memory', 'multi_tool', 'workflow_automation'],
+        matchedBoundary: ['memory', 'multi_tool', 'workflow_automation'],
+        confidence: 0.74,
+        reason: 'legacy route preview detected memory/multi-tool agent work',
+      });
+    }
+
+    if (requiresResearch) {
+      const target = findProfile(['pi-agent', 'hermes-agent']) ?? defaultExecutorName;
+      return buildFallbackIntentDecision({
+        target,
+        action: 'auto_dispatch',
+        primaryIntent: 'research_workflow',
+        capabilityClass: 'research_workflow',
+        requiredCapabilities: ['research', 'report_generation'],
+        matchedBoundary: ['research', 'report_generation'],
+        confidence: 0.72,
+        reason: 'legacy route preview detected research/report work',
+      });
+    }
+
+    if (requiresRepoMutation) {
+      return buildFallbackIntentDecision({
+        target: defaultExecutorName,
+        action: 'auto_dispatch',
+        primaryIntent: 'repo_execution',
+        capabilityClass: 'repo_execution',
+        requiredCapabilities: ['coding', 'tests', 'code_review'],
+        matchedBoundary: ['repo_mutation'],
+        confidence: 0.76,
+        reason: 'legacy route preview detected repo mutation work',
+        canModifyFiles: true,
+      });
+    }
+
+    return buildFallbackIntentDecision({
+      target: defaultExecutorName,
+      action: 'fallback_default',
+      primaryIntent: 'general',
+      capabilityClass: 'general',
+      confidence: 0.45,
+      reason: 'legacy route preview found no strong executor-specific signal',
+    });
+  }
+
+  private nonDispatchDecision(
+    defaultExecutorName: string,
+    decision: IntentDecision,
+    reason: string,
+  ): ExecutorRouteDecision {
     return {
-      selectedExecutor: selected.executorName,
-      action,
-      confidence: selected.score,
-      candidates,
-      reason: selected.reason,
-      primaryIntent: classification.primaryIntent,
-      matchedBoundary: selected.matchedBoundary ?? classification.matchedBoundary,
-      rejected: buildRejectedCandidates(candidates, selected.executorName, classification),
+      selectedExecutor: defaultExecutorName,
+      action: decision.intent === 'clarification' || decision.needsClarification
+        ? 'ask_clarification'
+        : 'fallback_default',
+      confidence: decision.confidence,
+      candidates: [],
+      reason,
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: decision.route.matchedBoundary,
+      rejected: [],
     };
   }
 
   private fallbackDecision(
     defaultExecutorName: string,
-    classification: IntentClassification,
+    decision: IntentDecision,
     candidates: ExecutorRouteCandidate[],
     reason: string,
   ): ExecutorRouteDecision {
@@ -428,120 +468,138 @@ export class ExecutorRouter {
       confidence: candidates[0]?.score ?? 0,
       candidates,
       reason,
-      primaryIntent: classification.primaryIntent,
-      matchedBoundary: classification.matchedBoundary,
-      rejected: buildRejectedCandidates(candidates, defaultExecutorName, classification),
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: decision.route.matchedBoundary,
+      rejected: buildRejectedCandidates(candidates, defaultExecutorName),
     };
   }
 
-  private applyHardRules(
-    candidates: ExecutorRouteCandidate[],
+  private askClarificationDecision(
     defaultExecutorName: string,
-    classification: IntentClassification,
-  ): ExecutorRouteCandidate | null {
-    if (classification.primaryIntent === 'repo_execution') {
-      return candidates.find(candidate => candidate.executorName === 'codex-cli')
-        ?? candidates.find(candidate => candidate.executorName === defaultExecutorName)
-        ?? null;
-    }
-
-    if (classification.primaryIntent === 'memory_agent_ops') {
-      if (shouldRaceResearchAgents(classification)) {
-        return null;
-      }
-      return candidates.find(candidate => candidate.executorName === defaultExecutorName)
-        ?? candidates.find(candidate => candidate.executorName === 'codex-cli')
-        ?? null;
-    }
-
-    if (classification.primaryIntent === 'technical_reasoning') {
-      const asksDeepSeek = classification.matchedBoundary.includes('deepseek_reasoning');
-      const algorithmicOrChinese = classification.matchedBoundary.some(boundary =>
-        ['algorithm', 'math', 'chinese_analysis', 'reasoning', 'technical_research_with_deepseek'].includes(boundary)
-      );
-      const codeReviewAlgorithmic = classification.matchedBoundary.includes('code_review') && algorithmicOrChinese;
-      if (asksDeepSeek || algorithmicOrChinese || codeReviewAlgorithmic) {
-        return candidates.find(candidate => candidate.executorName === 'deepseek-tui') ?? null;
-      }
-    }
-
-    return null;
+    decision: IntentDecision,
+    candidates: ExecutorRouteCandidate[],
+    reason: string,
+  ): ExecutorRouteDecision {
+    return {
+      selectedExecutor: defaultExecutorName,
+      action: 'ask_clarification',
+      confidence: candidates[0]?.score ?? decision.confidence,
+      candidates,
+      reason,
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: decision.route.matchedBoundary,
+      rejected: buildRejectedCandidates(candidates, defaultExecutorName),
+    };
   }
 
-  private scoreProfile(
+  private buildDecision(
+    selected: ExecutorRouteCandidate,
+    profiles: ExecutorProfile[],
+    decision: IntentDecision,
+    reasonPrefix: string,
+  ): ExecutorRouteDecision {
+    const candidates = this.ensureCandidateList(selected, profiles, decision);
+    const selectedProfile = profiles.find(profile => profile.name === selected.executorName);
+    const requestedAction = routeActionToExecutorAction(decision.route.action);
+    const riskAction = selectedProfile?.riskLevel === 'high' || normalizeRisk(decision.route.riskLevel) >= 3
+      ? 'ask_clarification'
+      : requestedAction;
+    const action = requestedAction === 'ask_review' ? 'ask_review' : riskAction;
+
+    return {
+      selectedExecutor: selected.executorName,
+      action,
+      confidence: selected.score,
+      candidates,
+      reason: `${reasonPrefix}: ${selected.reason}`,
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: selected.matchedBoundary ?? decision.route.matchedBoundary,
+      rejected: buildRejectedCandidates(candidates, selected.executorName),
+    };
+  }
+
+  private ensureCandidateList(
+    selected: ExecutorRouteCandidate,
+    profiles: ExecutorProfile[],
+    decision: IntentDecision,
+  ): ExecutorRouteCandidate[] {
+    const candidates = profiles.map(profile => this.scoreFallbackProfile(profile, decision, selected.executorName));
+    if (!candidates.some(candidate => candidate.executorName === selected.executorName)) {
+      candidates.push(selected);
+    }
+    return candidates.sort((left, right) => right.score - left.score);
+  }
+
+  private directCandidate(profile: ExecutorProfile, decision: IntentDecision): ExecutorRouteCandidate {
+    const overlap = hasCapabilityOverlap(profile, decision.route.requiredCapabilities);
+    const score = clampScore(Math.max(decision.confidence, 0.8) + overlap.length * 0.03);
+    return {
+      executorName: profile.name,
+      score,
+      reason: candidateReason([
+        'decision_target_available',
+        `intent=${decision.route.primaryIntent}`,
+        overlap.length > 0 ? `capability_overlap=${overlap.join('|')}` : '',
+      ].filter(Boolean)),
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: decision.route.matchedBoundary,
+    };
+  }
+
+  private scoreFallbackProfile(
     profile: ExecutorProfile,
-    userInput: string,
-    classification: IntentClassification,
+    decision: IntentDecision,
+    defaultExecutorName: string,
   ): ExecutorRouteCandidate {
     let score = 0;
     const reasons: string[] = [];
-    const matchedBoundary = [...classification.matchedBoundary];
-    const affinity = intentAffinity(profile, classification.primaryIntent);
-    score += affinity * 0.45;
-    reasons.push(`intent=${classification.primaryIntent}`);
+    const capabilityClass = decision.route.capabilityClass;
+    const fallbackRank = FALLBACK_EXECUTORS_BY_INTENT[capabilityClass].indexOf(profile.name);
+    const affinity = intentAffinity(profile, capabilityClass);
+    const capabilityOverlap = hasCapabilityOverlap(profile, decision.route.requiredCapabilities);
+
+    score += affinity * 0.4;
+    reasons.push(`intent=${capabilityClass}`);
     reasons.push(`intent_affinity=${affinity.toFixed(2)}`);
 
-    const owner = ownershipExecutorForIntent(classification.primaryIntent);
-    if (owner && profile.name === owner) {
-      score += 0.25;
-      reasons.push(`ownership=${classification.primaryIntent}`);
-    } else if (owner && profile.name !== owner) {
+    if (fallbackRank >= 0) {
+      score += Math.max(0.05, 0.3 - fallbackRank * 0.07);
+      reasons.push(`same_class_fallback_rank=${fallbackRank + 1}`);
+    }
+
+    if (capabilityOverlap.length > 0) {
+      score += Math.min(0.25, capabilityOverlap.length * 0.08);
+      reasons.push(`capability_overlap=${capabilityOverlap.join('|')}`);
+    }
+
+    if (profile.name === defaultExecutorName) {
+      score += 0.08;
+      reasons.push('default_executor');
+    }
+
+    if (normalizeRisk(profile.riskLevel) > normalizeRisk(decision.route.riskLevel)) {
+      score -= 0.12;
+      reasons.push('risk_above_decision');
+    }
+
+    if (
+      decision.route.matchedBoundary.includes('repo_mutation')
+      && profile.name !== defaultExecutorName
+      && intentAffinity(profile, 'repo_execution') < 0.35
+    ) {
       score -= 0.2;
-      reasons.push(`ownership_mismatch=${classification.primaryIntent}`);
+      reasons.push('repo mutation ownership mismatch');
     }
 
-    if (classification.primaryIntent === 'technical_reasoning' && profile.name === 'deepseek-tui') {
-      const hasDeepSeekBoundary = classification.matchedBoundary.some(boundary =>
-        ['deepseek_reasoning', 'algorithm', 'math', 'chinese_analysis', 'reasoning'].includes(boundary)
-      );
-      if (hasDeepSeekBoundary) {
-        score += 0.25;
-        reasons.push('ownership=deepseek_reasoning');
-      }
-    }
-
-    for (const domain of profile.domains) {
-      if (matchScore(userInput, domain)) {
-        score += SPECIALIZED_TOKENS.has(domain) ? 0.11 : 0.08;
-        reasons.push(`domain=${domain}`);
-        matchedBoundary.push(domain);
-      }
-    }
-
-    for (const capability of profile.capabilities) {
-      if (matchScore(userInput, capability)) {
-        score += SPECIALIZED_TOKENS.has(capability) ? 0.1 : 0.07;
-        reasons.push(`capability=${capability}`);
-        matchedBoundary.push(capability);
-      }
-    }
-
-    const primaryMatches = profileMatchesUseCase(profile, userInput, profile.primaryUseCases);
-    if (primaryMatches.length > 0) {
-      score += Math.min(0.18, primaryMatches.length * 0.08);
-      reasons.push(`primary_use_case=${primaryMatches.join('|')}`);
-    }
-
-    const avoidMatches = profileMatchesUseCase(profile, userInput, profile.avoidUseCases);
-    if (avoidMatches.length > 0) {
-      score -= Math.min(0.25, avoidMatches.length * 0.12);
-      reasons.push(`avoid_use_case=${avoidMatches.join('|')}`);
-    }
-
-    if (classification.explicitExecutorName === profile.name) {
-      score += 0.35;
-      reasons.push('explicit_executor_match');
-    }
-
-    score += Math.max(0, Math.min(1, profile.historicalSuccess)) * 0.08;
+    score += Math.max(0, Math.min(1, profile.historicalSuccess)) * 0.07;
     reasons.push(`historical=${profile.historicalSuccess.toFixed(2)}`);
 
     return {
       executorName: profile.name,
       score: clampScore(score),
-      reason: reasons.length > 0 ? reasons.join(', ') : '历史成功率兜底',
-      primaryIntent: classification.primaryIntent,
-      matchedBoundary: unique(matchedBoundary),
+      reason: candidateReason(reasons),
+      primaryIntent: decision.route.primaryIntent,
+      matchedBoundary: decision.route.matchedBoundary,
     };
   }
 }

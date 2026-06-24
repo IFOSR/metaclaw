@@ -14,7 +14,7 @@ import { HybridTaskRetriever } from './core/hybrid-task-retriever.js';
 import { TaskEngine } from './core/task-engine.js';
 import { MemoryEngine } from './core/memory-engine.js';
 import { OrchestrationEngine } from './core/orchestration.js';
-import { createExecutor } from './executor/factory.js';
+import { createDefaultExecutor } from './core/execution-runtime.js';
 import { ContextRecaller } from './core/context-recaller.js';
 import { LlmBridge } from './core/llm-bridge.js';
 import { loadConfig, migrateLegacyFeishuConfigFileToGateway } from './utils/config.js';
@@ -138,7 +138,7 @@ async function main() {
   const orchestration = new OrchestrationEngine(taskEngine);
 
   // 7. 初始化执行器
-  const executor = createExecutor({
+  const executor = createDefaultExecutor({
     command: config.executor.command,
     timeout: config.executor.timeout,
     maxDuration: config.executor.max_duration,

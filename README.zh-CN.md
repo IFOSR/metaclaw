@@ -93,7 +93,7 @@ conversation / task 的边界很重要：
 - Node.js `>=20.0.0`。
 - npm。
 - Git。
-- Unix-like shell 环境，优先支持 macOS 和 Linux。
+- Unix-like shell 环境，优先支持 macOS 和 Linux；Windows 用户推荐使用 WSL2，这是当前支持的可靠安装路径。
 - `better-sqlite3` 的原生编译工具链。
 
 推荐安装编译工具：
@@ -201,6 +201,57 @@ metaclaw --help
 ```
 
 如果 setup 后提示找不到 `metaclaw` 命令，先新开一个 shell，让 `PATH` 重新加载 npm global link。如果仍然找不到，重新执行手动安装 fallback，并用 `npm config get prefix` 检查 npm global bin 目录是否在 `PATH` 中。
+
+## Windows 安装
+
+Windows 用户推荐使用 WSL2 + Ubuntu。这样可以提供 MetaClaw 当前需要的 Unix-like shell、原生编译工具链、socket、进程行为和 executor 兼容性。
+
+先在 Windows PowerShell 中安装 WSL2：
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+如果系统提示重启，重启后打开 Ubuntu，在 WSL 内安装依赖：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl build-essential python3 make g++
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+node --version
+npm --version
+git --version
+```
+
+然后在 WSL Ubuntu shell 内安装并验证 MetaClaw：
+
+```bash
+git clone https://github.com/IFOSR/metaclaw.git
+cd metaclaw
+./setup.sh
+metaclaw --help
+npm run smoke:metaclaw
+```
+
+如果 setup 过程中安装了 Codex CLI，先在 WSL 里打开一次 Codex 并完成登录，再执行真实任务：
+
+```bash
+codex
+```
+
+Windows 安装核验清单：
+
+- 在 WSL Ubuntu 里运行 MetaClaw 命令，不要在 Windows PowerShell 里直接运行。
+- 仓库建议放在 WSL 文件系统，例如 `~/metaclaw`，不要放在 `/mnt/c/...`，这样文件和 SQLite 性能更稳定。
+- `node --version` 是 `>=20`。
+- 新开一个 WSL shell 后，`metaclaw --help` 可用。
+- 默认 executor 在 WSL 内可用，例如 `codex --help`。
+- `npm run smoke:metaclaw` 输出 `MetaClaw real task smoke passed.`
+
+Windows 原生 PowerShell 不是当前推荐的主要运行环境。高级用户可以手动尝试 Node.js 20、Git、Visual Studio Build Tools、`npm install`、`npm run build` 和 `node dist/index.js`，但 `setup.sh`、`metaclaw.sh`、Unix socket Gateway 行为以及下游 executor CLI 可能和 Linux/macOS 不一致。需要稳定安装和推广给用户时，请使用 WSL2。
 
 ## 安装执行器
 

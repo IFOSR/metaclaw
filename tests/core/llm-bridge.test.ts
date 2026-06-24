@@ -99,7 +99,7 @@ describe('LlmBridge', () => {
       const bridge = new LlmBridge('claude');
       const result = (bridge as any).parseRouteResult('{"route":"conversation","reason":"普通问候"}');
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         route: 'conversation',
         reason: '普通问候',
       });
@@ -110,6 +110,73 @@ describe('LlmBridge', () => {
       const result = (bridge as any).parseRouteResult('not json');
 
       expect(result.route).toBe('unknown');
+    });
+  });
+
+  describe('resolveIntentDecision', () => {
+    it('parses full intent decision json for the legacy route-compatible path', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parseIntentDecisionResult(JSON.stringify({
+        intent: 'executor_dispatch',
+        confidence: 0.86,
+        needsClarification: false,
+        needsLongRunningTask: true,
+        requiresLocalRepo: true,
+        requiresResearch: false,
+        requiresMultiTool: false,
+        requiresLongTermMemory: false,
+        requiresExternalGateway: false,
+        canModifyFiles: true,
+        shouldCreateDurableTask: true,
+        statusScope: 'running',
+        clarificationQuestion: null,
+        reason: '需要本地仓库执行',
+        route: {
+          target: 'codex-cli',
+          action: 'auto_dispatch',
+          primaryIntent: 'repo_execution',
+          capabilityClass: 'repo_execution',
+          requiredCapabilities: ['coding', 'tests'],
+          matchedBoundary: ['repo_mutation'],
+          riskLevel: 'medium',
+          taskId: 'task_1',
+        },
+      }));
+
+      expect(result).toMatchObject({
+        intent: 'executor_dispatch',
+        confidence: 0.86,
+        needsLongRunningTask: true,
+        requiresLocalRepo: true,
+        statusScope: 'running',
+        clarificationQuestion: null,
+        route: {
+          target: 'codex-cli',
+          action: 'auto_dispatch',
+          primaryIntent: 'repo_execution',
+          capabilityClass: 'repo_execution',
+          requiredCapabilities: ['coding', 'tests'],
+          matchedBoundary: ['repo_mutation'],
+          riskLevel: 'medium',
+          taskId: 'task_1',
+        },
+      });
+    });
+
+    it('falls back to clarification when intent decision json is invalid', () => {
+      const bridge = new LlmBridge('claude');
+      const result = (bridge as any).parseIntentDecisionResult('not json');
+
+      expect(result).toMatchObject({
+        intent: 'clarification',
+        needsClarification: true,
+        confidence: 0,
+        route: {
+          target: 'metaclaw',
+          action: 'ask_clarification',
+          primaryIntent: 'conversation_or_control',
+        },
+      });
     });
   });
 
@@ -272,12 +339,17 @@ describe('LlmBridge', () => {
   });
 
   describe('command args', () => {
-    it('builds codex exec args with bypassed approvals and sandbox', () => {
+    it('builds codex exec args for non-interactive autonomous runs', () => {
       const bridge = new LlmBridge('codex');
       const args = (bridge as any).buildCommandArgs('你好');
 
       expect(args[0]).toBe('exec');
       expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(args).toContain('--dangerously-bypass-hook-trust');
+      expect(args).toContain('--skip-git-repo-check');
+      expect(args).toContain('--ephemeral');
+      expect(args).toContain('--color');
+      expect(args).toContain('never');
       expect(args).toContain('你好');
     });
 

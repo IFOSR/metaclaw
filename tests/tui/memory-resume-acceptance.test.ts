@@ -59,6 +59,21 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitFor(assertion: () => void, attempts = 30) {
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await flushUpdates();
+    }
+  }
+
+  throw lastError;
+}
+
 function createDeferredResult() {
   let resolve!: (value: ExecutorResult) => void;
   const promise = new Promise<ExecutorResult>(res => {
@@ -168,11 +183,9 @@ describe('Round 1 memory resume acceptance', () => {
     await flushUpdates();
     await flushUpdates();
 
-    await inputCapture.handler?.('y', {});
-    await flushUpdates();
-    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
-    await flushUpdates();
-    await flushUpdates();
+    await waitFor(() => {
+      expect(executor.execute).toHaveBeenCalledTimes(3);
+    });
 
     const resumedInput = (executor.execute as ReturnType<typeof vi.fn>).mock.calls[2][0];
     const resolvedPreferences = resumedInput.executionContextBundle.memoryContext.resolvedPreferences;

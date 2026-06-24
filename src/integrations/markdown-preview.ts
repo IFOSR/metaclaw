@@ -116,6 +116,8 @@ export class MarkdownPreviewServer {
     const server = this.server;
     this.server = null;
     return new Promise((resolveStop, reject) => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
       server.close(error => error ? reject(error) : resolveStop());
     });
   }

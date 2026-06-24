@@ -2,9 +2,7 @@ import type { ExecutorAdapter } from '../executor/adapter.js';
 import type { RuntimeState, Task } from './types.js';
 import type { TaskEngine } from './task-engine.js';
 import type { OrchestrationEngine } from './orchestration.js';
-
-const PREEMPT_DELTA = 5;
-const AUTO_RESUME_READY_REASON = '挂起任务满足执行条件，恢复进入待调度队列';
+import { TaskRuntimeService, type SchedulableTask, type TaskDispatchResult } from './task-runtime-service.js';
 
 export interface SubmitResult {
   action: 'started' | 'queued' | 'preempted';
@@ -14,22 +12,33 @@ export interface SubmitResult {
 
 export interface SubmitOptions {
   reason: string;
+  executionRequest?: unknown;
 }
 
-export interface DispatchContext {
+export interface DispatchContext<TExecutionRequest = unknown> {
   executionMode?: 'fresh' | 'resume-parked' | 'resume-blocked';
   schedulingReason?: string;
+  executionRequest?: TExecutionRequest;
+  missingExecutionRequest?: boolean;
 }
 
-export class SchedulerEngine {
+export class SchedulerEngine<TExecutionRequest = unknown> {
   private lastEvent: string | null = null;
+  private activeDispatches = new Set<Promise<void>>();
+  private queuedExecution = new Map<string, TExecutionRequest>();
+  private activeDispatchIds = new Map<string, string>();
 
   constructor(
     private taskEngine: TaskEngine,
     private orchestration: OrchestrationEngine,
     private executor: ExecutorAdapter,
-    private onDispatch?: (taskId: string, context?: DispatchContext) => Promise<void> | void,
+    private onDispatch?: (taskId: string, context?: DispatchContext<TExecutionRequest>) => Promise<void> | void,
     private classifyPrioritySignals?: (tasks: Task[]) => Promise<void> | void,
+    private taskRuntimeService = new TaskRuntimeService({
+      taskEngine,
+      taskRepo: taskEngine.getTaskRepo(),
+      orchestration,
+    }),
   ) {}
 
   async scheduleNext(): Promise<string | null> {
@@ -45,26 +54,72 @@ export class SchedulerEngine {
     return next.task.id;
   }
 
-  async submit(taskId: string, input: string | SubmitOptions): Promise<SubmitResult> {
+  async getNext(): Promise<SchedulableTask | null> {
+    await this.promoteAutoResumableParkedTasks();
+    return this.taskRuntimeService.getNextSchedulableTask();
+  }
+
+  markDispatchStarted(taskId: string, executionId: string): void {
+    this.activeDispatchIds.set(taskId, executionId);
+  }
+
+  async markDispatchFinished(taskId: string, result: TaskDispatchResult): Promise<void> {
+    this.activeDispatchIds.delete(taskId);
+    this.queuedExecution.delete(taskId);
+
+    const task = this.taskRuntimeService.findTask(taskId);
+    if (task?.status === 'running') {
+      this.taskRuntimeService.transitionTask(taskId, result.status === 'cancelled' ? 'cancelled' : 'done');
+    }
+    this.lastEvent = `任务 #${taskId} 执行结束：${result.reason}`;
+    await this.scheduleNext();
+  }
+
+  async markDispatchBlocked(taskId: string, reason: string): Promise<void> {
+    this.activeDispatchIds.delete(taskId);
+    this.queuedExecution.delete(taskId);
+
+    const task = this.taskRuntimeService.findTask(taskId);
+    if (task?.status === 'running') {
+      this.taskRuntimeService.blockTask(taskId, {
+        taskId,
+        type: 'manual',
+        description: reason,
+        status: 'waiting',
+      });
+    }
+    this.lastEvent = `任务 #${taskId} 已阻塞：${reason}`;
+    await this.scheduleNext();
+  }
+
+  async waitForIdle(): Promise<void> {
+    while (this.activeDispatches.size > 0) {
+      await Promise.allSettled(Array.from(this.activeDispatches));
+    }
+  }
+
+  async submit(taskId: string, input: string | (SubmitOptions & { executionRequest?: TExecutionRequest })): Promise<SubmitResult> {
     const submitOptions = typeof input === 'string' ? { reason: input } : input;
     const { reason } = submitOptions;
-    const repo = this.taskEngine['taskRepo'];
-    const task = repo.findById(taskId);
+    if ('executionRequest' in submitOptions && submitOptions.executionRequest !== undefined) {
+      this.queuedExecution.set(taskId, submitOptions.executionRequest);
+    }
+    const task = this.taskRuntimeService.findTask(taskId);
     if (!task) {
       throw new Error(`任务不存在: ${taskId}`);
     }
 
-    this.normalizeTaskForScheduling(task);
+    this.taskRuntimeService.normalizeTaskForScheduling(task.id);
 
     const currentTask = this.getCurrentRunningTask();
     if (!currentTask) {
-      await this.startTask(taskId, reason);
+      await this.startTask(taskId, reason, this.buildDispatchContext(taskId));
       return { action: 'started', taskId };
     }
 
-    const candidateTask = repo.findById(taskId)!;
+    const candidateTask = this.taskRuntimeService.findTask(taskId)!;
     if (candidateTask.status !== 'ready') {
-      repo.update(taskId, { lastSchedulingReason: reason });
+      this.taskRuntimeService.queueTask(taskId, reason);
       this.lastEvent = `任务 #${taskId} 当前状态为 ${candidateTask.status}，未进入候选队列`;
       return { action: 'queued', taskId };
     }
@@ -74,151 +129,83 @@ export class SchedulerEngine {
       return { action: 'preempted', taskId, preemptedTaskId: currentTask.id };
     }
 
-    repo.update(taskId, { lastSchedulingReason: reason });
+    this.taskRuntimeService.queueTask(taskId, reason);
     this.lastEvent = `任务 #${taskId} 已进入候选队列`;
     return { action: 'queued', taskId };
   }
 
   async preemptWith(taskId: string, reason: string): Promise<void> {
     const currentTask = this.getCurrentRunningTask();
-    const interruptionReason = `被更高优先级任务抢占：${reason}`;
 
     if (currentTask) {
-      this.taskEngine.park(currentTask.id, interruptionReason, {
-        done: currentTask.summary ? [currentTask.summary] : [],
-        pending: [currentTask.goal],
-        nextStep: '恢复后继续当前未完成步骤',
-        pauseReason: interruptionReason,
-      });
-      this.taskEngine['taskRepo'].update(currentTask.id, {
-        lastInterruptionReason: interruptionReason,
-        interruptionCount: currentTask.interruptionCount + 1,
-      });
+      this.taskRuntimeService.preemptCurrentTask(reason);
       this.executor.abort();
     }
 
-    await this.startTask(taskId, reason);
+    await this.startTask(taskId, reason, this.buildDispatchContext(taskId));
   }
 
   getRuntimeState(): RuntimeState {
-    const repo = this.taskEngine['taskRepo'];
-    return {
-      runningTaskId: this.getCurrentRunningTask()?.id ?? null,
-      runningExecutorName: null,
-      readyTaskIds: repo.findByStatus('ready').map(task => task.id),
-      blockedTaskIds: repo.findByStatus('blocked').map(task => task.id),
-      parkedTaskIds: repo.findByStatus('parked').map(task => task.id),
-      lastEvent: this.lastEvent,
-    };
+    return this.taskRuntimeService.getRuntimeState(this.lastEvent);
   }
 
-  private normalizeTaskForScheduling(task: Task): void {
-    if (task.status === 'created') {
-      this.taskEngine.transition(task.id, 'ready');
-      return;
-    }
-
-    if (task.status === 'parked') {
-      this.taskEngine.transition(task.id, 'ready');
-    }
-  }
-
-  private async startTask(taskId: string, reason: string, dispatchContext?: DispatchContext): Promise<void> {
-    const repo = this.taskEngine['taskRepo'];
-    const task = repo.findById(taskId);
-    if (!task) throw new Error(`任务不存在: ${taskId}`);
-
-    if (task.status === 'created') {
-      this.taskEngine.transition(taskId, 'ready');
-    }
-
-    const refreshed = repo.findById(taskId)!;
-    if (refreshed.status === 'parked') {
-      this.taskEngine.transition(taskId, 'ready');
-    }
-
-    const runnable = repo.findById(taskId)!;
-    if (runnable.status === 'ready') {
-      this.taskEngine.transition(taskId, 'running');
-    }
-
-    repo.update(taskId, { lastSchedulingReason: reason });
+  private async startTask(taskId: string, reason: string, dispatchContext?: DispatchContext<TExecutionRequest>): Promise<void> {
+    this.taskRuntimeService.startDispatch(taskId, reason);
     this.lastEvent = `开始执行任务 #${taskId}`;
 
     if (this.onDispatch) {
-      void Promise.resolve(this.onDispatch(taskId, dispatchContext));
+      const dispatchPromise = Promise.resolve(this.onDispatch(taskId, dispatchContext));
+      this.activeDispatches.add(dispatchPromise);
+      void dispatchPromise.finally(() => {
+        this.activeDispatches.delete(dispatchPromise);
+      });
     }
   }
 
   private getCurrentRunningTask(): Task | null {
-    return this.taskEngine['taskRepo'].findByStatus('running')[0] ?? null;
+    return this.taskRuntimeService.getCurrentRunningTask();
   }
 
   private shouldPreempt(
     currentTask: Task,
     candidateTask: Task,
   ): boolean {
-    const currentScore = this.orchestration.evaluateTask(currentTask).score.total;
-    const candidateScore = this.orchestration.evaluateTask(candidateTask).score.total;
-    const hasExplicitSemanticPriority = candidateTask.prioritySignals.semanticPriority === 'urgent';
-
-    return hasExplicitSemanticPriority || candidateScore >= currentScore + PREEMPT_DELTA;
+    return this.taskRuntimeService.shouldPreempt(currentTask, candidateTask);
   }
 
   private getNextSchedulableTask():
-    | { task: Task; reason: string; dispatchContext?: DispatchContext }
+    | { task: Task; reason: string; dispatchContext?: DispatchContext<TExecutionRequest> }
     | null {
-    const prioritized = this.orchestration.getPrioritizedTasks();
-    if (prioritized.length === 0) return null;
-
-    const task = prioritized[0].task;
-    const schedulingReason = this.isAutoResumableReadyTask(task)
-      ? task.lastSchedulingReason || AUTO_RESUME_READY_REASON
-      : prioritized[0].reasons[0] || '最高优先级任务';
+    const next = this.taskRuntimeService.getNextSchedulableTask();
+    if (!next) {
+      return null;
+    }
 
     return {
-      task,
-      reason: schedulingReason,
-      dispatchContext: this.isAutoResumableReadyTask(task)
-        ? {
-            executionMode: 'resume-parked',
-            schedulingReason,
-          }
-        : undefined,
+      ...next,
+      dispatchContext: {
+        ...this.buildDispatchContext(next.task.id),
+        ...next.dispatchContext,
+      },
     };
   }
 
-  private async promoteAutoResumableParkedTasks(): Promise<void> {
-    const repo = this.taskEngine['taskRepo'];
-    const candidates = repo
-      .findByStatus('parked')
-      .filter(task => this.isAutoResumableParkedTask(task));
-
-    if (this.classifyPrioritySignals) {
-      await Promise.resolve(this.classifyPrioritySignals(candidates));
+  private buildDispatchContext(taskId: string): DispatchContext<TExecutionRequest> {
+    const executionRequest = this.queuedExecution.get(taskId);
+    if (executionRequest !== undefined) {
+      return {
+        executionRequest,
+        missingExecutionRequest: false,
+      };
     }
 
-    for (const task of candidates) {
-      const refreshed = repo.findById(task.id);
-      if (!refreshed || refreshed.status !== 'parked') {
-        continue;
-      }
+    return { missingExecutionRequest: true };
+  }
 
-      this.taskEngine.transition(task.id, 'ready');
-      repo.update(task.id, {
-        lastSchedulingReason: AUTO_RESUME_READY_REASON,
-      });
+  private async promoteAutoResumableParkedTasks(): Promise<void> {
+    const promoted = await this.taskRuntimeService.promoteAutoResumableParkedTasks(this.classifyPrioritySignals);
+    for (const task of promoted) {
       this.lastEvent = `任务 #${task.id} 已从挂起恢复到待调度队列`;
     }
-  }
-
-  private isAutoResumableParkedTask(task: Task): boolean {
-    return task.prioritySignals.isReady
-      && task.dependencies.every(dependency => dependency.status === 'resolved');
-  }
-
-  private isAutoResumableReadyTask(task: Task): boolean {
-    return task.status === 'ready'
-      && task.lastSchedulingReason === AUTO_RESUME_READY_REASON;
   }
 }

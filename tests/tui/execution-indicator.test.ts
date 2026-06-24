@@ -87,6 +87,10 @@ describe('App execution indicator', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '明确任务',
+      }),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,
@@ -113,8 +117,8 @@ describe('App execution indicator', () => {
       await flushUpdates();
     };
 
-    await type('调');
-    await type('研');
+    await type('执');
+    await type('行');
     await type('任');
     await type('务');
 
@@ -161,6 +165,12 @@ describe('App execution indicator', () => {
       nextStep: '继续调研剩余部分',
       pauseReason: '被高优任务抢占',
     });
+    taskRepo.update(parkedTask.id, {
+      prioritySignals: {
+        ...parkedTask.prioritySignals,
+        isReady: false,
+      },
+    });
 
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
@@ -169,6 +179,7 @@ describe('App execution indicator', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
     } as unknown as LlmBridge;
 
@@ -210,6 +221,10 @@ describe('App execution indicator', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'durable_task',
+        reason: '明确任务',
+      }),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,
@@ -231,9 +246,9 @@ describe('App execution indicator', () => {
       })
     );
 
-    await inputCapture.handler?.('调', {});
+    await inputCapture.handler?.('执', {});
     await flushUpdates();
-    await inputCapture.handler?.('研', {});
+    await inputCapture.handler?.('行', {});
     await flushUpdates();
     await inputCapture.handler?.('任', {});
     await flushUpdates();
@@ -243,6 +258,14 @@ describe('App execution indicator', () => {
     await flushUpdates();
 
     expect(app.lastFrame()).toContain('最近事件 开始执行任务 #');
+
+    deferred.resolve({
+      success: true,
+      output: '执行完成',
+      exitCode: 0,
+      durationMs: 200,
+    });
+    await flushUpdates();
 
     app.unmount();
     app.cleanup();

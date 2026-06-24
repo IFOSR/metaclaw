@@ -95,7 +95,7 @@ Required:
 - Node.js `>=20.0.0`.
 - npm.
 - Git.
-- A Unix-like shell environment. macOS and Linux are the primary targets.
+- A Unix-like shell environment. macOS and Linux are primary targets; Windows users should use WSL2 for the supported install path.
 - Native build tooling for `better-sqlite3`.
 
 Recommended native build tools:
@@ -204,6 +204,57 @@ metaclaw --help
 ```
 
 If `metaclaw` is not found after setup, first open a new shell so your `PATH` picks up the npm global link. If it is still missing, run the manual fallback again and check `npm config get prefix` to confirm that npm's global bin directory is on `PATH`.
+
+## Windows Install
+
+The recommended Windows path is WSL2 with Ubuntu. This gives MetaClaw the Unix-like shell, native build tooling, sockets, process behavior, and executor compatibility that the runtime expects.
+
+Install WSL2 from PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Restart Windows if prompted, then open Ubuntu and install prerequisites inside WSL:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl build-essential python3 make g++
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+node --version
+npm --version
+git --version
+```
+
+Install and verify MetaClaw inside the WSL Ubuntu shell:
+
+```bash
+git clone https://github.com/IFOSR/metaclaw.git
+cd metaclaw
+./setup.sh
+metaclaw --help
+npm run smoke:metaclaw
+```
+
+If setup installs Codex CLI, open it once inside WSL and finish login before running real tasks:
+
+```bash
+codex
+```
+
+Windows install checklist:
+
+- Run MetaClaw commands inside WSL Ubuntu, not Windows PowerShell.
+- Keep the repository under the WSL filesystem, for example `~/metaclaw`, not `/mnt/c/...`, for better file and SQLite performance.
+- Confirm `node --version` is `>=20`.
+- Confirm `metaclaw --help` works in a fresh WSL shell.
+- Confirm the default executor works in WSL, for example `codex --help`.
+- Confirm `npm run smoke:metaclaw` prints `MetaClaw real task smoke passed.`
+
+Native Windows PowerShell is not the primary supported runtime today. Advanced users can try the manual fallback with Node.js 20, Git, Visual Studio Build Tools, `npm install`, `npm run build`, and `node dist/index.js`, but `setup.sh`, `metaclaw.sh`, Unix socket Gateway behavior, and downstream executor CLIs may not behave the same way. Use WSL2 when you need a reliable installation.
 
 ## Install Executors
 
