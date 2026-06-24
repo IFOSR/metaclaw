@@ -139,22 +139,13 @@ export class SemanticIntentRouter {
   ) {}
 
   async decide(userInput: string, recentTasks: TaskSummary[], hints: RuleHint[] = []): Promise<SemanticIntentDecision> {
-    const hintDecision = this.decideTaskControlFromParserHints(hints, recentTasks);
-    if (hintDecision) {
-      return this.validateDecision(hintDecision);
-    }
-    const conversationHintDecision = this.decideConversationFromHints(hints);
-    if (conversationHintDecision) {
-      return this.validateDecision(conversationHintDecision);
-    }
-
     if (typeof this.llmBridge.query !== 'function') {
       return this.decideWithLegacyLlmBridge(userInput, recentTasks, hints);
     }
 
     try {
       const raw = await this.awaitWithTimeout(
-        this.llmBridge.query(this.buildPrompt(userInput, recentTasks)),
+        this.llmBridge.query(this.buildPrompt(userInput, recentTasks, hints)),
         this.options.llmTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       );
       return this.validateDecision(this.normalizeDecision(parseJsonObject(raw), recentTasks));
@@ -197,17 +188,11 @@ export class SemanticIntentRouter {
     }
 
     try {
-      const routeDecision = typeof this.llmBridge.resolveRoute === 'function'
-        ? await this.llmBridge.resolveRoute(userInput, recentTasks)
-        : { route: 'durable_task' as const, confidence: 0.78, reason: '缺少 resolveRoute，legacy adapter 按 durable task 兼容处理' };
-      const legacyHintDecision = this.decideTaskControlFromParserHints(hints, recentTasks);
-      if (legacyHintDecision) {
-        return this.validateDecision(legacyHintDecision);
+      if (typeof this.llmBridge.resolveRoute !== 'function') {
+        return conservativeFallback('缺少语义路由能力，保守降级为普通对话');
       }
-      const conversationHintDecision = this.decideConversationFromHints(hints);
-      if (conversationHintDecision) {
-        return this.validateDecision(conversationHintDecision);
-      }
+
+      const routeDecision = await this.llmBridge.resolveRoute(userInput, recentTasks);
       if (routeDecision.route === 'conversation' || routeDecision.route === 'unknown') {
         return conservativeFallback(routeDecision.reason || '旧版 LLM 路由未给出可执行动作');
       }
@@ -236,12 +221,7 @@ export class SemanticIntentRouter {
           reason: intent.reason,
         },
         taskControl: routeDecision.route === 'task_control'
-          ? {
-              kind: 'unknown',
-              taskId: intent.taskId,
-              scope: null,
-              reason: routeDecision.reason,
-            }
+          ? this.buildLegacySemanticTaskControl(hints, intent.taskId, routeDecision.reason)
           : null,
         executorDecision,
         fallback: false,
@@ -251,144 +231,51 @@ export class SemanticIntentRouter {
     }
   }
 
-  private decideTaskControlFromParserHints(hints: RuleHint[], recentTasks: TaskSummary[]): SemanticIntentDecision | null {
+  private buildLegacySemanticTaskControl(
+    hints: RuleHint[],
+    taskId: string | null,
+    reason: string,
+  ): SemanticTaskControl {
     const clearHint = hints.find(hint => hint.kind === 'clear_tasks' && hint.weight >= 0.9);
     if (clearHint) {
-      return this.buildTaskControlDecision({
+      return {
         kind: 'clear_tasks',
         taskId: null,
         scope: clearHint.evidence as TaskClearScope,
-        confidence: clearHint.weight,
         reason: clearHint.reason,
-      });
+      };
     }
 
     const statusHint = hints.find(hint => hint.kind === 'status_query' && hint.weight >= 0.7);
     if (statusHint) {
-      return this.buildTaskControlDecision({
-        kind: 'status_query',
-        taskId: null,
-        scope: statusHint.evidence as TaskStatusQueryScope,
-        confidence: statusHint.weight,
-        reason: statusHint.reason,
-      });
-    }
-
-    const resumeHint = hints.find(hint => hint.kind === 'resume_task' && hint.weight >= 0.65);
-    if (!resumeHint) {
-      return null;
-    }
-
-    const explicitTaskId = resumeHint.evidence.match(/^task_[A-Za-z0-9_-]+$/)?.[0] ?? null;
-    const control = resumeHint.evidence === 'recover_blocked'
-      ? 'recover_blocked'
-      : resumeHint.evidence === 'last_task_continuation'
-        ? 'last_task_continuation'
-        : 'resume_task';
-    if (control === 'recover_blocked' && !recentTasks.some(task => task.status === 'blocked')) {
-      return null;
-    }
-
-    return this.buildTaskControlDecision({
-      kind: control,
-      taskId: explicitTaskId,
-      scope: explicitTaskId ? null : resumeHint.evidence as TaskClearScope | TaskStatusQueryScope,
-      confidence: resumeHint.weight,
-      reason: resumeHint.reason,
-    });
-  }
-
-  private buildTaskControlDecision(input: {
-    kind: SemanticTaskControl['kind'];
-    taskId: string | null;
-    scope: TaskClearScope | TaskStatusQueryScope | null;
-    confidence: number;
-    reason: string;
-  }): SemanticIntentDecision {
-    return {
-      interactionType: 'task_control',
-      confidence: Math.max(input.confidence, 0.9),
-      shouldAskBeforeActing: false,
-      ambiguity: [],
-      risk: 'low',
-      reason: input.reason,
-      clarificationQuestion: null,
-      taskBinding: {
-        type: input.taskId ? 'reference' : 'none',
-        taskId: input.taskId,
-        reason: input.reason,
-      },
-      taskControl: {
-        kind: input.kind,
-        taskId: input.taskId,
-        scope: input.scope,
-        reason: input.reason,
-      },
-      executorDecision: null,
-      fallback: false,
-    };
-  }
-
-  private decideConversationFromHints(hints: RuleHint[]): SemanticIntentDecision | null {
-    const continuationHint = hints.find(hint => hint.kind === 'conversation_continuation' && hint.weight >= 0.5);
-    if (continuationHint) {
       return {
-        interactionType: 'direct_reply',
-        confidence: continuationHint.weight,
-        shouldAskBeforeActing: false,
-        ambiguity: [],
-        risk: 'low',
-        reason: '延续当前对话，不恢复旧任务',
-        clarificationQuestion: null,
-        taskBinding: {
-          type: 'none',
-          taskId: null,
-          reason: continuationHint.reason,
-        },
-        taskControl: null,
-        executorDecision: null,
-        fallback: false,
+        kind: 'status_query',
+        taskId,
+        scope: statusHint.evidence as TaskStatusQueryScope,
+        reason: statusHint.reason,
       };
     }
 
-    const derivedWorkHint = hints.find(hint => hint.kind === 'durable_work' && hint.reason.includes('conversation'));
-    if (!derivedWorkHint) {
-      return null;
+    const resumeHint = hints.find(hint => hint.kind === 'resume_task' && hint.weight >= 0.65);
+    if (resumeHint) {
+      const explicitTaskId = resumeHint.evidence.match(/^task_[A-Za-z0-9_-]+$/)?.[0] ?? taskId;
+      return {
+        kind: resumeHint.evidence === 'recover_blocked'
+          ? 'recover_blocked'
+          : resumeHint.evidence === 'last_task_continuation'
+            ? 'last_task_continuation'
+            : 'resume_task',
+        taskId: explicitTaskId,
+        scope: explicitTaskId ? null : resumeHint.evidence as TaskClearScope | TaskStatusQueryScope,
+        reason: resumeHint.reason,
+      };
     }
 
     return {
-      interactionType: 'durable_task',
-      confidence: Math.max(0.65, derivedWorkHint.weight),
-      shouldAskBeforeActing: false,
-      ambiguity: [],
-      risk: 'low',
-      reason: '按当前对话创建跟进任务',
-      clarificationQuestion: null,
-      taskBinding: {
-        type: 'new',
-        taskId: null,
-        reason: derivedWorkHint.reason,
-      },
-      taskControl: null,
-      executorDecision: {
-        selectedExecutor: this.options.defaultExecutorName,
-        action: 'auto_dispatch',
-        confidence: Math.max(0.65, derivedWorkHint.weight),
-        candidates: [
-          {
-            executorName: this.options.defaultExecutorName,
-            score: Math.max(0.65, derivedWorkHint.weight),
-            reason: derivedWorkHint.reason,
-            primaryIntent: 'repo_execution',
-            matchedBoundary: ['conversation_follow_up'],
-          },
-        ],
-        reason: derivedWorkHint.reason,
-        primaryIntent: 'repo_execution',
-        matchedBoundary: ['conversation_follow_up'],
-        rejected: [],
-      },
-      fallback: false,
+      kind: 'unknown',
+      taskId,
+      scope: null,
+      reason,
     };
   }
 
@@ -631,7 +518,7 @@ export class SemanticIntentRouter {
     };
   }
 
-  private buildPrompt(userInput: string, recentTasks: TaskSummary[]): string {
+  private buildPrompt(userInput: string, recentTasks: TaskSummary[], hints: RuleHint[]): string {
     return [
       '你是 MetaClaw 的顶层语义意图路由器。你必须根据语义判断用户真实意图，不要用关键词命中做主判断。',
       '只返回 JSON 对象，不要解释，不要 markdown。',
@@ -656,6 +543,9 @@ export class SemanticIntentRouter {
       '',
       '最近任务：',
       JSON.stringify(recentTasks, null, 2),
+      '',
+      'Rule hints（只能作为证据或安全 guard，不能单独决定业务动作）：',
+      JSON.stringify(hints, null, 2),
       '',
       'Executor profiles：',
       JSON.stringify(this.executorProfiles, null, 2),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SemanticIntentRouter } from '../../src/core/semantic-intent-router.js';
 import type { ExecutorProfile } from '../../src/core/executor-router.js';
 import type { RuleHint } from '../../src/core/rule-hints-provider.js';
@@ -23,6 +23,17 @@ function router(): SemanticIntentRouter {
   });
 }
 
+function queryRouter(output: unknown): { router: SemanticIntentRouter; query: ReturnType<typeof vi.fn> } {
+  const query = vi.fn().mockResolvedValue(JSON.stringify(output));
+  return {
+    router: new SemanticIntentRouter({ query }, profiles, {
+      defaultExecutorName: 'codex-cli',
+      llmTimeoutMs: 50,
+    }),
+    query,
+  };
+}
+
 function hint(kind: RuleHint['kind'], evidence: string): RuleHint {
   return {
     source: kind === 'clear_tasks' ? 'parser' : 'heuristic',
@@ -34,8 +45,73 @@ function hint(kind: RuleHint['kind'], evidence: string): RuleHint {
 }
 
 describe('SemanticIntentRouter rule hint arbitration', () => {
-  it('converts explicit parser hints into semantic task-control decisions', async () => {
-    const decision = await router().decide('清空阻塞任务', [], [hint('clear_tasks', 'blocked')]);
+  it('does not let parser clear hints bypass semantic query arbitration', async () => {
+    const { router, query } = queryRouter({
+      interactionType: 'direct_reply',
+      confidence: 0.9,
+      shouldAskBeforeActing: false,
+      ambiguity: [],
+      risk: 'low',
+      reason: 'semantic model decided this is conversational',
+      clarificationQuestion: null,
+      taskBinding: { type: 'none', taskId: null, reason: 'conversation' },
+      taskControl: null,
+      executorDecision: null,
+    });
+
+    const decision = await router.decide('清空阻塞任务是什么意思？', [], [hint('clear_tasks', 'blocked')]);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]?.[0]).toContain('Rule hints');
+    expect(decision.interactionType).toBe('direct_reply');
+    expect(decision.taskControl).toBeNull();
+  });
+
+  it('does not let resume hints override a semantic durable-task decision', async () => {
+    const { router } = queryRouter({
+      interactionType: 'durable_task',
+      confidence: 0.9,
+      shouldAskBeforeActing: false,
+      ambiguity: [],
+      risk: 'low',
+      reason: 'semantic model decided this creates new work',
+      clarificationQuestion: null,
+      taskBinding: { type: 'new', taskId: null, reason: 'new work' },
+      taskControl: null,
+      executorDecision: {
+        selectedExecutor: 'codex-cli',
+        action: 'auto_dispatch',
+        confidence: 0.9,
+        primaryIntent: 'repo_execution',
+        matchedBoundary: ['repo_execution'],
+        reason: 'repo work',
+        candidates: [{ executorName: 'codex-cli', score: 0.9, reason: 'repo work', matchedBoundary: ['repo_execution'] }],
+        rejected: [],
+      },
+    });
+
+    const decision = await router.decide('继续把文档整理成任务', [], [hint('resume_task', '继续把文档整理成任务')]);
+
+    expect(decision.interactionType).toBe('durable_task');
+    expect(decision.taskControl).toBeNull();
+    expect(decision.taskBinding.type).toBe('new');
+  });
+
+  it('preserves explicit parser hints as evidence when the semantic model chooses task control', async () => {
+    const { router } = queryRouter({
+      interactionType: 'task_control',
+      confidence: 0.9,
+      shouldAskBeforeActing: false,
+      ambiguity: [],
+      risk: 'low',
+      reason: 'semantic model chose explicit task clear',
+      clarificationQuestion: null,
+      taskBinding: { type: 'none', taskId: null, reason: 'task control' },
+      taskControl: { kind: 'clear_tasks', taskId: null, scope: 'blocked', reason: 'clear blocked tasks' },
+      executorDecision: null,
+    });
+
+    const decision = await router.decide('清空阻塞任务', [], [hint('clear_tasks', 'blocked')]);
 
     expect(decision.interactionType).toBe('task_control');
     expect(decision.taskControl).toMatchObject({
@@ -45,31 +121,23 @@ describe('SemanticIntentRouter rule hint arbitration', () => {
     expect(decision.confidence).toBeGreaterThanOrEqual(0.9);
   });
 
-  it('converts status hints into semantic task-control decisions', async () => {
+  it('does not directly convert status hints when no semantic bridge is available', async () => {
     const decision = await router().decide('当前有没有被阻塞的任务？', [], [hint('status_query', 'blocked')]);
 
-    expect(decision.interactionType).toBe('task_control');
-    expect(decision.taskControl).toMatchObject({
-      kind: 'status_query',
-      scope: 'blocked',
-    });
+    expect(decision.interactionType).toBe('direct_reply');
+    expect(decision.fallback).toBe(true);
+    expect(decision.taskControl).toBeNull();
   });
 
-  it('converts explicit task id resume hints into referenced task-control decisions', async () => {
+  it('does not directly convert explicit task id resume hints when no semantic bridge is available', async () => {
     const decision = await router().decide('恢复 task_abc123', [], [hint('resume_task', 'task_abc123')]);
 
-    expect(decision.interactionType).toBe('task_control');
-    expect(decision.taskBinding).toMatchObject({
-      type: 'reference',
-      taskId: 'task_abc123',
-    });
-    expect(decision.taskControl).toMatchObject({
-      kind: 'resume_task',
-      taskId: 'task_abc123',
-    });
+    expect(decision.interactionType).toBe('direct_reply');
+    expect(decision.fallback).toBe(true);
+    expect(decision.taskBinding.taskId).toBeNull();
   });
 
-  it('converts conversation continuation hints into semantic direct replies', async () => {
+  it('does not directly convert conversation continuation hints when no semantic bridge is available', async () => {
     const decision = await router().decide('继续解释一下刚才那个点', [], [{
       source: 'heuristic',
       kind: 'conversation_continuation',
@@ -79,12 +147,12 @@ describe('SemanticIntentRouter rule hint arbitration', () => {
     }]);
 
     expect(decision.interactionType).toBe('direct_reply');
+    expect(decision.fallback).toBe(true);
     expect(decision.taskBinding.type).toBe('none');
     expect(decision.executorDecision).toBeNull();
-    expect(decision.reason).toContain('延续当前对话');
   });
 
-  it('converts conversation-derived work hints into semantic durable tasks', async () => {
+  it('does not directly convert conversation-derived work hints when no semantic bridge is available', async () => {
     const decision = await router().decide('把刚才讨论的方案整理成任务', [], [{
       source: 'heuristic',
       kind: 'durable_work',
@@ -93,13 +161,9 @@ describe('SemanticIntentRouter rule hint arbitration', () => {
       evidence: '整理成任务',
     }]);
 
-    expect(decision.interactionType).toBe('durable_task');
-    expect(decision.taskBinding.type).toBe('new');
-    expect(decision.executorDecision).toMatchObject({
-      selectedExecutor: 'codex-cli',
-      action: 'auto_dispatch',
-      primaryIntent: 'repo_execution',
-      matchedBoundary: ['conversation_follow_up'],
-    });
+    expect(decision.interactionType).toBe('direct_reply');
+    expect(decision.fallback).toBe(true);
+    expect(decision.taskBinding.type).toBe('none');
+    expect(decision.executorDecision).toBeNull();
   });
 });

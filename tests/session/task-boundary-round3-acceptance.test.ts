@@ -39,6 +39,94 @@ function createConfig(): Config {
   };
 }
 
+function semanticDirectReply(reason: string) {
+  return JSON.stringify({
+    interactionType: 'direct_reply',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: null,
+    executorDecision: null,
+  });
+}
+
+function semanticDurableTask(reason: string, matchedBoundary = ['repo_execution']) {
+  return JSON.stringify({
+    interactionType: 'durable_task',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'new', taskId: null, reason },
+    taskControl: null,
+    executorDecision: {
+      selectedExecutor: 'codex-cli',
+      action: 'auto_dispatch',
+      confidence: 0.9,
+      primaryIntent: 'repo_execution',
+      matchedBoundary,
+      reason,
+      candidates: [{ executorName: 'codex-cli', score: 0.9, reason, matchedBoundary }],
+      rejected: [],
+    },
+  });
+}
+
+function semanticStatusQuery(scope: 'blocked' | 'running' | 'dashboard', reason = 'semantic status query') {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: { kind: 'status_query', taskId: null, scope, reason },
+    executorDecision: null,
+  });
+}
+
+function semanticClearTasks(scope: 'all' | 'parked' | 'blocked', reason = 'semantic clear tasks') {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.95,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: { kind: 'clear_tasks', taskId: null, scope, reason },
+    executorDecision: null,
+  });
+}
+
+function semanticReferencedControl(
+  taskId: string,
+  control: 'resume_task' | 'recover_blocked',
+  reason = 'semantic referenced task control',
+) {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.95,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'reference', taskId, reason },
+    taskControl: { kind: control, taskId, scope: null, reason },
+    executorDecision: null,
+  });
+}
+
 describe('Round 3 task boundary acceptance', () => {
   it('turns conversation-derived follow-up work into a new task with inherited conversation context', async () => {
     const db = createTestDb();
@@ -68,6 +156,9 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn()
+        .mockResolvedValueOnce(semanticDirectReply('普通讨论'))
+        .mockResolvedValueOnce(semanticDurableTask('按当前对话创建跟进任务', ['conversation_follow_up'])),
       resolveRoute: vi.fn()
         .mockResolvedValueOnce({
           route: 'conversation',
@@ -156,6 +247,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticClearTasks('blocked')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -197,6 +289,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(taskRepo.findById(readyTask.id)?.status).toBe('ready');
     expect(taskRepo.findAll()).toHaveLength(2);
     expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
@@ -221,6 +314,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticStatusQuery('blocked')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -259,6 +353,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(taskRepo.findById(blockedTask.id)?.status).toBe('blocked');
     expect(taskRepo.findAll()).toHaveLength(1);
     expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
@@ -283,6 +378,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticStatusQuery('blocked')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -308,6 +404,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(snapshot).toContain('当前没有阻塞任务。');
     expect(taskRepo.findAll()).toHaveLength(0);
     expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
@@ -332,6 +429,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticStatusQuery('running')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -362,6 +460,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(snapshot).toContain(`#${runningTask.id} [RUNNING] 正在生成报告`);
     expect(taskRepo.findAll()).toHaveLength(1);
     expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
@@ -386,6 +485,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticStatusQuery('running')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -419,6 +519,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(snapshot).toContain('摘要：已经完成并生成最终结果');
     expect(taskRepo.findAll()).toHaveLength(1);
     expect(executor.execute).not.toHaveBeenCalled();
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
   });
@@ -619,6 +720,7 @@ describe('Round 3 task boundary acceptance', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticClearTasks('all')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       rankInteractions: vi.fn(),
@@ -691,6 +793,7 @@ describe('Round 3 task boundary acceptance', () => {
     };
     let parkedTaskId = '';
     const llmBridge = {
+      query: vi.fn().mockImplementation(async () => semanticReferencedControl(parkedTaskId, 'resume_task')),
       resolveTaskResumeIntent: vi.fn().mockImplementation(async () => ({
         action: 'resume',
         taskId: parkedTaskId,
@@ -737,6 +840,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(executionInput.task.id).toBe(parkedTask.id);
     expect(executionInput.executionContextBundle.mode).toBe('resume-parked');
     expect(session.getSnapshot().output.join('\n')).toContain(`命中已有挂起任务 #${parkedTask.id}`);
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveTaskResumeIntent).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
@@ -763,6 +867,7 @@ describe('Round 3 task boundary acceptance', () => {
     };
     let blockedTaskId = '';
     const llmBridge = {
+      query: vi.fn().mockImplementation(async () => semanticReferencedControl(blockedTaskId, 'recover_blocked')),
       resolveTaskResumeIntent: vi.fn().mockImplementation(async () => ({
         action: 'resume',
         taskId: blockedTaskId,
@@ -809,6 +914,7 @@ describe('Round 3 task boundary acceptance', () => {
     expect(executionInput.task.id).toBe(blockedTask.id);
     expect(executionInput.executionContextBundle.mode).toBe('resume-blocked');
     expect(session.getSnapshot().output.join('\n')).toContain(`任务 #${blockedTask.id} 已解除阻塞`);
+    expect(llmBridge.query).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveTaskResumeIntent).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();

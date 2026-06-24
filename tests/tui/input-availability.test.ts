@@ -67,6 +67,30 @@ function createDeferredResult() {
   return { promise, resolve };
 }
 
+function semanticDurableTask(reason: string) {
+  return JSON.stringify({
+    interactionType: 'durable_task',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'new', taskId: null, reason },
+    taskControl: null,
+    executorDecision: {
+      selectedExecutor: 'codex-cli',
+      action: 'auto_dispatch',
+      confidence: 0.9,
+      primaryIntent: 'repo_execution',
+      matchedBoundary: ['repo_execution'],
+      reason,
+      candidates: [{ executorName: 'codex-cli', score: 0.9, reason, matchedBoundary: ['repo_execution'] }],
+      rejected: [],
+    },
+  });
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -243,6 +267,9 @@ describe('App input availability', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn()
+        .mockResolvedValueOnce(semanticDurableTask('主线任务'))
+        .mockResolvedValueOnce(semanticDurableTask('排队任务')),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,
@@ -321,6 +348,9 @@ describe('App input availability', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn()
+        .mockResolvedValueOnce(semanticDurableTask('普通任务'))
+        .mockResolvedValueOnce(semanticDurableTask('紧急任务')),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'new',
         taskId: null,

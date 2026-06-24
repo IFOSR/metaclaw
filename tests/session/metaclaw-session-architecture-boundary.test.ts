@@ -53,8 +53,10 @@ describe('MetaclawSession architecture boundaries', () => {
   it('uses SchedulerBridge for execution completion and blocking state transitions', () => {
     const source = readSource('src/session/metaclaw-session.ts');
     const coordinatorSource = readSource('src/session/session-execution-coordinator.ts');
+    const applicationSource = readSource('src/session/session-task-execution-application-service.ts');
 
-    expect(source).toContain('sessionExecutionCoordinator.execute');
+    expect(source).toContain('SessionTaskExecutionApplicationService');
+    expect(applicationSource).toContain('sessionExecutionCoordinator.execute');
     expect(source).not.toContain('scheduler.markDispatchStarted');
     expect(source).not.toContain('scheduler.markDispatchFinished');
     expect(source).not.toContain('scheduler.markDispatchBlocked');
@@ -68,14 +70,17 @@ describe('MetaclawSession architecture boundaries', () => {
 
   it('keeps task-routing parsers, task status formatting, and task clearing presentation out of MetaclawSession', () => {
     const source = readSource('src/session/metaclaw-session.ts');
+    const applicationSource = readSource('src/session/session-intent-application-service.ts');
 
     expect(source).not.toContain('parseTaskClearInstruction');
     expect(source).not.toContain('parseTaskStatusQuery');
     expect(source).not.toContain('formatNaturalLanguageTaskStatus');
     expect(source).not.toContain('taskRuntimeService.formatTaskStatus');
     expect(source).not.toContain('result.output');
-    expect(source).toContain('presentation.formatTaskStatus');
-    expect(source).toContain('presentation.formatTaskClearResult');
+    expect(source).not.toContain('presentation.formatTaskStatus');
+    expect(source).not.toContain('presentation.formatTaskClearResult');
+    expect(applicationSource).toContain('presentation.formatTaskStatus');
+    expect(applicationSource).toContain('presentation.formatTaskClearResult');
   });
 
   it('delegates delivery notifications and blocked recovery formatting to VerificationAndDeliveryService', () => {
@@ -108,6 +113,26 @@ describe('MetaclawSession architecture boundaries', () => {
     expect(source).not.toContain('decideResumeTarget');
   });
 
+  it('delegates intent decision application and task-control branches outside the session facade', () => {
+    const source = readSource('src/session/metaclaw-session.ts');
+    const applicationSource = readSource('src/session/session-intent-application-service.ts');
+
+    expect(source).toContain('SessionIntentApplicationService');
+    expect(source).toContain('sessionIntentApplicationService.apply');
+    expect(source).not.toContain("decision.interactionType === 'task_control'");
+    expect(source).not.toContain("decision.interactionType === 'direct_reply'");
+    expect(source).not.toContain('private async applyResumePlanResult');
+    expect(source).not.toContain('private async handleReferencedTaskFromIntent');
+    expect(source).not.toContain('private async executeLastTaskContinuationFromIntent');
+    expect(source).not.toContain('private normalizeTaskStatusScope');
+    expect(source).not.toContain('private normalizeTaskClearScope');
+    expect(source).not.toContain('inlineResourceContext.normalizedGoal.slice');
+    expect(applicationSource).toContain("decision.interactionType === 'task_control'");
+    expect(applicationSource).toContain('applyResumePlanResult');
+    expect(applicationSource).toContain('normalizeTaskStatusScope');
+    expect(applicationSource).toContain('normalizeTaskClearScope');
+  });
+
   it('does not persist interactions, route events, or memory audit records directly', () => {
     const source = readSource('src/session/metaclaw-session.ts');
 
@@ -126,9 +151,13 @@ describe('MetaclawSession architecture boundaries', () => {
 
   it('delegates recall review policy, audit, and display application outside the session facade', () => {
     const source = readSource('src/session/metaclaw-session.ts');
+    const applicationSource = readSource('src/session/session-task-execution-application-service.ts');
 
     expect(source).toContain('RecallReviewApplicationService');
-    expect(source).toContain('recallReviewApplicationService.apply');
+    expect(applicationSource).toContain('recallReviewApplicationService.apply');
+    expect(source).not.toContain('RecallPolicyService');
+    expect(source).not.toContain('RecallReviewPolicyRepo');
+    expect(source).not.toContain('createRecallPolicyService');
     expect(source).not.toContain('prepareRecallReviewContext({');
     expect(source).not.toContain('recordSuppressedRecallMemoryAuditEvents');
     expect(source).not.toContain('appendAutoAppliedMemoryBlock');
@@ -212,6 +241,23 @@ describe('MetaclawSession architecture boundaries', () => {
     expect(source).not.toContain('private async handleConversationInput');
     expect(source).not.toContain('private buildConversationTask');
     expect(source).not.toContain('deps.executor.execute({');
+  });
+
+  it('delegates task execution scheduling glue outside the session facade', () => {
+    const source = readSource('src/session/metaclaw-session.ts');
+    const applicationSource = readSource('src/session/session-task-execution-application-service.ts');
+
+    expect(source).toContain('SessionTaskExecutionApplicationService');
+    expect(source).toContain('taskExecutionApplicationService.prepareTaskExecution');
+    expect(source).toContain('taskExecutionApplicationService.dispatchTask');
+    expect(source).not.toContain('approvedRecallSelections');
+    expect(source).not.toContain('private async submitScheduledTask');
+    expect(source).not.toContain('private buildFallbackExecutionRequest');
+    expect(source).not.toContain('private async executeTask');
+    expect(source).not.toContain('private maybeAppendExecutionGuidance');
+    expect(applicationSource).toContain('approvedRecallSelections');
+    expect(applicationSource).toContain('buildFallbackExecutionRequest');
+    expect(applicationSource).toContain('sessionExecutionCoordinator.execute');
   });
 });
 

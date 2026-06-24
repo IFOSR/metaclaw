@@ -69,6 +69,30 @@ async function waitUntil(assertion: () => boolean, timeoutMs = 1000): Promise<vo
   }
 }
 
+function semanticDurableTask(reason: string) {
+  return JSON.stringify({
+    interactionType: 'durable_task',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'new', taskId: null, reason },
+    taskControl: null,
+    executorDecision: {
+      selectedExecutor: 'codex-cli',
+      action: 'auto_dispatch',
+      confidence: 0.9,
+      primaryIntent: 'general',
+      matchedBoundary: ['general'],
+      reason,
+      candidates: [{ executorName: 'codex-cli', score: 0.9, reason, matchedBoundary: ['general'] }],
+      rejected: [],
+    },
+  });
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -95,6 +119,7 @@ describe('App permission failure blocking', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticDurableTask('明确测试任务')),
       resolveRoute: vi.fn().mockResolvedValue({
         route: 'durable_task',
         reason: '明确测试任务',
@@ -132,6 +157,7 @@ describe('App permission failure blocking', () => {
     }
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await waitUntil(() => taskRepo.findByStatus('blocked').length > 0);
+    await waitUntil(() => app.lastFrame()?.includes('! 执行失败: 执行器权限受限，请确认已授予所需目录访问权限后重试') ?? false);
 
     const blockedTask = taskRepo.findByStatus('blocked')[0];
     expect(blockedTask).toBeTruthy();
