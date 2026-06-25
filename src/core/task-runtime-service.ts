@@ -79,12 +79,6 @@ const CLEAR_SCOPE_STATUSES: Record<TaskClearScope, TaskStatus[]> = {
   blocked: ['blocked'],
 };
 
-const CLEAR_SCOPE_LABELS: Record<TaskClearScope, string> = {
-  all: '所有未完成任务',
-  parked: '挂起任务',
-  blocked: '阻塞任务',
-};
-
 export class TaskRuntimeService {
   private currentTaskId: string | null = null;
   private focusContext: TaskFocusContext | null = null;
@@ -164,7 +158,7 @@ export class TaskRuntimeService {
     return this.deps.taskEngine.resume(taskId).task;
   }
 
-  clearTasks(scope: TaskClearScope, reason = `用户清空${CLEAR_SCOPE_LABELS[scope]}`): TaskClearResult {
+  clearTasks(scope: TaskClearScope, reason = `user cleared ${scope} tasks`): TaskClearResult {
     const statuses = CLEAR_SCOPE_STATUSES[scope];
     const candidates = filterDurableTasks(this.listTasks())
       .filter(task => statuses.includes(task.status));

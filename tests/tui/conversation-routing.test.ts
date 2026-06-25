@@ -55,6 +55,45 @@ function createConfig(): Config {
   };
 }
 
+function semanticDirectReply(reason: string) {
+  return JSON.stringify({
+    interactionType: 'direct_reply',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: null,
+    executorDecision: null,
+  });
+}
+
+function semanticConversationFollowUp(reason: string) {
+  return JSON.stringify({
+    interactionType: 'durable_task',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'new', taskId: null, reason },
+    taskControl: null,
+    executorDecision: {
+      selectedExecutor: 'codex-cli',
+      action: 'auto_dispatch',
+      confidence: 0.9,
+      primaryIntent: 'repo_execution',
+      matchedBoundary: ['conversation_follow_up'],
+      reason,
+      candidates: [{ executorName: 'codex-cli', score: 0.9, reason, matchedBoundary: ['conversation_follow_up'] }],
+      rejected: [],
+    },
+  });
+}
+
 function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
@@ -241,6 +280,9 @@ describe('App conversation routing', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn()
+        .mockResolvedValueOnce(semanticDirectReply('普通讨论'))
+        .mockResolvedValueOnce(semanticConversationFollowUp('按当前对话创建跟进任务')),
       resolveRoute: vi.fn()
         .mockResolvedValueOnce({
           route: 'conversation',
@@ -301,6 +343,9 @@ describe('App conversation routing', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn()
+        .mockResolvedValueOnce(semanticDirectReply('普通讨论'))
+        .mockResolvedValueOnce(semanticConversationFollowUp('按当前对话创建跟进任务')),
       resolveRoute: vi.fn()
         .mockResolvedValueOnce({
           route: 'conversation',

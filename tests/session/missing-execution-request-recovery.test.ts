@@ -40,6 +40,21 @@ function createConfig(): Config {
   };
 }
 
+function semanticRecoverBlocked(reason: string) {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.95,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: { kind: 'recover_blocked', taskId: null, scope: null, reason },
+    executorDecision: null,
+  });
+}
+
 describe('session dispatch recovery', () => {
   it('auto-resumes executable parked tasks when the scheduler is idle', async () => {
     const db = createTestDb();
@@ -312,6 +327,7 @@ describe('session dispatch recovery', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticRecoverBlocked('用户补充了阻塞任务所需材料')),
       resolveRoute: vi.fn(),
       resolveIntent: vi.fn(),
       resolveTaskPriority: vi.fn(),

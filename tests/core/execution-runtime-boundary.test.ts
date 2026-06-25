@@ -12,8 +12,10 @@ describe('Execution runtime architecture boundaries', () => {
   it('keeps executor creation and race runtime out of MetaclawSession', () => {
     const sessionSource = readSource('src/session/metaclaw-session.ts');
     const coordinatorSource = readSource('src/session/session-execution-coordinator.ts');
+    const executionApplicationSource = readSource('src/session/session-task-execution-application-service.ts');
 
-    expect(sessionSource).toContain('sessionExecutionCoordinator.execute');
+    expect(sessionSource).toContain('SessionTaskExecutionApplicationService');
+    expect(executionApplicationSource).toContain('sessionExecutionCoordinator.execute');
     expect(sessionSource).not.toContain('executionRuntime.run');
     expect(coordinatorSource).toContain('executionRuntime.run');
     expect(sessionSource).not.toContain('executeWithOptionalRace');

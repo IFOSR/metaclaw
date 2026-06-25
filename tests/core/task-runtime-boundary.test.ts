@@ -32,11 +32,13 @@ describe('Task runtime architecture boundaries', () => {
   it('keeps queued execution requests inside SchedulerEngine instead of MetaclawSession', () => {
     const schedulerSource = readSource('src/core/scheduler.ts');
     const sessionSource = readSource('src/session/metaclaw-session.ts');
+    const executionApplicationSource = readSource('src/session/session-task-execution-application-service.ts');
 
     expect(schedulerSource).toContain('queuedExecution');
     expect(schedulerSource).toContain('executionRequest');
     expect(sessionSource).not.toContain('queuedExecution');
-    expect(sessionSource).toContain('executionRequest: request');
+    expect(sessionSource).not.toContain('executionRequest: request');
+    expect(executionApplicationSource).toContain('executionRequest: request');
   });
 
   it('implements the SchedulerBridge dispatch lifecycle on SchedulerEngine', () => {
@@ -79,5 +81,19 @@ describe('Task runtime architecture boundaries', () => {
     expect(semanticSource).toContain("from './llm-bridge.js'");
     expect(semanticSource).toContain('resolveTaskPriority');
     expect(semanticSource).toContain('resolveTaskResumeIntent');
+  });
+
+  it('keeps clear-task presentation labels outside TaskRuntimeService', () => {
+    const runtimeSource = readSource('src/core/task-runtime-service.ts');
+    const presentationSource = readSource('src/session/session-presentation-service.ts');
+
+    expect(runtimeSource).not.toContain('CLEAR_SCOPE_LABELS');
+    expect(runtimeSource).not.toContain("all: '所有未完成任务'");
+    expect(runtimeSource).not.toContain("parked: '挂起任务'");
+    expect(runtimeSource).not.toContain("blocked: '阻塞任务'");
+    expect(presentationSource).toContain('CLEAR_SCOPE_LABELS');
+    expect(presentationSource).toContain('所有未完成任务');
+    expect(presentationSource).toContain('挂起任务');
+    expect(presentationSource).toContain('阻塞任务');
   });
 });

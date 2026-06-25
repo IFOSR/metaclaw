@@ -55,6 +55,45 @@ function createDurableRouteBridge(overrides: Partial<LlmBridge> = {}) {
   } as unknown as LlmBridge;
 }
 
+function semanticDurableTask(reason: string) {
+  return JSON.stringify({
+    interactionType: 'durable_task',
+    confidence: 0.9,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'new', taskId: null, reason },
+    taskControl: null,
+    executorDecision: {
+      selectedExecutor: 'codex-cli',
+      action: 'auto_dispatch',
+      confidence: 0.9,
+      primaryIntent: 'general',
+      matchedBoundary: ['general'],
+      reason,
+      candidates: [{ executorName: 'codex-cli', score: 0.9, reason, matchedBoundary: ['general'] }],
+      rejected: [],
+    },
+  });
+}
+
+function semanticLastTaskContinuation(reason: string) {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.92,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'none', taskId: null, reason },
+    taskControl: { kind: 'last_task_continuation', taskId: null, scope: null, reason },
+    executorDecision: null,
+  });
+}
+
 describe('cross-session last-task continuation', () => {
   it('auto-creates a follow-up instead of asking for confirmation when the last focused task is done', async () => {
     const db = createTestDb();
@@ -84,7 +123,9 @@ describe('cross-session last-task continuation', () => {
       config: createConfig(),
       sessionId: 'sess_round12_a',
       contextRecaller,
-      llmBridge: createDurableRouteBridge(),
+      llmBridge: createDurableRouteBridge({
+        query: vi.fn().mockResolvedValue(semanticDurableTask('明确任务')),
+      }),
       availableExecutorCommands: new Set(['codex']),
     });
 
@@ -103,7 +144,9 @@ describe('cross-session last-task continuation', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
-    const llmBridge2 = createDurableRouteBridge();
+    const llmBridge2 = createDurableRouteBridge({
+      query: vi.fn().mockResolvedValue(semanticLastTaskContinuation('继续上次任务')),
+    });
     const session2 = new MetaclawSession({
       taskEngine,
       memoryEngine,
@@ -160,7 +203,9 @@ describe('cross-session last-task continuation', () => {
       config: createConfig(),
       sessionId: 'sess_round12_c',
       contextRecaller,
-      llmBridge: createDurableRouteBridge(),
+      llmBridge: createDurableRouteBridge({
+        query: vi.fn().mockResolvedValue(semanticDurableTask('明确任务')),
+      }),
       availableExecutorCommands: new Set(['codex']),
     });
 
@@ -192,7 +237,9 @@ describe('cross-session last-task continuation', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
-    const llmBridge2 = createDurableRouteBridge();
+    const llmBridge2 = createDurableRouteBridge({
+      query: vi.fn().mockResolvedValue(semanticLastTaskContinuation('继续上次任务')),
+    });
     const session2 = new MetaclawSession({
       taskEngine,
       memoryEngine,

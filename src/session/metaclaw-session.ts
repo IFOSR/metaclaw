@@ -18,18 +18,16 @@ import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
 import {
   filterDurableTasks,
-  type TaskStatusQueryScope,
 } from '../core/task-routing.js';
 import { RuleHintsProvider } from '../core/rule-hints-provider.js';
 import { IntentOrchestrator, type IntentDecisionV2, type IntentOrchestratorInput } from '../core/intent-orchestrator.js';
 import { ResumeContextBuilder } from '../core/resume-context-builder.js';
-import { MemoryContextService, type ExecutionRecallSelection } from '../core/memory-context-service.js';
-import { RecallPolicyService } from '../core/recall-policy-service.js';
-import { RecallReviewApplicationService } from '../core/recall-review-application-service.js';
+import { MemoryContextService } from '../core/memory-context-service.js';
+import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../core/recall-review-application-service.js';
 import { SessionPersistenceService } from '../core/session-persistence-service.js';
 import { MemoryCaptureService } from '../core/memory-capture-service.js';
 import { ConversationRuntimeService } from '../core/conversation-runtime-service.js';
-import { TaskResumePlanner, type ResumePlanResult } from '../core/task-resume-planner.js';
+import { TaskResumePlanner } from '../core/task-resume-planner.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
@@ -38,7 +36,6 @@ import { executorCommand } from '../commands/executor-commands.js';
 import { learningCommand } from '../commands/learning-commands.js';
 import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCommand, exitCommand } from '../commands/global-commands.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
-import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
 import type { IntentDecision } from '../core/executor-router.js';
 import { TaskRuntimeService } from '../core/task-runtime-service.js';
@@ -53,6 +50,7 @@ import { WorkspaceTargetService } from '../core/workspace-target-service.js';
 import { InputController } from './input-controller.js';
 import { SessionPresentationService, type GuidanceState } from './session-presentation-service.js';
 import { SessionExecutionCoordinator } from './session-execution-coordinator.js';
+import { SessionTaskExecutionApplicationService } from './session-task-execution-application-service.js';
 import {
   buildSchedulingReason,
   isRiskyExternalActionInstruction,
@@ -60,6 +58,7 @@ import {
   parsePriorityHint,
   type QueuedExecutionRequest,
 } from './session-helpers.js';
+import { SessionIntentApplicationService } from './session-intent-application-service.js';
 
 export interface MetaclawSessionDeps {
   taskEngine: TaskEngine;
@@ -105,7 +104,6 @@ export class MetaclawSession {
     lastEvent: null,
   };
   private latestGuidance: GuidanceState | null = null;
-  private approvedRecallSelections = new Map<string, ExecutionRecallSelection>();
   private initialized = false;
   private listeners = new Set<(snapshot: SessionSnapshot) => void>();
   private runningExecutorNameByTask = new Map<string, string>();
@@ -138,6 +136,8 @@ export class MetaclawSession {
   private readonly executionProgressService: ExecutionProgressService;
   private readonly workspaceTargetService: WorkspaceTargetService;
   private readonly sessionExecutionCoordinator: SessionExecutionCoordinator;
+  private readonly taskExecutionApplicationService: SessionTaskExecutionApplicationService;
+  private readonly sessionIntentApplicationService: SessionIntentApplicationService;
   private readonly intentOrchestrator: {
     decide(input: IntentOrchestratorInput): Promise<IntentDecisionV2>;
   } | null;
@@ -202,9 +202,9 @@ export class MetaclawSession {
       notifier: this.notifier,
       deliveryService: this.verificationAndDeliveryService,
     });
-    this.recallReviewApplicationService = new RecallReviewApplicationService({
+    this.recallReviewApplicationService = createDefaultRecallReviewApplicationService({
+      db: deps.db,
       memoryContextService: this.memoryContextService,
-      recallPolicyService: this.createRecallPolicyService(),
       memoryCaptureService: this.memoryCaptureService,
       formatters: this.presentation,
     });
@@ -257,6 +257,42 @@ export class MetaclawSession {
         persistSessionState: changes => this.persistSessionState(changes),
         setLatestGuidance: (scene, suggestion) => this.setLatestGuidance(scene, suggestion),
         queueProposal: (scene, proposal) => this.queueProposal(scene, proposal),
+      },
+    });
+    this.taskExecutionApplicationService = new SessionTaskExecutionApplicationService({
+      defaultExecutorName: deps.executor.name,
+      taskRuntimeService: this.taskRuntimeService,
+      scheduler: this.scheduler,
+      recallReviewApplicationService: this.recallReviewApplicationService,
+      sessionExecutionCoordinator: this.sessionExecutionCoordinator,
+      presentation: this.presentation,
+      callbacks: {
+        appendOutput: (...lines: string[]) => this.appendOutput(...lines),
+        appendGuidance: (scene, suggestion) => this.appendGuidance(scene, suggestion),
+        appendTaskQueueSnapshot: trigger => this.appendTaskQueueSnapshot(trigger),
+        refreshRuntimeState: () => this.refreshRuntimeState(),
+        notify: () => this.notify(),
+      },
+    });
+    this.sessionIntentApplicationService = new SessionIntentApplicationService({
+      taskRuntimeService: this.taskRuntimeService,
+      taskSemanticService: this.taskSemanticService,
+      taskResumePlanner: this.taskResumePlanner,
+      memoryContextService: this.memoryContextService,
+      orchestration: deps.orchestration,
+      executor: deps.executor,
+      presentation: this.presentation,
+      callbacks: {
+        appendOutput: (...lines: string[]) => this.appendOutput(...lines),
+        appendIntentClarification: (userInput, decision) => this.appendIntentClarification(userInput, decision),
+        runConversationInput: userInput => this.runConversationInput(userInput),
+        prepareTaskExecution: (taskId, request) => this.prepareTaskExecution(taskId, request),
+        refreshRuntimeState: () => this.refreshRuntimeState(),
+        setCurrentTaskId: taskId => this.setCurrentTaskId(taskId),
+        getCurrentTaskId: () => this.getCurrentTaskId(),
+        setFocusContext: focus => this.setFocusContext(focus),
+        buildRecentTaskSummaries: tasks => this.buildRecentTaskSummaries(tasks),
+        buildRecoveryTrigger: (task, input) => this.buildRecoveryTrigger(task, input),
       },
     });
   }
@@ -643,10 +679,6 @@ export class MetaclawSession {
     this.appendOutput('→ 操作提案已记录，不等待用户确认；满足执行条件的任务由调度器自动处理');
   }
 
-  private createRecallPolicyService(): RecallPolicyService {
-    return new RecallPolicyService(new RecallReviewPolicyRepo(this.deps.db));
-  }
-
   private seedExecutorRegistry(): void {
     this.executorProfileService.seedDefaults();
   }
@@ -660,120 +692,11 @@ export class MetaclawSession {
       this.buildIntentOrchestratorInput(userInput, recentTasks, options),
     );
 
-    if (decision.interactionType === 'clarification') {
-      this.appendIntentClarification(userInput, decision);
-      return true;
-    }
-
-    if (decision.interactionType === 'direct_reply') {
-      if (decision.reason === '延续当前对话，不恢复旧任务') {
-        this.appendOutput(`→ ${decision.reason}`);
-      }
-      await this.runConversationInput(userInput);
-      return true;
-    }
-
-    if (decision.interactionType === 'task_control') {
-      if (decision.task.binding === 'reference' && decision.task.taskId) {
-        const referencedTask = this.taskRuntimeService.findTask(decision.task.taskId);
-        if (!referencedTask) {
-          this.appendOutput(`错误：任务不存在 ${decision.task.taskId}`);
-          return true;
-        }
-
-        await this.handleReferencedTaskFromIntent(userInput, referencedTask, decision);
-        return true;
-      }
-      if (decision.task.control === 'status_query') {
-        const scope = this.normalizeTaskStatusScope(decision.task.scope);
-        this.appendOutput(this.presentation.formatTaskStatus({
-          scope,
-          blockedTasks: this.deps.orchestration.getBlockedTasks(),
-          runningTask: this.taskRuntimeService.listTasksByStatus('running')[0] ?? null,
-          activeTasks: filterDurableTasks(this.taskRuntimeService.listActiveTasks()),
-          latestDone: filterDurableTasks(this.taskRuntimeService.listTasksByStatus('done'))[0] ?? null,
-          dashboard: this.deps.orchestration.getDashboard(),
-        }));
-        this.refreshRuntimeState();
-        return true;
-      }
-      if (decision.task.control === 'clear_tasks') {
-        const scope = this.normalizeTaskClearScope(decision.task.scope);
-        const result = this.taskRuntimeService.clearTasks(scope);
-        if (result.runningCancelled) {
-          this.deps.executor.abort();
-        }
-        if (result.cancelled.some(task => task.id === this.getCurrentTaskId())) {
-          this.setCurrentTaskId(null);
-          this.setFocusContext(null);
-        }
-        this.refreshRuntimeState();
-        this.appendOutput(this.presentation.formatTaskClearResult({
-          scope,
-          cancelled: result.cancelled,
-          runningCancelled: result.runningCancelled,
-        }));
-        return true;
-      }
-      if (decision.task.control === 'recover_blocked') {
-        return this.applyResumePlanResult(userInput, this.taskResumePlanner.planBlockedRecovery(userInput), decision);
-      }
-      if (decision.task.control === 'last_task_continuation') {
-        return this.executeLastTaskContinuationFromIntent(userInput);
-      }
-      if (decision.task.control === 'resume_task') {
-        return this.applyResumePlanResult(
-          userInput,
-          await this.taskResumePlanner.planNaturalLanguageResume(userInput),
-          decision,
-        );
-      }
-      if (recentTasks.length === 0) {
-        this.appendOutput('当前没有可操作的任务');
-        return true;
-      }
-      this.appendOutput('未找到匹配的任务，可先用 /tasks 查看当前任务清单');
-      return true;
-    }
-
-    if (decision.task.binding === 'reference' && decision.task.taskId) {
-      const referencedTask = this.taskRuntimeService.findTask(decision.task.taskId);
-      if (!referencedTask) {
-        this.appendOutput(`错误：任务不存在 ${decision.task.taskId}`);
-        return true;
-      }
-
-      await this.handleReferencedTaskFromIntent(userInput, referencedTask, decision);
-      return true;
-    }
-
-    const includeRecentConversationContext = decision.execution.matchedBoundary?.includes('conversation_follow_up') ?? false;
-    const inlineResourceContext = this.memoryContextService.normalizeInlineResourcesFromInput(userInput);
-    const task = this.taskRuntimeService.createTask({
-      title: inlineResourceContext.normalizedGoal.slice(0, 50),
-      goal: inlineResourceContext.normalizedGoal,
-      resources: inlineResourceContext.resources,
+    return this.sessionIntentApplicationService.apply({
+      userInput,
+      decision,
+      recentTasks,
     });
-    await this.applySemanticPriority(task.id, userInput);
-    this.setCurrentTaskId(task.id);
-    this.setFocusContext({ kind: 'task', taskId: task.id });
-    if (decision.reason === '按当前对话创建跟进任务') {
-      this.appendOutput(`→ ${decision.reason}`);
-    }
-    this.appendOutput(`任务 #${task.id} 已创建：${task.title}`);
-    if (inlineResourceContext.resources.length > 0) {
-      this.appendOutput(`→ 已自动关联 ${inlineResourceContext.resources.length} 份材料`);
-    }
-
-    await this.prepareTaskExecution(task.id, {
-      userPrompt: userInput,
-      contextTaskId: task.id,
-      executionMode: 'fresh',
-      schedulingReason: buildSchedulingReason(userInput),
-      includeRecentConversationContext,
-      intentDecision: decision,
-    });
-    return true;
   }
 
   private getIntentOrchestrator(): {
@@ -834,65 +757,12 @@ export class MetaclawSession {
     );
   }
 
-  private normalizeTaskStatusScope(scope: string | null): TaskStatusQueryScope {
-    return scope === 'blocked' || scope === 'running' || scope === 'dashboard'
-      ? scope
-      : 'dashboard';
-  }
-
-  private normalizeTaskClearScope(scope: string | null): 'all' | 'parked' | 'blocked' {
-    return scope === 'parked' || scope === 'blocked' || scope === 'all'
-      ? scope
-      : 'all';
-  }
-
-  private async handleReferencedTaskFromIntent(
-    userInput: string,
-    referencedTask: Task,
-    intentDecision: IntentDecisionV2,
-  ): Promise<void> {
-    await this.applyResumePlanResult(userInput, this.taskResumePlanner.planReferencedTask({
-      userInput,
-      referencedTask,
-      intentDecision,
-    }), intentDecision);
-  }
-
   private async prepareTaskExecution(
     taskId: string,
     request: QueuedExecutionRequest,
     proposalType: GuidanceActionType | null = null,
   ): Promise<void> {
-    const task = this.taskRuntimeService.findTask(taskId);
-    if (!task) {
-      this.appendOutput(`错误：任务不存在 ${taskId}`);
-      return;
-    }
-
-    const recallApplication = await this.recallReviewApplicationService.apply({
-      taskId,
-      userPrompt: request.userPrompt,
-      taskTitle: task.title,
-      proposalType,
-    });
-    this.approvedRecallSelections.set(taskId, recallApplication.approvedSelection);
-    this.appendOutput(...recallApplication.lines);
-
-    await this.submitScheduledTask(taskId, request);
-  }
-
-  private maybeAppendExecutionGuidance(task: Task, request: QueuedExecutionRequest): void {
-    if (request.executionMode === 'resume-blocked') {
-      this.appendGuidance('解除阻塞后恢复', this.presentation.formatBlockedExecutionGuidance(
-        task,
-        request.newlyProvidedResources,
-      ));
-      return;
-    }
-
-    if (request.executionMode === 'resume-parked') {
-      this.appendGuidance('恢复已挂起任务', this.presentation.formatResumeExecutionGuidance(task));
-    }
+    return this.taskExecutionApplicationService.prepareTaskExecution(taskId, request, proposalType);
   }
 
   private appendOutput(...lines: string[]): void {
@@ -948,92 +818,6 @@ export class MetaclawSession {
     lastSessionId?: string | null;
   }): void {
     this.sessionStateRepo.upsert(changes);
-  }
-
-  private async executeLastTaskContinuationFromIntent(userInput: string): Promise<boolean> {
-    const result = await this.taskResumePlanner.planLastTaskContinuation(userInput);
-    return this.applyResumePlanResult(userInput, result);
-  }
-
-  private async applyResumePlanResult(
-    userInput: string,
-    result: ResumePlanResult,
-    intentDecision?: IntentDecisionV2,
-  ): Promise<boolean> {
-    if (result.action === 'not_handled') {
-      return false;
-    }
-    if (result.action === 'message') {
-      this.appendOutput(...result.lines);
-      this.refreshRuntimeState();
-      return true;
-    }
-    if (result.action === 'fork_follow_up') {
-      const followUpTask = this.taskRuntimeService.createTask(result.plan.newTaskInput);
-      await this.applySemanticPriority(followUpTask.id, userInput);
-      this.setCurrentTaskId(followUpTask.id);
-      this.setFocusContext({ kind: 'task', taskId: followUpTask.id });
-      this.appendOutput(...result.lines, `→ 已创建跟进任务 #${followUpTask.id}`);
-      await this.prepareTaskExecution(followUpTask.id, {
-        userPrompt: userInput,
-        contextTaskId: result.plan.contextTaskId,
-        executionMode: 'follow-up',
-        schedulingReason: result.schedulingReason,
-        intentDecision,
-      });
-      return true;
-    }
-    if (result.action === 'unblock_and_execute') {
-      for (const resourcePath of result.newlyProvidedResources ?? []) {
-        this.taskRuntimeService.attachResource(result.task.id, resourcePath);
-      }
-      this.taskRuntimeService.unblockTask(result.task.id);
-      this.setCurrentTaskId(result.task.id);
-      this.setFocusContext({ kind: 'task', taskId: result.task.id });
-      if (result.observeResumeIntent) {
-        await this.taskSemanticService.observeResumeIntent(
-          userInput,
-          this.buildRecentTaskSummaries([result.task]),
-        );
-      }
-      this.appendOutput(...result.lines);
-      await this.prepareTaskExecution(result.task.id, {
-        userPrompt: userInput,
-        contextTaskId: result.task.id,
-        executionMode: 'resume-blocked',
-        schedulingReason: result.schedulingReason,
-        newlyProvidedResources: result.newlyProvidedResources,
-        intentDecision,
-        recoveryTrigger: this.buildRecoveryTrigger(result.task, {
-          kind: result.triggerKind ?? 'natural-language-resume',
-          blockedReason: result.blockedReason ?? undefined,
-          triggerReason: result.triggerReason,
-          sourceInput: userInput,
-          newlyProvidedResources: result.newlyProvidedResources,
-        }),
-      });
-      return true;
-    }
-
-    this.setCurrentTaskId(result.plan.executionTaskId);
-    this.setFocusContext({ kind: 'task', taskId: result.plan.executionTaskId });
-    if (result.observeResumeIntent) {
-      await this.taskSemanticService.observeResumeIntent(
-        userInput,
-        this.buildRecentTaskSummaries([result.task]),
-      );
-      this.resumeParkedTaskIfStillParked(result.task.id);
-    }
-    this.appendOutput(...result.lines);
-    await this.applySemanticPriority(result.plan.executionTaskId, userInput);
-    await this.prepareTaskExecution(result.plan.executionTaskId, {
-      userPrompt: userInput,
-      contextTaskId: result.plan.contextTaskId,
-      executionMode: result.executionMode,
-      schedulingReason: result.schedulingReason,
-      intentDecision,
-    });
-    return true;
   }
 
   private async handleCommand(userInput: string): Promise<boolean> {
@@ -1229,98 +1013,8 @@ export class MetaclawSession {
     this.appendOutput(...result.lines);
   }
 
-  private async submitScheduledTask(taskId: string, request: QueuedExecutionRequest): Promise<void> {
-    const result = await this.scheduler.submit(taskId, {
-      reason: request.schedulingReason || '新任务提交',
-      executionRequest: request,
-    });
-    this.refreshRuntimeState();
-
-    if (result.action === 'queued') {
-      this.appendOutput(`→ 任务 #${taskId} 已进入待执行队列`);
-      this.appendTaskQueueSnapshot('任务进入待执行队列');
-      return;
-    }
-
-    if (result.action === 'preempted') {
-      this.appendOutput(
-        `→ 高优任务到达，抢占当前任务 #${result.preemptedTaskId}`,
-        `→ 原因：${request.schedulingReason || '用户显式要求优先处理'}`,
-        `→ 任务 #${result.preemptedTaskId} 已挂起，开始执行 #${taskId}`,
-        `→ 执行准备：先由 ${this.deps.executor.name} 解析意图与构建上下文，随后按路由派发到具体 Executor`,
-      );
-      this.appendTaskQueueSnapshot('高优任务抢占，队列已重排');
-      return;
-    }
-
-    this.appendOutput(`→ 执行准备：先由 ${this.deps.executor.name} 解析意图与构建上下文，随后按路由派发到具体 Executor`);
-    this.appendTaskQueueSnapshot('任务开始执行');
-  }
-
   private dispatchTask(taskId: string, context?: DispatchContext<QueuedExecutionRequest>): Promise<void> {
-    const dispatchPromise = (async () => {
-      const request = context?.executionRequest ?? this.buildFallbackExecutionRequest(taskId, context);
-      if (!request) {
-        this.appendOutput(`错误：任务 #${taskId} 缺少执行请求，无法派发`);
-        return;
-      }
-
-      if (context?.missingExecutionRequest ?? true) {
-        this.appendOutput(`→ 任务 #${taskId} 缺少待执行上下文，已根据持久化任务信息重建执行请求`);
-      }
-
-      const mergedRequest = context
-        ? {
-            ...request,
-            executionMode: context.executionMode ?? request.executionMode,
-            schedulingReason: context.schedulingReason ?? request.schedulingReason,
-          }
-        : request;
-      await this.executeTask(taskId, mergedRequest);
-    })();
-
-    void dispatchPromise.finally(() => {
-      this.notify();
-    });
-
-    return dispatchPromise;
-  }
-
-  private buildFallbackExecutionRequest(taskId: string, context?: DispatchContext<QueuedExecutionRequest>): QueuedExecutionRequest | null {
-    const task = this.taskRuntimeService.findTask(taskId);
-    if (!task) {
-      return null;
-    }
-
-    const inferredMode = context?.executionMode
-      ?? (task.snapshots.length > 0 || task.lastInterruptionReason ? 'resume-parked' : 'fresh');
-
-    return {
-      userPrompt: task.goal,
-      contextTaskId: task.id,
-      executionMode: inferredMode,
-      schedulingReason: context?.schedulingReason
-        ?? task.lastSchedulingReason
-        ?? '调度器根据持久化任务自动恢复执行',
-    };
-  }
-
-  private async executeTask(taskId: string, request: QueuedExecutionRequest): Promise<void> {
-    const task = this.taskRuntimeService.findTask(taskId);
-    if (!task) {
-      this.appendOutput(`错误：任务不存在 ${taskId}`);
-      return;
-    }
-
-    this.maybeAppendExecutionGuidance(task, request);
-
-    const approvedRecallSelection = this.approvedRecallSelections.get(taskId) ?? null;
-    this.approvedRecallSelections.delete(taskId);
-    await this.sessionExecutionCoordinator.execute({
-      taskId,
-      request,
-      approvedRecallSelection,
-    });
+    return this.taskExecutionApplicationService.dispatchTask(taskId, context);
   }
 
   private setFocusContext(focus: FocusContext | null): void {

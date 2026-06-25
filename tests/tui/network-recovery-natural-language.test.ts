@@ -59,6 +59,21 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+function semanticRecoverBlocked(taskId: string, reason: string) {
+  return JSON.stringify({
+    interactionType: 'task_control',
+    confidence: 0.95,
+    shouldAskBeforeActing: false,
+    ambiguity: [],
+    risk: 'low',
+    reason,
+    clarificationQuestion: null,
+    taskBinding: { type: 'reference', taskId, reason },
+    taskControl: { kind: 'recover_blocked', taskId, scope: null, reason },
+    executorDecision: null,
+  });
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -94,6 +109,7 @@ describe('App network recovery natural-language control', () => {
       abort: vi.fn(),
     };
     const llmBridge = {
+      query: vi.fn().mockResolvedValue(semanticRecoverBlocked(blockedTask.id, '用户说明网络恢复')),
       resolveIntent: vi.fn().mockResolvedValue({
         type: 'reference',
         taskId: blockedTask.id,

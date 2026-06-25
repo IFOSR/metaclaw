@@ -1,7 +1,9 @@
+import type Database from 'better-sqlite3';
 import type { GuidanceActionType, PreferenceMemoryCandidate, TaskMemoryCandidate } from './types.js';
 import type { ExecutionRecallSelection, MemoryContextService } from './memory-context-service.js';
 import type { MemoryCaptureService } from './memory-capture-service.js';
-import type { RecallPolicyService } from './recall-policy-service.js';
+import { RecallPolicyService } from './recall-policy-service.js';
+import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 
 export interface RecallReviewApplicationInput {
   taskId: string;
@@ -126,4 +128,18 @@ export class RecallReviewApplicationService {
       });
     }
   }
+}
+
+export function createDefaultRecallReviewApplicationService(deps: {
+  db: Database.Database;
+  memoryContextService: Pick<MemoryContextService, 'prepareRecallReviewContext' | 'buildAcceptedRecallSelection'>;
+  memoryCaptureService: Pick<MemoryCaptureService, 'auditMemory'>;
+  formatters: RecallReviewApplicationFormatters;
+}): RecallReviewApplicationService {
+  return new RecallReviewApplicationService({
+    memoryContextService: deps.memoryContextService,
+    recallPolicyService: new RecallPolicyService(new RecallReviewPolicyRepo(deps.db)),
+    memoryCaptureService: deps.memoryCaptureService,
+    formatters: deps.formatters,
+  });
 }

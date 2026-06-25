@@ -20,13 +20,15 @@ InputController
   -> VerificationAndDeliveryService
 ```
 
-## Remaining TODOs
+## Roadmap TODOs
 
 ### 1. IntentDecisionV2 must not be rewritten in MetaclawSession
 
 Roadmap requirement: intent timeout must return a conservative decision, either conversation or clarification. Keyword fallback must not create a durable task.
 
-Current gap: `MetaclawSession` rewrites a clarification timeout decision into a durable task when another task is running.
+Status: complete.
+
+Original gap: `MetaclawSession` rewrote a clarification timeout decision into a durable task when another task was running.
 
 Target:
 
@@ -43,7 +45,9 @@ Tests:
 
 Roadmap requirement: regex and rule hints may only be hints or safety guards. They must not directly decide durable task, executor, multi-executor, or resume task behavior.
 
-Current gap: `IntentOrchestrator.decide()` resolves task-control hints before the semantic router and can return `task_control` without semantic arbitration.
+Status: complete.
+
+Original gap: `IntentOrchestrator.decide()` resolved task-control hints before the semantic router and could return `task_control` without semantic arbitration.
 
 Target:
 
@@ -60,7 +64,9 @@ Tests:
 
 Roadmap requirement: `TaskRuntimeService` owns task lifecycle and scheduling eligibility. It must not format UI text and must not directly consume executor execution.
 
-Current gap: `TaskRuntimeService.clearTasks()` returns formatted output and calls `executor.abort()` for running tasks. `formatTaskStatus()` also lives inside `TaskRuntimeService`.
+Status: complete.
+
+Original gap: `TaskRuntimeService.clearTasks()` returned formatted output and called `executor.abort()` for running tasks. `formatTaskStatus()` also lived inside `TaskRuntimeService`.
 
 Target:
 
@@ -175,7 +181,7 @@ Tests:
 
 ## Completion Review
 
-Status: implementation complete, pending final full-suite verification before GitHub sync.
+Status: implementation and verification complete for this pass.
 
 ### 1. IntentDecisionV2 must not be rewritten in MetaclawSession
 
@@ -201,6 +207,7 @@ Complete.
 - `TaskRuntimeService.clearTasks()` returns structured task state.
 - Task status and clear result formatting live in `SessionPresentationService`.
 - Executor abort remains at the outer session/scheduler boundary when clearing a running task.
+- Clear-task presentation labels no longer live in `TaskRuntimeService`; the task runtime default cancellation reason is non-presentational.
 - Covered by `tests/core/task-runtime-service.test.ts`, `tests/core/task-runtime-boundary.test.ts`, and `tests/session/metaclaw-session-architecture-boundary.test.ts`.
 
 ### 4. Recall review policy must leave MetaclawSession
@@ -256,10 +263,11 @@ Complete for this roadmap pass.
 - Architecture tests now enforce that memory context preparation, execution runtime calls, verification delivery preparation, scheduler dispatch completion, and recall review application stay outside the session facade.
 - Remaining session responsibilities are dependency assembly, command/input coordination, compatibility glue, snapshots, and user-facing output plumbing.
 
-## Verification Plan
+## Verification Results
 
-Final sync is allowed only after these pass:
+Passed on 2026-06-24:
 
 - `npm run lint`
-- `npx vitest run tests/core tests/session tests/tui`
-- `npm test`
+- `npx vitest run tests/core tests/session tests/tui` -> 106 files, 555 tests passed.
+- `npm test` -> 159 files, 790 tests passed.
+- `npm run build`
