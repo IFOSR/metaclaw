@@ -84,7 +84,10 @@ export class SessionExecutionCoordinator {
       return;
     }
 
-    this.deps.callbacks.appendOutput('【提取最近历史记录上下文】');
+    this.deps.callbacks.appendOutput(
+      '【提取最近历史记录上下文】',
+      `→ 正在回忆任务 #${taskId} 的上下文...`,
+    );
     this.deps.callbacks.appendOutput('【构建执行上下文】');
     const memoryContext = await this.deps.memoryContextService.prepareExecutionContext({
       taskId,
@@ -98,7 +101,12 @@ export class SessionExecutionCoordinator {
       includeRecentConversationContext: request.includeRecentConversationContext,
     });
     const { preferences, conversationHistory, executionContextBundle } = memoryContext;
-    this.deps.callbacks.appendOutput('【执行上下文准备完成】');
+    this.deps.callbacks.appendOutput(
+      `→ 已召回 ${conversationHistory.length} 条相关上下文`,
+      `→ 正在构建任务 #${taskId} 的执行上下文...`,
+      '→ 执行上下文已准备完成',
+      '【执行上下文准备完成】',
+    );
     if (executionContextBundle.memoryContext.resolvedPreferences.length > 0) {
       for (const resolvedPreference of executionContextBundle.memoryContext.resolvedPreferences) {
         this.deps.memoryEngine.recordUsage(resolvedPreference.id, taskId);

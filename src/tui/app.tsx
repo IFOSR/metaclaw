@@ -33,6 +33,18 @@ interface CommandSuggestion {
   description: string;
 }
 
+interface EditorInputKey {
+  leftArrow?: boolean;
+  rightArrow?: boolean;
+  backspace?: boolean;
+  delete?: boolean;
+  forwardDelete?: boolean;
+  return?: boolean;
+  shift?: boolean;
+  meta?: boolean;
+  ctrl?: boolean;
+}
+
 const META_TEXT_COLOR = 'whiteBright';
 const PANEL_HEADER_COLOR = 'whiteBright';
 const RUNTIME_SUMMARY_COLOR = 'cyanBright';
@@ -57,6 +69,7 @@ const COMMAND_SUGGESTIONS: CommandSuggestion[] = createCommandSuggestions(create
 const EMPTY_SNAPSHOT: SessionSnapshot = {
   output: [],
   currentTaskId: null,
+  currentTask: null,
   runtimeState: {
     runningTaskId: null,
     runningExecutorName: null,
@@ -235,13 +248,22 @@ function hasPendingConfirmation(lines: string[]): boolean {
     || recentOutput.includes('确认执行');
 }
 
-function getComposerStatus(snapshot: SessionSnapshot, lines: string[], defaultExecutorName: string): string {
+function getComposerStatus(
+  snapshot: SessionSnapshot,
+  lines: string[],
+  defaultExecutorName: string,
+  isSubmitting: boolean,
+): string {
   if (hasPendingConfirmation(lines)) {
     return 'legacy_confirm_clearing';
   }
 
   if (snapshot.runtimeState.runningTaskId) {
     return `running ${snapshot.runtimeState.runningExecutorName ?? defaultExecutorName}`;
+  }
+
+  if (isSubmitting) {
+    return 'processing';
   }
 
   if (snapshot.runtimeState.blockedTaskIds.length > 0) {
@@ -402,9 +424,135 @@ function applyCommandSuggestion(editor: EditorState, suggestion: CommandSuggesti
   return { text, cursor };
 }
 
+function clampEditorCursor(editor: EditorState): EditorState {
+  return {
+    text: editor.text,
+    cursor: Math.max(0, Math.min(editor.cursor, editor.text.length)),
+  };
+}
+
+function insertEditorText(editor: EditorState, textToInsert: string): EditorState {
+  const current = clampEditorCursor(editor);
+  return {
+    text: current.text.slice(0, current.cursor) + textToInsert + current.text.slice(current.cursor),
+    cursor: current.cursor + textToInsert.length,
+  };
+}
+
+function applyEditorInput(editor: EditorState, char: string, key: EditorInputKey): EditorState {
+  const current = clampEditorCursor(editor);
+
+  if (char === '\u007f' || char === '\b') {
+    if (current.cursor === 0) {
+      return current;
+    }
+    return {
+      text: current.text.slice(0, current.cursor - 1) + current.text.slice(current.cursor),
+      cursor: current.cursor - 1,
+    };
+  }
+
+  if (key.leftArrow) {
+    return { ...current, cursor: Math.max(0, current.cursor - 1) };
+  }
+
+  if (key.rightArrow) {
+    return { ...current, cursor: Math.min(current.text.length, current.cursor + 1) };
+  }
+
+  if (key.backspace || key.delete) {
+    if (current.cursor === 0) {
+      return current;
+    }
+    return {
+      text: current.text.slice(0, current.cursor - 1) + current.text.slice(current.cursor),
+      cursor: current.cursor - 1,
+    };
+  }
+
+  if (key.forwardDelete) {
+    if (current.cursor >= current.text.length) {
+      return current;
+    }
+    return {
+      text: current.text.slice(0, current.cursor) + current.text.slice(current.cursor + 1),
+      cursor: current.cursor,
+    };
+  }
+
+  if (key.return && (key.shift || key.meta || key.ctrl)) {
+    return insertEditorText(current, '\n');
+  }
+
+  if (key.ctrl && char === 'j') {
+    return insertEditorText(current, '\n');
+  }
+
+  if (!key.ctrl && !key.meta && char) {
+    return insertEditorText(current, char);
+  }
+
+  return current;
+}
+
+function applyEditorInputChunk(editor: EditorState, chunk: string): EditorState {
+  let next = editor;
+  let index = 0;
+
+  while (index < chunk.length) {
+    if (chunk.startsWith('\u001b[D', index)) {
+      next = applyEditorInput(next, '', { leftArrow: true });
+      index += 3;
+      continue;
+    }
+
+    if (chunk.startsWith('\u001b[C', index)) {
+      next = applyEditorInput(next, '', { rightArrow: true });
+      index += 3;
+      continue;
+    }
+
+    if (chunk.startsWith('\u001b[3~', index)) {
+      next = applyEditorInput(next, '', { forwardDelete: true });
+      index += 4;
+      continue;
+    }
+
+    const char = chunk[index]!;
+    if (char === '\u007f' || char === '\b') {
+      next = applyEditorInput(next, '', { backspace: true });
+      index += 1;
+      continue;
+    }
+
+    if (char === '\n') {
+      next = applyEditorInput(next, 'j', { ctrl: true });
+      index += 1;
+      continue;
+    }
+
+    if (char === '\r') {
+      index += 1;
+      continue;
+    }
+
+    if (char === '\u001b') {
+      const escapeMatch = chunk.slice(index).match(/^\u001b\[[0-9;]*[~A-Za-z]/);
+      index += escapeMatch?.[0].length ?? 1;
+      continue;
+    }
+
+    next = applyEditorInput(next, char, {});
+    index += 1;
+  }
+
+  return next;
+}
+
 export function App(props: AppProps) {
   const [editor, setEditor] = useState({ text: '', cursor: 0 });
   const editorRef = useRef({ text: '', cursor: 0 });
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const inputHistoryRef = useRef<InputHistoryState>(createInputHistoryState());
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const suggestionIndexRef = useRef(0);
@@ -506,7 +654,56 @@ export function App(props: AppProps) {
     const hasCommandSuggestions = commandSuggestions.length > 0;
     lastInputAtRef.current = Date.now();
 
+    const commitEditor = async (editorToCommit: EditorState) => {
+      if (!editorToCommit.text.trim()) return;
+
+      const { userInput, nextEditor } = prepareEditorSubmission(editorToCommit);
+      inputHistoryRef.current = recordInputHistory(inputHistoryRef.current, userInput, nextEditor);
+      suggestionIndexRef.current = 0;
+      setSuggestionIndex(0);
+      editorRef.current = nextEditor;
+      setEditor(nextEditor);
+
+      setIsSubmitting(true);
+      try {
+        const result = await sessionRef.current!.submit(userInput);
+        if (result.exitRequested) {
+          setTimeout(() => process.exit(0), 100);
+        }
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    const rawSubmitIndex = !key.shift && !key.meta && !key.ctrl
+      ? Math.min(
+          ...[char.indexOf('\r'), char.indexOf('\n')]
+            .filter(index => index >= 0),
+        )
+      : -1;
+    if (rawSubmitIndex >= 0 && Number.isFinite(rawSubmitIndex)) {
+      const beforeSubmit = char.slice(0, rawSubmitIndex);
+      const next = applyEditorInputChunk(editorState, beforeSubmit);
+      inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
+      suggestionIndexRef.current = 0;
+      setSuggestionIndex(0);
+      editorRef.current = next;
+      setEditor(next);
+      await commitEditor(next);
+      return;
+    }
+
     if (key.return) {
+      if (key.shift || key.meta || key.ctrl) {
+        const next = applyEditorInput(editorState, char, key);
+        inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
+        suggestionIndexRef.current = 0;
+        setSuggestionIndex(0);
+        editorRef.current = next;
+        setEditor(next);
+        return;
+      }
+
       if (hasCommandSuggestions) {
         const selected = commandSuggestions[clampSuggestionIndex(suggestionIndexRef.current, commandSuggestions)];
         if (selected) {
@@ -520,19 +717,7 @@ export function App(props: AppProps) {
         return;
       }
 
-      if (!editorState.text.trim()) return;
-
-      const { userInput, nextEditor } = prepareEditorSubmission(editorState);
-      inputHistoryRef.current = recordInputHistory(inputHistoryRef.current, userInput, nextEditor);
-      suggestionIndexRef.current = 0;
-      setSuggestionIndex(0);
-      editorRef.current = nextEditor;
-      setEditor(nextEditor);
-
-      const result = await sessionRef.current!.submit(userInput);
-      if (result.exitRequested) {
-        setTimeout(() => process.exit(0), 100);
-      }
+      await commitEditor(editorState);
       return;
     }
 
@@ -574,54 +759,21 @@ export function App(props: AppProps) {
       return;
     }
 
-    if (key.leftArrow) {
-      const next = { ...editorState, cursor: Math.max(0, editorState.cursor - 1) };
-      suggestionIndexRef.current = 0;
-      setSuggestionIndex(0);
-      editorRef.current = next;
-      setEditor(next);
-      return;
-    }
-
-    if (key.rightArrow) {
-      const next = { ...editorState, cursor: Math.min(editorState.text.length, editorState.cursor + 1) };
-      suggestionIndexRef.current = 0;
-      setSuggestionIndex(0);
-      editorRef.current = next;
-      setEditor(next);
-      return;
-    }
-
-    if (key.backspace || key.delete) {
-      if (editorState.cursor > 0) {
-        const next = {
-          text: editorState.text.slice(0, editorState.cursor - 1) + editorState.text.slice(editorState.cursor),
-          cursor: editorState.cursor - 1,
-        };
-        inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
-        suggestionIndexRef.current = 0;
-        setSuggestionIndex(0);
-        editorRef.current = next;
-        setEditor(next);
-      }
-      return;
-    }
-
-    if (!key.ctrl && !key.meta && char) {
-      const next = {
-        text: editorState.text.slice(0, editorState.cursor) + char + editorState.text.slice(editorState.cursor),
-        cursor: editorState.cursor + char.length,
-      };
+    if (key.leftArrow || key.rightArrow || key.backspace || key.delete || char) {
+      const next = char.length > 1
+        ? applyEditorInputChunk(editorState, char)
+        : applyEditorInput(editorState, char, key);
       inputHistoryRef.current = resetInputHistoryBrowsing(inputHistoryRef.current, next);
       suggestionIndexRef.current = 0;
       setSuggestionIndex(0);
       editorRef.current = next;
       setEditor(next);
+      return;
     }
   });
 
   const renderLines = buildRenderLines(committedOutput);
-  const composerStatus = getComposerStatus(snapshot, committedOutput, props.executor.name);
+  const composerStatus = getComposerStatus(snapshot, committedOutput, props.executor.name, isSubmitting);
   const runtimeSummary = `当前执行 ${snapshot.runtimeState.runningTaskId ? 1 : 0} | 待执行 ${snapshot.runtimeState.readyTaskIds.length} | 已挂起 ${snapshot.runtimeState.parkedTaskIds.length} | 阻塞 ${snapshot.runtimeState.blockedTaskIds.length}`;
   const latestEvent = `最近事件 ${snapshot.runtimeState.lastEvent ?? '0'}`;
   const waitingHintVisible = shouldShowWaitingHint(snapshot, committedOutput, showWaitingIndicator);
@@ -656,6 +808,9 @@ export function App(props: AppProps) {
       <Box flexDirection="column" borderStyle="round" borderColor={STATUS_PANEL_BORDER_COLOR} paddingX={1} marginBottom={1}>
         <Text color={PANEL_HEADER_COLOR} bold>运行状态</Text>
         <Text color={RUNTIME_SUMMARY_COLOR}>{runtimeSummary}</Text>
+        {snapshot.currentTask && (
+          <Text color={META_TEXT_COLOR}>当前任务 #{snapshot.currentTask.id} [{snapshot.currentTask.status.toUpperCase()}] {snapshot.currentTask.title}</Text>
+        )}
         <Text color={META_TEXT_COLOR}>{latestEvent}</Text>
       </Box>
       <Box flexDirection="column" borderStyle="round" borderColor={COMPOSER_PANEL_BORDER_COLOR} paddingX={1}>
@@ -700,6 +855,9 @@ export {
   STATUS_PANEL_BORDER_COLOR,
   getCommandSuggestions,
   applyCommandSuggestion,
+  applyEditorInput,
+  applyEditorInputChunk,
+  getComposerStatus,
   buildRenderLines,
   formatRenderLine,
   getLineColor,

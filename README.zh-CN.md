@@ -20,6 +20,8 @@ MetaClaw 是一个本地优先的 AI Task OS。它把自然语言需求变成可
 - 生成文件自动记录为任务产物。
 - 飞书回复、文件同步和 Markdown 在线预览由后端统一处理。
 - 本地 Gateway 支持多个终端连接同一个 MetaClaw runtime。
+- 交互式 TUI 会展示用户提交内容、当前任务、路由状态、执行准备、执行器进度和最终任务结果，让用户能看到核心执行路径，而不是只看到最后答案。
+- TUI 输入框支持常见终端编辑行为：空格、多行输入、左右光标移动、按光标位置 Backspace 删除前一个字符，以及终端发出原始 Delete escape sequence 时的向前删除。
 - 提供 `npm run smoke:metaclaw` 真实端到端烟测，实际启动 MetaClaw CLI、执行器、文件产物捕获和回归检查。
 
 ## 核心架构
@@ -437,6 +439,14 @@ Skill 的限制：
 ```bash
 metaclaw
 ```
+
+交互式 TUI 会在任务执行时保持用户可见性：
+
+- 用户提交的输入会回显到 transcript。
+- 输入框状态会显示 `processing`、`running <executor>`、`blocked` 或 `idle`。
+- 状态栏会展示当前任务 ID、任务状态和标题。
+- 路由和执行过程会展示核心进度，包括理解用户请求、执行策略、上下文召回、执行上下文构建、执行器路由、执行器进度、验收和最终结果。
+- 输入框支持正常终端编辑：空格、多行输入、左右移动光标、Backspace 删除光标前字符，以及原始 Delete escape sequence 的向前删除。
 
 或使用项目脚本：
 

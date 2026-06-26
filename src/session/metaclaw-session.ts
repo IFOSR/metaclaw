@@ -81,6 +81,11 @@ export interface MetaclawSessionDeps {
 export interface SessionSnapshot {
   output: string[];
   currentTaskId: string | null;
+  currentTask: {
+    id: string;
+    title: string;
+    status: Task['status'];
+  } | null;
   runtimeState: RuntimeState;
   latestGuidance: GuidanceState | null;
 }
@@ -307,9 +312,18 @@ export class MetaclawSession {
 
   getSnapshot(): SessionSnapshot {
     this.reconcileLatestGuidance();
+    const currentTaskId = this.getCurrentTaskId();
+    const currentTask = currentTaskId ? this.taskRuntimeService.findTask(currentTaskId) : null;
     return {
       output: [...this.output],
-      currentTaskId: this.getCurrentTaskId(),
+      currentTaskId,
+      currentTask: currentTask
+        ? {
+            id: currentTask.id,
+            title: currentTask.title,
+            status: currentTask.status,
+          }
+        : null,
       runtimeState: this.runtimeState,
       latestGuidance: this.latestGuidance
         ? {
@@ -688,6 +702,10 @@ export class MetaclawSession {
     options: { suppressSafetyGuardHints?: boolean } = {},
   ): Promise<boolean> {
     const recentTasks = this.buildRecentTaskSummaries(this.taskRuntimeService.listTasks());
+    this.appendOutput(
+      '【理解用户请求】',
+      '→ 正在分析目标、上下文与可执行边界',
+    );
     const decision = await this.getIntentOrchestrator().decide(
       this.buildIntentOrchestratorInput(userInput, recentTasks, options),
     );

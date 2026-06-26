@@ -179,6 +179,218 @@ describe('App input availability', () => {
     app.cleanup();
   });
 
+  it('supports multiline terminal editing with spaces, cursor movement, backspace, and forward delete before submit', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-multiline-editor');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: 'multiline editor test',
+        response: 'ok',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_multiline_editor',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    const typeText = async (text: string) => {
+      for (const char of text) {
+        await inputCapture.handler?.(char, {});
+        await flushUpdates();
+      }
+    };
+
+    await typeText('第一行');
+    await (inputCapture.handler?.('', { return: true, shift: true }) ?? Promise.resolve());
+    await flushUpdates();
+
+    expect(llmBridge.resolveRoute).not.toHaveBeenCalled();
+    expect(app.lastFrame()).toContain('第一行');
+
+    await typeText('第二  错行');
+    await inputCapture.handler?.('', { leftArrow: true });
+    await flushUpdates();
+    await inputCapture.handler?.('', { leftArrow: true });
+    await flushUpdates();
+    await inputCapture.handler?.('\u001b[3~', {});
+    await flushUpdates();
+    await inputCapture.handler?.('', { delete: true });
+    await flushUpdates();
+    await typeText('补  充');
+
+    await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
+    await flushUpdates();
+
+    expect(llmBridge.resolveRoute).toHaveBeenCalledWith(
+      '第一行\n第二 补  充行',
+      expect.any(Array),
+    );
+    expect(app.lastFrame()).toContain('> 第一行');
+    expect(app.lastFrame()).toContain('第二 补  充行');
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('treats the Ink delete key event as normal Backspace in the composer', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-normal-backspace');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: 'backspace test',
+        response: 'ok',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_normal_backspace',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    for (const char of 'abc') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    await inputCapture.handler?.('', { delete: true });
+    await flushUpdates();
+    await inputCapture.handler?.('', { delete: true });
+    await flushUpdates();
+    await inputCapture.handler?.('X', {});
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('│ > aX');
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('treats a raw LF terminal Enter as submit instead of inserting it into the editor', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-raw-lf-submit');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        durationMs: 100,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const llmBridge = {
+      resolveRoute: vi.fn().mockResolvedValue({
+        route: 'conversation',
+        reason: 'raw LF submit test',
+        response: 'ok',
+      }),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_raw_lf_submit',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    for (const char of '请生成报告') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    await inputCapture.handler?.('\n', {});
+    await flushUpdates();
+
+    expect(llmBridge.resolveRoute).toHaveBeenCalledWith('请生成报告', expect.any(Array));
+    expect(app.lastFrame()).toContain('> 请生成报告');
+
+    await inputCapture.handler?.('X', {});
+    await flushUpdates();
+    expect(app.lastFrame()).toContain('│ > X');
+
+    app.unmount();
+    app.cleanup();
+  });
+
   it('uses arrow keys to choose slash command suggestions before falling back to history recall', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
@@ -322,6 +534,82 @@ describe('App input availability', () => {
       exitCode: 0,
       durationMs: 1000,
     });
+    await flushUpdates();
+
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows a processing composer status while submitted input is still being routed', async () => {
+    const db = createTestDb();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-processing-status');
+    const memoryEngine = new MemoryEngine(new PreferenceRepo(db), new ObservationRepo(db));
+    const orchestration = new OrchestrationEngine(taskEngine);
+    const contextRecaller = new ContextRecaller(db);
+    const executorDeferred = createDeferredResult();
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockImplementation(() => executorDeferred.promise),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    let resolveRoute!: (value: string) => void;
+    const pendingRoute = new Promise<string>(resolve => {
+      resolveRoute = resolve;
+    });
+    const llmBridge = {
+      query: vi.fn().mockImplementation(() => pendingRoute),
+      resolveIntent: vi.fn().mockResolvedValue({
+        type: 'new',
+        taskId: null,
+        reason: '新任务',
+      }),
+      rankInteractions: vi.fn().mockResolvedValue([]),
+    } as unknown as LlmBridge;
+
+    const app = render(
+      React.createElement(App, {
+        taskEngine,
+        memoryEngine,
+        orchestration,
+        executor,
+        db,
+        config: createConfig(),
+        sessionId: 'sess_processing_status',
+        contextRecaller,
+        llmBridge,
+      })
+    );
+
+    for (const char of '生成一个状态报告') {
+      await inputCapture.handler?.(char, {});
+      await flushUpdates();
+    }
+    const submitPromise = inputCapture.handler?.('', { return: true }) ?? Promise.resolve();
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('status: processing');
+    expect(app.lastFrame()).toContain('> 生成一个状态报告');
+    expect(app.lastFrame()).toContain('【理解用户请求】');
+    expect(app.lastFrame()).toContain('→ 正在分析目标、上下文与可执行边界');
+
+    resolveRoute(semanticDurableTask('生成状态报告'));
+    await flushUpdates();
+
+    expect(app.lastFrame()).toContain('→ 已识别：可执行任务');
+    expect(app.lastFrame()).toContain('→ 执行策略：创建可追踪任务并派发给 codex-cli');
+    expect(app.lastFrame()).toContain('status: running codex-cli');
+    expect(app.lastFrame()).toContain('当前任务 #');
+    expect(app.lastFrame()).toContain('[RUNNING] 生成一个状态报告');
+
+    executorDeferred.resolve({
+      success: true,
+      output: 'done',
+      exitCode: 0,
+      durationMs: 100,
+    });
+    await submitPromise;
     await flushUpdates();
 
     app.unmount();
