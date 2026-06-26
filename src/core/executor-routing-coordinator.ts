@@ -75,16 +75,10 @@ export class ExecutorRoutingCoordinator {
   }
 
   formatRunLabel(plan: ExecutionPlanV2): string {
-    if (plan.mode === 'race_executors') {
-      return this.resolveRaceExecutorNames(plan).join('+');
-    }
     return plan.selectedExecutor;
   }
 
   formatDisplayLabel(plan: ExecutionPlanV2): string {
-    if (plan.mode === 'race_executors') {
-      return this.resolveRaceExecutorNames(plan).join(' + ');
-    }
     return plan.selectedExecutor;
   }
 
@@ -96,14 +90,6 @@ export class ExecutorRoutingCoordinator {
         ? `→ MetaClaw：验收标准：${routedExecutor.executionPlan.acceptanceCriteria.map(criterion => criterion.id).join('、')}`
         : '→ MetaClaw：验收标准：无额外标准',
     ];
-    if (routedExecutor.executionPlan.mode === 'race_executors') {
-      return [
-        `→ MetaClaw：路由决策：调研竞速 (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
-        `→ MetaClaw：执行器：${this.formatDisplayLabel(routedExecutor.executionPlan)}`,
-        `→ MetaClaw：原始首选：${routedExecutor.decision.selectedExecutor}；原因：${reason}`,
-        ...planningLines,
-      ];
-    }
 
     return [
       `→ MetaClaw：路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
@@ -112,22 +98,4 @@ export class ExecutorRoutingCoordinator {
     ];
   }
 
-  formatRaceDispatchLine(plan: ExecutionPlanV2): string {
-    return `→ MetaClaw：调研竞速：同时派发给 ${this.formatDisplayLabel(plan)}；谁先返回采用谁的结果，并自动终止其他执行器`;
-  }
-
-  private resolveRaceExecutorNames(plan: ExecutionPlanV2): string[] {
-    const researchExecutorNames = new Set<string>(
-      [...plan.candidateExecutors, plan.selectedExecutor]
-        .filter(name => name === 'pi-agent' || name === 'hermes-agent'),
-    );
-    const orderedResearchExecutors = ['pi-agent', 'hermes-agent']
-      .filter(name => researchExecutorNames.has(name));
-
-    if (orderedResearchExecutors.length > 0) {
-      return orderedResearchExecutors;
-    }
-
-    return plan.candidateExecutors.length > 0 ? plan.candidateExecutors : [plan.selectedExecutor];
-  }
 }

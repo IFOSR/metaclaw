@@ -134,6 +134,7 @@ describe('executor admin and routing services', () => {
           requiresVerification: true,
           canModifyFiles: true,
           requiresExternalGateway: false,
+          capabilityClass: 'code_edit',
           primaryIntent: 'repo_execution',
           matchedBoundary: ['repo_execution'],
         },

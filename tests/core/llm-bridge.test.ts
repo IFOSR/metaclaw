@@ -135,7 +135,7 @@ describe('LlmBridge', () => {
           target: 'codex-cli',
           action: 'auto_dispatch',
           primaryIntent: 'repo_execution',
-          capabilityClass: 'repo_execution',
+          capabilityClass: 'code_edit',
           requiredCapabilities: ['coding', 'tests'],
           matchedBoundary: ['repo_mutation'],
           riskLevel: 'medium',

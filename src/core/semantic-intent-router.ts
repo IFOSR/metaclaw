@@ -248,7 +248,7 @@ export class SemanticIntentRouter {
           : null,
         executorDecision,
         capabilityClass: executorDecision
-          ? capabilityClassFromLegacyIntent(executorDecision.primaryIntent)
+          ? capabilityClassFromLegacyIntent(executorDecision.primaryIntent) ?? 'general'
           : routeDecision.route === 'task_control' ? 'conversation' : 'general',
         fallback: false,
       });

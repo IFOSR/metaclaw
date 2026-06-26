@@ -184,7 +184,7 @@ describe('ExecutionRuntime', () => {
       taskId: 'task_runtime',
       executionId: 'exec_runtime',
       plan: createPlan({
-        mode: 'race_executors',
+        mode: 'single_executor',
         selectedExecutor: 'pi-agent',
         candidateExecutors: ['pi-agent', 'hermes-agent'],
         routeDecision: createRouteDecision({

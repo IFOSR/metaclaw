@@ -106,6 +106,7 @@ describe('ExecutionPlanningService', () => {
         requiresVerification: true,
         canModifyFiles: true,
         requiresExternalGateway: false,
+        capabilityClass: 'code_edit',
         primaryIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation'],
       },

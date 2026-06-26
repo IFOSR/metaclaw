@@ -236,6 +236,7 @@ export class TaskResumePlanner {
                 requiresVerification: false,
                 canModifyFiles: false,
                 requiresExternalGateway: false,
+                capabilityClass: 'conversation',
                 matchedBoundary: [],
               },
               hints: [],

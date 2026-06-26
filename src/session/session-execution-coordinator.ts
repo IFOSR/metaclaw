@@ -131,10 +131,6 @@ export class SessionExecutionCoordinator {
       this.deps.executorRoutingCoordinator.formatRunLabel(routedExecutor.executionPlan),
     );
     this.deps.callbacks.appendOutput(...this.deps.executorRoutingCoordinator.formatRoutingDecision(routedExecutor));
-    if (routedExecutor.executionPlan.mode === 'race_executors') {
-      this.deps.callbacks.appendOutput(this.deps.executorRoutingCoordinator.formatRaceDispatchLine(routedExecutor.executionPlan));
-    }
-
     this.deps.callbacks.refreshRuntimeState();
     this.deps.callbacks.appendOutput(
       `【Executor: ${routedExecutor.executionPlan.selectedExecutor}｜执行】`,

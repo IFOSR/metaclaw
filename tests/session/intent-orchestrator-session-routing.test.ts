@@ -62,6 +62,7 @@ function decision(overrides: Partial<IntentDecisionV2> = {}): IntentDecisionV2 {
       requiresVerification: false,
       canModifyFiles: true,
       requiresExternalGateway: false,
+      capabilityClass: 'code_edit',
     },
     hints: [],
     ...overrides,
@@ -159,6 +160,7 @@ describe('MetaclawSession IntentOrchestrator integration', () => {
           requiresVerification: false,
           canModifyFiles: false,
           requiresExternalGateway: false,
+          capabilityClass: 'conversation',
         },
       })),
     };
@@ -218,6 +220,7 @@ describe('MetaclawSession IntentOrchestrator integration', () => {
           requiresVerification: true,
           canModifyFiles: true,
           requiresExternalGateway: false,
+          capabilityClass: 'code_edit',
           primaryIntent: 'repo_execution',
           matchedBoundary: ['repo_execution'],
         },

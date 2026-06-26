@@ -26,7 +26,7 @@ describe('Execution runtime architecture boundaries', () => {
     expect(sessionSource).not.toContain('createExecutorByName');
   });
 
-  it('centralizes executor registry, race, and fallback behavior in ExecutionRuntime', () => {
+  it('centralizes executor registry and fallback behavior in ExecutionRuntime', () => {
     const runtimeSource = readSource('src/core/execution-runtime.ts');
 
     expect(runtimeSource).toContain('export class ExecutorAdapterRegistry');
@@ -36,7 +36,7 @@ describe('Execution runtime architecture boundaries', () => {
     expect(runtimeSource).not.toContain('const adapterFactories');
     expect(runtimeSource).toContain('executeWithOptionalRace');
     expect(runtimeSource).toContain('executeCodexFallback');
-    expect(runtimeSource).toContain("plan.mode !== 'race_executors'");
+    expect(runtimeSource).not.toContain("plan.mode !== 'race_executors'");
   });
 
   it('routes complex execution through multi-executor orchestration and agentic loop in ExecutionRuntime', () => {

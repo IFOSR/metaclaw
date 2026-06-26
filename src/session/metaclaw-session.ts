@@ -962,6 +962,7 @@ export class MetaclawSession {
         requiresVerification: false,
         canModifyFiles: false,
         requiresExternalGateway: false,
+        capabilityClass: 'general',
         matchedBoundary: [],
       },
       hints: [],

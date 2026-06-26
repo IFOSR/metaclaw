@@ -1,6 +1,7 @@
 import type { ExecutorAvailability, ExecutorProfile, ExecutorRiskLevel, TaskRouteIntent } from '../core/executor-router.js';
 import { ExecutionPlanningService } from '../core/execution-planning-service.js';
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
+import type { CapabilityClass } from '../core/capability-class.js';
 import type { Task } from '../core/types.js';
 import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
@@ -117,6 +118,14 @@ function inferPreviewExecutionMode(userInput: string): IntentExecutionMode {
     : 'single_executor';
 }
 
+function capabilityClassFromPreviewIntent(intent: TaskRouteIntent): CapabilityClass {
+  if (intent === 'repo_execution') return 'code_edit';
+  if (intent === 'research_workflow') return 'research';
+  if (intent === 'memory_agent_ops') return 'memory_ops';
+  if (intent === 'conversation_or_control') return 'conversation';
+  return 'general';
+}
+
 function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile[], defaultExecutorName: string): IntentDecisionV2 {
   const primaryIntent = inferPreviewPrimaryIntent(userInput);
   const matchingProfiles = profiles
@@ -162,6 +171,7 @@ function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile
       requiresVerification: primaryIntent === 'repo_execution',
       canModifyFiles: primaryIntent === 'repo_execution',
       requiresExternalGateway: primaryIntent === 'memory_agent_ops',
+      capabilityClass: capabilityClassFromPreviewIntent(primaryIntent),
       primaryIntent,
       matchedBoundary: primaryIntent === 'general' ? [] : [primaryIntent],
     },

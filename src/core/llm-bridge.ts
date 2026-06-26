@@ -3,6 +3,8 @@ import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
 import type { NaturalLanguageRoute, NaturalLanguageRouteAction, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
 import type { ExecutorProfile, IntentDecision, IntentDecisionKind, IntentRouteAction, TaskRouteIntent } from './executor-router.js';
+import type { CapabilityClass } from './capability-class.js';
+import { isCapabilityClass } from './capability-class.js';
 import { buildCodexNonInteractiveArgs } from '../executor/codex-args.js';
 
 export interface TaskSummary {
@@ -414,6 +416,8 @@ export class LlmBridge {
       '如果是任务状态/任务控制，route.target 必须是 metaclaw。',
       '如果需要本地 repo 修改或测试，通常选择 repo_execution 能力 executor；如果用户不允许改文件，canModifyFiles=false。',
       '如果需要调研、多工具、长期记忆或外部消息网关，选择对应 profile，不要默认给 repo executor。',
+      'route.capabilityClass 必须使用新的 CapabilityClass 单类输出：code_edit / research / messaging / memory_ops / office_automation / conversation / general。',
+      'CapabilityClass 按工具/副作用边界判断，不按模型推理能力判断；不要产出 reasoning 类。',
       '',
       `用户原话：${input.userInput}`,
       `当前会话焦点：${input.currentFocus}`,
@@ -448,7 +452,7 @@ export class LlmBridge {
           target: 'metaclaw|executor profile name',
           action: 'none|auto_dispatch|ask_review|fallback_default|ask_clarification',
           primaryIntent: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
-          capabilityClass: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
+          capabilityClass: 'code_edit|research|messaging|memory_ops|office_automation|conversation|general',
           requiredCapabilities: ['capability names'],
           matchedBoundary: ['semantic boundary labels'],
           riskLevel: 'low|medium|high',
@@ -711,7 +715,7 @@ export class LlmBridge {
           target: typeof route.target === 'string' ? route.target : 'metaclaw',
           action: this.parseIntentRouteAction(route.action),
           primaryIntent: this.parseTaskRouteIntent(route.primaryIntent),
-          capabilityClass: this.parseTaskRouteIntent(route.capabilityClass),
+          capabilityClass: this.capabilityClassToLegacyIntent(this.parseCapabilityClass(route.capabilityClass)),
           requiredCapabilities: Array.isArray(route.requiredCapabilities)
             ? route.requiredCapabilities.filter((item: unknown): item is string => typeof item === 'string')
             : [],
@@ -785,6 +789,27 @@ export class LlmBridge {
       || value === 'general'
       ? value
       : 'general';
+  }
+
+  private parseCapabilityClass(value: unknown): CapabilityClass {
+    if (isCapabilityClass(value)) {
+      return value;
+    }
+    if (value === 'repo_execution') return 'code_edit';
+    if (value === 'research_workflow') return 'research';
+    if (value === 'memory_agent_ops') return 'memory_ops';
+    if (value === 'conversation_or_control') return 'conversation';
+    return 'general';
+  }
+
+  private capabilityClassToLegacyIntent(capabilityClass: CapabilityClass): TaskRouteIntent {
+    if (capabilityClass === 'code_edit') return 'repo_execution';
+    if (capabilityClass === 'research') return 'research_workflow';
+    if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
+      return 'memory_agent_ops';
+    }
+    if (capabilityClass === 'conversation') return 'conversation_or_control';
+    return 'general';
   }
 
   private parseExecutorRiskLevel(value: unknown): 'low' | 'medium' | 'high' {
