@@ -316,10 +316,12 @@ describe('executor router command acceptance', () => {
     });
     await submitPromise;
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ 路由决策：pi-agent (auto_dispatch');
+    expect(output).toContain('→ MetaClaw：路由决策：调研竞速 (auto_dispatch');
+    expect(output).toContain('→ MetaClaw：执行器：pi-agent + hermes-agent');
+    expect(output).toContain('→ MetaClaw：原始首选：pi-agent；原因：');
     expect(output).toContain('workflow_automation');
-    expect(output).not.toContain('调研竞速');
-    expect(output).not.toContain('已先返回，已终止');
+    expect(output).toContain('→ MetaClaw：调研竞速：同时派发给 pi-agent + hermes-agent；谁先返回采用谁的结果，并自动终止其他执行器');
+    expect(output).toContain('→ pi-agent 已先返回，已终止：hermes-agent');
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;

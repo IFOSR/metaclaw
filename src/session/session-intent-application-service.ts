@@ -58,6 +58,7 @@ export class SessionIntentApplicationService {
     recentTasks: TaskSummary[];
   }): Promise<boolean> {
     const { userInput, decision, recentTasks } = input;
+    this.deps.callbacks.appendOutput(...this.formatIntentDecisionProgress(decision));
 
     if (decision.interactionType === 'clarification') {
       this.deps.callbacks.appendIntentClarification(userInput, decision);
@@ -89,6 +90,43 @@ export class SessionIntentApplicationService {
 
     await this.createAndPrepareTask(userInput, decision);
     return true;
+  }
+
+  private formatIntentDecisionProgress(decision: IntentDecisionV2): string[] {
+    if (decision.interactionType === 'durable_task' || decision.interactionType === 'executor_dispatch') {
+      const selectedExecutor = decision.execution.selectedExecutor ?? this.deps.executor.name;
+      const strategy = decision.task.binding === 'reference'
+        ? `复用已有任务并派发给 ${selectedExecutor}`
+        : `创建可追踪任务并派发给 ${selectedExecutor}`;
+      return [
+        '→ MetaClaw：已识别可执行任务',
+        `→ MetaClaw：执行策略：${strategy}`,
+        `【Executor: ${selectedExecutor}｜派发准备】`,
+        `→ Executor: ${selectedExecutor} 将处理该任务`,
+      ];
+    }
+
+    if (decision.interactionType === 'task_control') {
+      return [
+        '→ MetaClaw：已识别任务控制请求',
+        `→ MetaClaw：执行策略：由 MetaClaw 处理 ${decision.task.control}`,
+      ];
+    }
+
+    if (decision.interactionType === 'direct_reply') {
+      const selectedExecutor = decision.execution.selectedExecutor ?? this.deps.executor.name;
+      return [
+        '→ MetaClaw：已识别普通对话',
+        '→ MetaClaw：执行策略：直接回答，不创建任务',
+        `【Executor: ${selectedExecutor}｜回答】`,
+        `→ Executor: ${selectedExecutor} 处理本次回答`,
+      ];
+    }
+
+    return [
+      '→ MetaClaw：已识别需要澄清',
+      '→ MetaClaw：执行策略：先向用户确认，不创建任务',
+    ];
   }
 
   private async applyTaskControlDecision(

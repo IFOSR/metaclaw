@@ -20,6 +20,8 @@ It is built for teams who need agents to do more than answer the current turn. M
 - Captures generated files as task artifacts.
 - Sends Feishu chat replies, file artifacts, and Markdown preview links through the backend delivery layer.
 - Provides a local Gateway so multiple terminals can connect to one MetaClaw runtime.
+- Shows the interactive TUI input, current task, routing status, execution preparation, executor progress, and final task result so users can follow the core execution path instead of seeing only the final answer.
+- Supports terminal-native editing in the TUI composer, including spaces, multiline input, left/right cursor movement, Backspace at the cursor, and forward delete when the terminal emits a raw delete sequence.
 - Ships with `npm run smoke:metaclaw`, a real MetaClaw end-to-end smoke gate that runs the CLI, executor, artifact capture, and regression checks.
 
 ## Core Architecture
@@ -420,6 +422,15 @@ Start the TUI:
 ```bash
 metaclaw
 ```
+
+The interactive TUI is designed to keep the user oriented while work is running:
+
+- Submitted user input is echoed into the transcript.
+- The composer shows `processing`, `running <executor>`, `blocked`, or `idle`.
+- The status panel shows the current task id, status, and title when a task is active.
+- Core progress lines are shown during routing and execution, including request understanding, execution strategy, context recall, context construction, executor routing, executor progress, verification, and final result.
+- MetaClaw orchestration milestones are labeled as `【MetaClaw｜...】`; worker milestones are labeled as `【Executor: <name>｜...】` and executor progress lines include the concrete executor name, so users can distinguish scheduler/routing work from the runtime that is actually answering or executing.
+- The input composer supports normal terminal editing: spaces, multiline input with modified Enter/Ctrl+J, left/right cursor movement, Backspace deleting the character before the cursor, and forward delete for raw delete escape sequences.
 
 Or use the project helper:
 

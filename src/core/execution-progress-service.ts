@@ -31,7 +31,7 @@ export class ExecutionProgressService {
         const progressText = parsedSkillEvent
           ? `Skill ${parsedSkillEvent.skillName}: ${parsedSkillEvent.message}`
           : event.text;
-        const progressLine = `${parsedSkillEvent ? '🛠️' : '·'} #${input.taskId} [${executor.name}] ${progressText}`;
+        const progressLine = `${parsedSkillEvent ? '🛠️' : '·'} Executor: ${executor.name}｜#${input.taskId}｜${progressText}`;
         if (parsedSkillEvent) {
           evidenceText.push([
             `skill_event=${parsedSkillEvent.eventType}`,

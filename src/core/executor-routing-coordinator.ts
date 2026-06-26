@@ -91,29 +91,29 @@ export class ExecutorRoutingCoordinator {
   formatRoutingDecision(routedExecutor: RoutedExecutorSelection): string[] {
     const reason = `${routedExecutor.decision.primaryIntent} / ${routedExecutor.decision.matchedBoundary.join(' + ') || routedExecutor.decision.reason}`;
     const planningLines = [
-      `→ 执行计划：${routedExecutor.executionPlan.mode}；${routedExecutor.executionPlan.reason}`,
+      `→ MetaClaw：执行计划：${routedExecutor.executionPlan.mode}；${routedExecutor.executionPlan.reason}`,
       routedExecutor.executionPlan.acceptanceCriteria.length > 0
-        ? `→ 验收标准：${routedExecutor.executionPlan.acceptanceCriteria.map(criterion => criterion.id).join('、')}`
-        : '→ 验收标准：无额外标准',
+        ? `→ MetaClaw：验收标准：${routedExecutor.executionPlan.acceptanceCriteria.map(criterion => criterion.id).join('、')}`
+        : '→ MetaClaw：验收标准：无额外标准',
     ];
     if (routedExecutor.executionPlan.mode === 'race_executors') {
       return [
-        `→ 路由决策：调研竞速 (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
-        `→ 执行器：${this.formatDisplayLabel(routedExecutor.executionPlan)}`,
-        `→ 原始首选：${routedExecutor.decision.selectedExecutor}；原因：${reason}`,
+        `→ MetaClaw：路由决策：调研竞速 (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+        `→ MetaClaw：执行器：${this.formatDisplayLabel(routedExecutor.executionPlan)}`,
+        `→ MetaClaw：原始首选：${routedExecutor.decision.selectedExecutor}；原因：${reason}`,
         ...planningLines,
       ];
     }
 
     return [
-      `→ 路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
-      `→ 原因：${reason}`,
+      `→ MetaClaw：路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+      `→ MetaClaw：原因：${reason}`,
       ...planningLines,
     ];
   }
 
   formatRaceDispatchLine(plan: ExecutionPlanV2): string {
-    return `→ 调研竞速：同时派发给 ${this.formatDisplayLabel(plan)}；谁先返回采用谁的结果，并自动终止其他执行器`;
+    return `→ MetaClaw：调研竞速：同时派发给 ${this.formatDisplayLabel(plan)}；谁先返回采用谁的结果，并自动终止其他执行器`;
   }
 
   private resolveRaceExecutorNames(plan: ExecutionPlanV2): string[] {

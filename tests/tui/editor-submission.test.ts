@@ -10,6 +10,9 @@ import {
   getLineColor,
   getCommandSuggestions,
   applyCommandSuggestion,
+  applyEditorInput,
+  applyEditorInputChunk,
+  getComposerStatus,
   prepareEditorSubmission,
   recallNextInput,
   recallPreviousInput,
@@ -65,6 +68,27 @@ describe('prepareEditorSubmission', () => {
     expect(PROMPT_COLOR).toBe('greenBright');
   });
 
+  it('prefers the concrete running executor over transient submission processing status', () => {
+    expect(getComposerStatus({
+      output: [],
+      currentTaskId: 'task_running',
+      currentTask: {
+        id: 'task_running',
+        title: '运行中的任务',
+        status: 'running',
+      },
+      runtimeState: {
+        runningTaskId: 'task_running',
+        runningExecutorName: 'codex-cli',
+        readyTaskIds: [],
+        parkedTaskIds: [],
+        blockedTaskIds: [],
+        lastEvent: '开始执行任务 #task_running',
+      },
+      latestGuidance: null,
+    }, [], 'codex-cli', true)).toBe('running codex-cli');
+  });
+
   it('recalls submitted input history while preserving the current draft', () => {
     let history = createInputHistoryState();
     history = recordInputHistory(history, '第一条任务', { text: '', cursor: 0 });
@@ -113,5 +137,69 @@ describe('prepareEditorSubmission', () => {
     const [suggestion] = getCommandSuggestions({ text: '/ta', cursor: 3 });
     expect(applyCommandSuggestion({ text: '/ta', cursor: 3 }, suggestion!))
       .toEqual({ text: '/task ', cursor: 6 });
+  });
+
+  it('edits text at the cursor while preserving spaces and supporting backward and forward deletion', () => {
+    let editor = { text: '请整理  报告', cursor: 3 };
+
+    editor = applyEditorInput(editor, '详细 ', {});
+    expect(editor).toEqual({ text: '请整理详细   报告', cursor: 6 });
+
+    editor = applyEditorInput(editor, '', { leftArrow: true });
+    editor = applyEditorInput(editor, '', { leftArrow: true });
+    expect(editor).toEqual({ text: '请整理详细   报告', cursor: 4 });
+
+    editor = applyEditorInput(editor, '', { backspace: true });
+    expect(editor).toEqual({ text: '请整理细   报告', cursor: 3 });
+
+    editor = applyEditorInput(editor, '', { forwardDelete: true });
+    expect(editor).toEqual({ text: '请整理   报告', cursor: 3 });
+  });
+
+  it('treats Ink key.delete with empty input as normal Backspace because terminals collapse DEL into delete', () => {
+    expect(applyEditorInput({ text: 'abcdef', cursor: 3 }, '', { delete: true }))
+      .toEqual({ text: 'abdef', cursor: 2 });
+  });
+
+  it('treats DEL and BS control characters as backward deletion even when the terminal also marks delete', () => {
+    expect(applyEditorInput({ text: 'abcdef', cursor: 3 }, '\u007f', { delete: true }))
+      .toEqual({ text: 'abdef', cursor: 2 });
+
+    expect(applyEditorInput({ text: 'abcdef', cursor: 3 }, '\b', { delete: true }))
+      .toEqual({ text: 'abdef', cursor: 2 });
+  });
+
+  it('inserts multiline text without submitting and moves the cursor across newline boundaries', () => {
+    let editor = { text: '第一行\n第三行', cursor: 4 };
+
+    editor = applyEditorInput(editor, '第二行\n', {});
+    expect(editor).toEqual({ text: '第一行\n第二行\n第三行', cursor: 8 });
+
+    editor = applyEditorInput(editor, '', { leftArrow: true });
+    editor = applyEditorInput(editor, '', { leftArrow: true });
+    editor = applyEditorInput(editor, '改', {});
+
+    expect(editor).toEqual({ text: '第一行\n第二改行\n第三行', cursor: 7 });
+  });
+
+  it('treats Ctrl+J as a terminal-stable newline insertion shortcut', () => {
+    const editor = applyEditorInput({ text: '第一行第二行', cursor: 3 }, 'j', { ctrl: true });
+
+    expect(editor).toEqual({ text: '第一行\n第二行', cursor: 4 });
+  });
+
+  it('treats Ctrl+Enter as newline insertion when terminals normalize Ctrl+J as return+ctrl', () => {
+    const editor = applyEditorInput({ text: '第一行第二行', cursor: 3 }, '', { return: true, ctrl: true });
+
+    expect(editor).toEqual({ text: '第一行\n第二行', cursor: 4 });
+  });
+
+  it('parses raw terminal chunks containing arrow, delete, and backspace escape sequences', () => {
+    const editor = applyEditorInputChunk(
+      { text: '', cursor: 0 },
+      '第一行\n第二  错行\u001b[D\u001b[D\u001b[3~\u007f补  充',
+    );
+
+    expect(editor).toEqual({ text: '第一行\n第二 补  充行', cursor: 11 });
   });
 });

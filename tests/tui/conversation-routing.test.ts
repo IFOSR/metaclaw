@@ -165,6 +165,11 @@ describe('App conversation routing', () => {
     expect(llmBridge.resolveRoute).toHaveBeenCalledTimes(1);
     expect(llmBridge.resolveIntent).not.toHaveBeenCalled();
     expect(taskRepo.findAll()).toHaveLength(0);
+    expect(app.lastFrame()).toContain('【MetaClaw｜理解用户请求】');
+    expect(app.lastFrame()).toContain('→ MetaClaw：已识别普通对话');
+    expect(app.lastFrame()).toContain('→ MetaClaw：执行策略：直接回答，不创建任务');
+    expect(app.lastFrame()).toContain('【Executor: codex-cli｜回答】');
+    expect(app.lastFrame()).toContain('→ Executor: codex-cli 处理本次回答');
     expect(app.lastFrame()).toContain('你好，我在。');
 
     app.unmount();
