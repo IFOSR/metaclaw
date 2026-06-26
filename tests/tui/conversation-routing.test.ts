@@ -168,8 +168,13 @@ describe('App conversation routing', () => {
     expect(app.lastFrame()).toContain('【MetaClaw｜理解用户请求】');
     expect(app.lastFrame()).toContain('→ MetaClaw：已识别普通对话');
     expect(app.lastFrame()).toContain('→ MetaClaw：执行策略：直接回答，不创建任务');
+    expect(app.lastFrame()).toContain('【MetaClaw｜召回会话上下文】');
+    expect(app.lastFrame()).toContain('→ MetaClaw：正在召回与本次问答相关的最近对话');
+    expect(app.lastFrame()).toContain('→ MetaClaw：没有召回到相关会话上下文，将按全新问题回答');
     expect(app.lastFrame()).toContain('【Executor: codex-cli｜回答】');
     expect(app.lastFrame()).toContain('→ Executor: codex-cli 处理本次回答');
+    expect(app.lastFrame()).toContain('【Executor: codex-cli｜回答生成】');
+    expect(app.lastFrame()).toContain('→ Executor: codex-cli 正在基于当前问题生成回答');
     expect(app.lastFrame()).toContain('你好，我在。');
 
     app.unmount();

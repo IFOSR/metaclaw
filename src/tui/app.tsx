@@ -152,6 +152,7 @@ function classifyOutputLine(line: string, inResultBlock: boolean): RenderLine {
 
   if (
     line === '【MetaClaw｜理解用户请求】'
+    || line === '【MetaClaw｜召回会话上下文】'
     || line === '【MetaClaw｜提取最近历史记录上下文】'
     || line === '【MetaClaw｜构建执行上下文】'
     || line === '【MetaClaw｜执行上下文准备完成】'
