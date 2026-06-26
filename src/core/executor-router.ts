@@ -1,6 +1,6 @@
 export type ExecutorRiskLevel = 'low' | 'medium' | 'high';
 export type ExecutorAvailability = 'available' | 'unavailable';
-export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'race_executors' | 'ask_clarification';
+export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'ask_clarification';
 export type IntentDecisionKind =
   | 'direct_reply'
   | 'task_control'
@@ -162,7 +162,6 @@ function normalizeDecision(decision: IntentDecision): IntentDecision {
 function routeActionToExecutorAction(action: IntentRouteAction): ExecutorRouteAction {
   if (action === 'ask_review') return 'ask_review';
   if (action === 'fallback_default') return 'fallback_default';
-  if (action === 'race_executors') return 'race_executors';
   if (action === 'ask_clarification' || action === 'none') return 'ask_clarification';
   return 'auto_dispatch';
 }

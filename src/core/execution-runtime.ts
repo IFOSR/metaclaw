@@ -299,34 +299,9 @@ export class ExecutionRuntime {
   }
 
   private resolveRuntimeExecutors(plan: ExecutionPlanV2, selectedExecutor: ExecutorAdapter): ExecutorAdapter[] {
-    if (plan.mode !== 'race_executors') {
-      return [selectedExecutor];
-    }
-
-    const executorNames = new Set([
-      ...plan.candidateExecutors.filter(name => name === 'pi-agent' || name === 'hermes-agent'),
-      selectedExecutor.name,
-    ]);
-    const executors = Array.from(executorNames)
-      .map(name => this.registry.resolve(name))
-      .filter((executor): executor is ExecutorAdapter => Boolean(executor));
-
-    const uniqueExecutors = this.dedupeExecutors(executors);
-    return uniqueExecutors.length > 0 ? uniqueExecutors : [selectedExecutor];
+    return [selectedExecutor];
   }
 
-  private dedupeExecutors(executors: ExecutorAdapter[]): ExecutorAdapter[] {
-    const seen = new Set<ExecutorAdapter>();
-    const byName = new Map<string, ExecutorAdapter>();
-    for (const executor of executors) {
-      if (seen.has(executor)) {
-        continue;
-      }
-      seen.add(executor);
-      byName.set(executor.name, executor);
-    }
-    return Array.from(byName.values());
-  }
 
   private async executeWithOptionalRace(
     executors: ExecutorAdapter[],

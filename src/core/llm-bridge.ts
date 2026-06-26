@@ -772,7 +772,6 @@ export class LlmBridge {
       || value === 'ask_review'
       || value === 'fallback_default'
       || value === 'ask_clarification'
-      || value === 'race_executors'
       ? value
       : 'ask_clarification';
   }

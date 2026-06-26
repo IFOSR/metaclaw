@@ -17,7 +17,7 @@ import type { WorkUnitResult } from './multi-executor-orchestrator.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
 import type { CapabilityClass } from './capability-class.js';
 
-export type ExecutionPlanModeV2 = 'single_executor' | 'race_executors' | 'multi_executor';
+export type ExecutionPlanModeV2 = 'single_executor' | 'multi_executor';
 
 export interface ExecutionPlanningInput {
   task: Task;
