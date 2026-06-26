@@ -85,10 +85,10 @@ export class SessionExecutionCoordinator {
     }
 
     this.deps.callbacks.appendOutput(
-      '【提取最近历史记录上下文】',
-      `→ 正在回忆任务 #${taskId} 的上下文...`,
+      '【MetaClaw｜提取最近历史记录上下文】',
+      `→ MetaClaw：正在回忆任务 #${taskId} 的上下文...`,
     );
-    this.deps.callbacks.appendOutput('【构建执行上下文】');
+    this.deps.callbacks.appendOutput('【MetaClaw｜构建执行上下文】');
     const memoryContext = await this.deps.memoryContextService.prepareExecutionContext({
       taskId,
       sessionId: this.deps.sessionId,
@@ -102,10 +102,10 @@ export class SessionExecutionCoordinator {
     });
     const { preferences, conversationHistory, executionContextBundle } = memoryContext;
     this.deps.callbacks.appendOutput(
-      `→ 已召回 ${conversationHistory.length} 条相关上下文`,
-      `→ 正在构建任务 #${taskId} 的执行上下文...`,
-      '→ 执行上下文已准备完成',
-      '【执行上下文准备完成】',
+      `→ MetaClaw：已召回 ${conversationHistory.length} 条相关上下文`,
+      `→ MetaClaw：正在构建任务 #${taskId} 的执行上下文...`,
+      '→ MetaClaw：执行上下文已准备完成',
+      '【MetaClaw｜执行上下文准备完成】',
     );
     if (executionContextBundle.memoryContext.resolvedPreferences.length > 0) {
       for (const resolvedPreference of executionContextBundle.memoryContext.resolvedPreferences) {
@@ -136,7 +136,10 @@ export class SessionExecutionCoordinator {
     }
 
     this.deps.callbacks.refreshRuntimeState();
-    this.deps.callbacks.appendOutput(`→ 正在执行任务 #${taskId}...`);
+    this.deps.callbacks.appendOutput(
+      `【Executor: ${routedExecutor.executionPlan.selectedExecutor}｜执行】`,
+      `→ Executor: ${routedExecutor.executionPlan.selectedExecutor} 开始执行任务 #${taskId}`,
+    );
 
     let progressTracker: ExecutionProgressTracker | null = null;
     try {

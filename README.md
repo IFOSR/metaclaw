@@ -429,6 +429,7 @@ The interactive TUI is designed to keep the user oriented while work is running:
 - The composer shows `processing`, `running <executor>`, `blocked`, or `idle`.
 - The status panel shows the current task id, status, and title when a task is active.
 - Core progress lines are shown during routing and execution, including request understanding, execution strategy, context recall, context construction, executor routing, executor progress, verification, and final result.
+- MetaClaw orchestration milestones are labeled as `【MetaClaw｜...】`; worker milestones are labeled as `【Executor: <name>｜...】` and executor progress lines include the concrete executor name, so users can distinguish scheduler/routing work from the runtime that is actually answering or executing.
 - The input composer supports normal terminal editing: spaces, multiline input with modified Enter/Ctrl+J, left/right cursor movement, Backspace deleting the character before the cursor, and forward delete for raw delete escape sequences.
 
 Or use the project helper:

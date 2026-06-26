@@ -128,16 +128,18 @@ describe('App execution progress', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('【提取最近历史记录上下文】');
-    expect(app.lastFrame()).toContain('【构建执行上下文】');
-    expect(app.lastFrame()).toContain('【执行上下文准备完成】');
-    expect(app.lastFrame()).toContain('→ 正在回忆任务 #');
-    expect(app.lastFrame()).toContain('→ 已召回 ');
-    expect(app.lastFrame()).toContain('→ 正在构建任务 #');
-    expect(app.lastFrame()).toContain('→ 执行上下文已准备完成');
+    expect(app.lastFrame()).toContain('【MetaClaw｜提取最近历史记录上下文】');
+    expect(app.lastFrame()).toContain('【MetaClaw｜构建执行上下文】');
+    expect(app.lastFrame()).toContain('【MetaClaw｜执行上下文准备完成】');
+    expect(app.lastFrame()).toContain('→ MetaClaw：正在回忆任务 #');
+    expect(app.lastFrame()).toContain('→ MetaClaw：已召回 ');
+    expect(app.lastFrame()).toContain('→ MetaClaw：正在构建任务 #');
+    expect(app.lastFrame()).toContain('→ MetaClaw：执行上下文已准备完成');
+    expect(app.lastFrame()).toContain('【Executor: codex-cli｜执行】');
+    expect(app.lastFrame()).toContain('→ Executor: codex-cli 开始执行任务 #');
     expect(app.lastFrame()).toContain('当前任务 #');
     expect(app.lastFrame()).toContain('[DONE] 整理 Phoenix 项目周报');
-    expect(app.lastFrame()).toContain('· #');
+    expect(app.lastFrame()).toContain('· Executor: codex-cli');
     expect(app.lastFrame()).toContain('已启动 codex-cli 执行器');
     expect(app.lastFrame()).toContain('正在检索市场份额数据');
     expect(app.lastFrame()).toContain('  · 已注入');

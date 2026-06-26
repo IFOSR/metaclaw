@@ -703,8 +703,8 @@ export class MetaclawSession {
   ): Promise<boolean> {
     const recentTasks = this.buildRecentTaskSummaries(this.taskRuntimeService.listTasks());
     this.appendOutput(
-      '【理解用户请求】',
-      '→ 正在分析目标、上下文与可执行边界',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：正在分析目标、上下文与可执行边界',
     );
     const decision = await this.getIntentOrchestrator().decide(
       this.buildIntentOrchestratorInput(userInput, recentTasks, options),

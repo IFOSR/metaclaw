@@ -446,6 +446,7 @@ metaclaw
 - 输入框状态会显示 `processing`、`running <executor>`、`blocked` 或 `idle`。
 - 状态栏会展示当前任务 ID、任务状态和标题。
 - 路由和执行过程会展示核心进度，包括理解用户请求、执行策略、上下文召回、执行上下文构建、执行器路由、执行器进度、验收和最终结果。
+- MetaClaw 自身的调度/编排里程碑会标为 `【MetaClaw｜...】`；具体执行器的里程碑会标为 `【Executor: <name>｜...】`，执行器进度行也会带上实际 executor 名称，避免把 MetaClaw 的调度动作和真正处理任务的 runtime 混在一起。
 - 输入框支持正常终端编辑：空格、多行输入、左右移动光标、Backspace 删除光标前字符，以及原始 Delete escape sequence 的向前删除。
 
 或使用项目脚本：

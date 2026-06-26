@@ -2789,6 +2789,56 @@ describe('Feishu app helpers', () => {
     ].join('\n'));
   });
 
+  it('formats new MetaClaw and Executor progress protocol without losing the final answer', () => {
+    const outputLines = [
+      '> 汇总一下当前进展',
+      '任务 #task_protocol 已创建：汇总一下当前进展',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：已识别可执行任务',
+      '→ MetaClaw：执行策略：创建可追踪任务并派发给 codex-cli',
+      '【Executor: codex-cli｜派发准备】',
+      '→ Executor: codex-cli 将处理该任务',
+      '【MetaClaw｜提取最近历史记录上下文】',
+      '→ MetaClaw：正在回忆任务 #task_protocol 的上下文...',
+      '【MetaClaw｜构建执行上下文】',
+      '→ MetaClaw：执行上下文已准备完成',
+      '【MetaClaw｜执行上下文准备完成】',
+      '→ MetaClaw：路由决策：codex-cli (auto_dispatch, confidence=0.91)',
+      '→ MetaClaw：原因：implementation / code',
+      '【Executor: codex-cli｜执行】',
+      '→ Executor: codex-cli 开始执行任务 #task_protocol',
+      '· Executor: codex-cli｜#task_protocol｜已启动 codex-cli 执行器',
+      '· Executor: codex-cli｜#task_protocol｜最终答案第一行',
+      '· Executor: codex-cli｜#task_protocol｜',
+      '· Executor: codex-cli｜#task_protocol｜最终答案第二行',
+      '· Executor: codex-cli｜#task_protocol｜tokens used',
+      '· Executor: codex-cli｜#task_protocol｜88',
+      '✓ 任务完成 (2.4s)',
+    ];
+
+    expect(formatFeishuProgressReply(outputLines)).toBe([
+      '**处理步骤**',
+      '→ 任务 #task_protocol 已创建：汇总一下当前进展',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：已识别可执行任务',
+      '→ MetaClaw：执行策略：创建可追踪任务并派发给 codex-cli',
+      '【Executor: codex-cli｜派发准备】',
+      '→ Executor: codex-cli 将处理该任务',
+      '【MetaClaw｜提取最近历史记录上下文】',
+      '→ MetaClaw：正在回忆任务 #task_protocol 的上下文...',
+      '【MetaClaw｜构建执行上下文】',
+      '→ MetaClaw：执行上下文已准备完成',
+      '【MetaClaw｜执行上下文准备完成】',
+      '→ MetaClaw：路由决策：codex-cli (auto_dispatch, confidence=0.91)',
+      '→ MetaClaw：原因：implementation / code',
+      '【Executor: codex-cli｜执行】',
+      '→ Executor: codex-cli 开始执行任务 #task_protocol',
+      '→ Executor: codex-cli 已启动执行器',
+      '✓ 任务完成 (2.4s)',
+    ].join('\n'));
+    expect(formatFeishuReply(outputLines)).toBe('最终答案第一行\n\n最终答案第二行');
+  });
+
   it('formats streaming progress replies as one card per newly observed step', () => {
     const sent = new Set<string>();
     expect(formatFeishuStreamingProgressReplies([

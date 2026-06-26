@@ -151,14 +151,16 @@ function classifyOutputLine(line: string, inResultBlock: boolean): RenderLine {
   }
 
   if (
-    line === '【提取最近历史记录上下文】'
-    || line === '【构建执行上下文】'
-    || line === '【执行上下文准备完成】'
+    line === '【MetaClaw｜理解用户请求】'
+    || line === '【MetaClaw｜提取最近历史记录上下文】'
+    || line === '【MetaClaw｜构建执行上下文】'
+    || line === '【MetaClaw｜执行上下文准备完成】'
+    || /^【Executor: .+｜/.test(line)
   ) {
     return { kind: 'context', text: line, indent: 0 };
   }
 
-  if (line.startsWith('· #')) {
+  if (line.startsWith('· Executor: ') || line.startsWith('🛠️ Executor: ')) {
     return { kind: 'agent', text: line, indent: 0 };
   }
 
@@ -285,7 +287,9 @@ function shouldShowWaitingHint(snapshot: SessionSnapshot, lines: string[], showW
 
   return showWaitingIndicator
     || lastMeaningfulLine.startsWith('→ 正在执行任务')
-    || lastMeaningfulLine.startsWith('→ 派发给');
+    || lastMeaningfulLine.startsWith('→ 派发给')
+    || /^→ Executor: .+ 开始执行任务 #/.test(lastMeaningfulLine)
+    || /^【Executor: .+｜执行】$/.test(lastMeaningfulLine);
 }
 
 function createInputHistoryState(): InputHistoryState {

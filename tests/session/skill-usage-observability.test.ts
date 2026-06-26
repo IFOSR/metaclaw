@@ -121,7 +121,7 @@ describe('Session skill usage observability', () => {
     expect(events[0].executorName).toBe('codex-cli');
 
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('🛠️ #');
+    expect(output).toContain('🛠️ Executor: codex-cli｜#');
     expect(output).toContain('Skill test-driven-development: 开始按 TDD 执行');
     expect(output.match(/RED 测试已创建/g)).toHaveLength(1);
     expect(output).toContain('Skill test-driven-development: TDD 流程完成');

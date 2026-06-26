@@ -591,14 +591,16 @@ describe('App input availability', () => {
 
     expect(app.lastFrame()).toContain('status: processing');
     expect(app.lastFrame()).toContain('> 生成一个状态报告');
-    expect(app.lastFrame()).toContain('【理解用户请求】');
-    expect(app.lastFrame()).toContain('→ 正在分析目标、上下文与可执行边界');
+    expect(app.lastFrame()).toContain('【MetaClaw｜理解用户请求】');
+    expect(app.lastFrame()).toContain('→ MetaClaw：正在分析目标、上下文与可执行边界');
 
     resolveRoute(semanticDurableTask('生成状态报告'));
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('→ 已识别：可执行任务');
-    expect(app.lastFrame()).toContain('→ 执行策略：创建可追踪任务并派发给 codex-cli');
+    expect(app.lastFrame()).toContain('→ MetaClaw：已识别可执行任务');
+    expect(app.lastFrame()).toContain('→ MetaClaw：执行策略：创建可追踪任务并派发给 codex-cli');
+    expect(app.lastFrame()).toContain('【Executor: codex-cli｜派发准备】');
+    expect(app.lastFrame()).toContain('→ Executor: codex-cli 将处理该任务');
     expect(app.lastFrame()).toContain('status: running codex-cli');
     expect(app.lastFrame()).toContain('当前任务 #');
     expect(app.lastFrame()).toContain('[RUNNING] 生成一个状态报告');

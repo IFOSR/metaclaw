@@ -1702,9 +1702,9 @@ function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): 
       continue;
     }
 
-    const taskPrefixed = line.match(/^[+·•]\s+#(task_[^\s]+)(?:\s|$)/);
-    if (taskPrefixed) {
-      currentCompletionTaskId = taskPrefixed[1] ?? null;
+    const taskOutputLine = parseFeishuTaskOutputLine(line);
+    if (taskOutputLine) {
+      currentCompletionTaskId = taskOutputLine.taskId;
       includeCurrentCompletion = currentCompletionTaskId === taskId;
       if (includeCurrentCompletion) {
         filtered.push(rawLine);
@@ -1712,7 +1712,8 @@ function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): 
       continue;
     }
 
-    const executingMatch = line.match(/^→\s+正在执行任务\s+#(task_[^\s]+)[.。]{3}$/);
+    const executingMatch = line.match(/^→\s+正在执行任务\s+#(task_[^\s]+)[.。]{3}$/)
+      ?? line.match(/^→\s+Executor:\s+.+?\s+开始执行任务\s+#(task_[^\s]+)$/);
     if (executingMatch) {
       currentCompletionTaskId = executingMatch[1] ?? null;
       includeCurrentCompletion = currentCompletionTaskId === taskId;
@@ -1736,6 +1737,8 @@ function filterFeishuOutputLinesForTask(outputLines: string[], taskId: string): 
       || /^→\s+派发给\s+[^.。]+[.。]{3}$/.test(line)
       || line.startsWith('→ 路由决策：')
       || line.startsWith('→ 原因：')
+      || line.startsWith('→ MetaClaw：')
+      || line.startsWith('→ Executor: ')
       || line.startsWith('→ 抢占当前任务')
       || line.startsWith('→ 已自动关联')
       || isTaskBlockedAfterFailureLine(line)
@@ -2188,9 +2191,9 @@ function cleanFeishuReplyLine(line: string): string | null {
     return null;
   }
 
-  const taskOutput = trimmed.match(/^[+·•]\s+#task_[^\s]+\s+(.+)$/)?.[1]?.trim();
+  const taskOutput = parseFeishuTaskOutputLine(trimmed);
   if (taskOutput) {
-    const normalizedTaskOutput = stripExecutorLogPrefix(taskOutput);
+    const normalizedTaskOutput = stripExecutorLogPrefix(taskOutput.text);
     if (
       /^\d[\d,]*$/.test(normalizedTaskOutput) ||
       normalizedTaskOutput === 'tokens used' ||
@@ -2439,6 +2442,10 @@ function extractFeishuProgressStep(rawLine: string): string | null {
       : '→ 进入意图解析与执行准备阶段';
   }
 
+  if (line.startsWith('→ MetaClaw：') || line.startsWith('→ Executor: ')) {
+    return line;
+  }
+
   if (line.startsWith('→ 路由决策：')) {
     return line;
   }
@@ -2451,8 +2458,12 @@ function extractFeishuProgressStep(rawLine: string): string | null {
     return line;
   }
 
-  const executorStarted = line.match(/^[+·•]\s+#task_[^\s]+\s+已启动\s+(.+?)\s+执行器$/);
+  const taskOutputLine = parseFeishuTaskOutputLine(line);
+  const executorStarted = taskOutputLine?.text.match(/^已启动\s+(.+?)\s+执行器$/);
   if (executorStarted) {
+    if (taskOutputLine?.executorName) {
+      return `→ Executor: ${taskOutputLine.executorName} 已启动执行器`;
+    }
     return `→ 已启动 ${executorStarted[1]} 执行器`;
   }
 
@@ -2485,9 +2496,42 @@ function normalizeFeishuProgressContextStep(line: string): string | null {
     normalized === '【提取最近历史记录上下文】'
     || normalized === '【构建执行上下文】'
     || normalized === '【执行上下文准备完成】'
+    || normalized === '【MetaClaw｜理解用户请求】'
+    || normalized === '【MetaClaw｜提取最近历史记录上下文】'
+    || normalized === '【MetaClaw｜构建执行上下文】'
+    || normalized === '【MetaClaw｜执行上下文准备完成】'
+    || /^【Executor:\s*.+｜.+】$/.test(normalized)
   ) {
     return normalized;
   }
+  return null;
+}
+
+interface FeishuTaskOutputLine {
+  taskId: string;
+  text: string;
+  executorName?: string;
+}
+
+function parseFeishuTaskOutputLine(line: string): FeishuTaskOutputLine | null {
+  const normalized = line.trim();
+  const executorProtocol = normalized.match(/^[+·•]\s+Executor:\s*([^｜|]+?)\s*[｜|]\s*#?(task_[^｜|\s]+)\s*[｜|]\s?(.*)$/);
+  if (executorProtocol) {
+    return {
+      executorName: executorProtocol[1]?.trim(),
+      taskId: executorProtocol[2],
+      text: executorProtocol[3] ?? '',
+    };
+  }
+
+  const legacyTaskLine = normalized.match(/^[+·•]\s+#?(task_[^\s]+)\s*(.*)$/);
+  if (legacyTaskLine) {
+    return {
+      taskId: legacyTaskLine[1],
+      text: legacyTaskLine[2] ?? '',
+    };
+  }
+
   return null;
 }
 
@@ -2500,7 +2544,7 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
 
   for (const rawLine of outputLines) {
     const trimmed = rawLine.trim();
-    const taskLine = trimmed.match(/^[+·•]\s+(#task_[^\s]+)\s*(.*)$/);
+    const taskLine = parseFeishuTaskOutputLine(trimmed);
     if (!taskLine) {
       if (collecting && (trimmed.startsWith('✓ ') || trimmed.startsWith('┌─ 任务结果'))) {
         break;
@@ -2508,8 +2552,8 @@ function extractLatestExecutorAnswer(outputLines: string[]): string | null {
       continue;
     }
 
-    const [, taskId, rest = ''] = taskLine;
-    const taskOutput = rest.trimEnd();
+    const taskId = taskLine.taskId;
+    const taskOutput = taskLine.text.trimEnd();
     if (!activeTaskId || isExecutorStartLine(taskOutput)) {
       activeTaskId = taskId;
       answerLines.length = 0;
@@ -2619,8 +2663,8 @@ function containsInternalExecutorContext(text: string): boolean {
 function hasInternalExecutorContextInTaskOutput(outputLines: string[]): boolean {
   return outputLines.some((rawLine) => {
     const trimmed = rawLine.trim();
-    const taskOutput = trimmed.match(/^[+·•]\s+#task_[^\s]+\s+(.+)$/)?.[1]?.trim();
-    return isInternalExecutorContextLine(taskOutput ?? trimmed);
+    const taskOutput = parseFeishuTaskOutputLine(trimmed);
+    return isInternalExecutorContextLine(taskOutput?.text.trim() ?? trimmed);
   });
 }
 
@@ -2704,7 +2748,7 @@ function extractLatestTaskResultBody(outputLines: string[]): string | null {
   let sawUsageMarker = false;
   for (let index = 0; index < resultIndex; index += 1) {
     const trimmed = outputLines[index]?.trim() ?? '';
-    const taskLine = trimmed.match(/^[+·•]\s+(#task_[^\s]+)\s*(.*)$/);
+    const taskLine = parseFeishuTaskOutputLine(trimmed);
     if (!taskLine) {
       if (!trimmed) {
         if (collecting && !skippingHistory && answerLines.length > 0) {
@@ -2730,8 +2774,8 @@ function extractLatestTaskResultBody(outputLines: string[]): string | null {
       continue;
     }
 
-    const [, taskId, rest = ''] = taskLine;
-    const taskOutput = rest.trimEnd();
+    const taskId = taskLine.taskId;
+    const taskOutput = taskLine.text.trimEnd();
     if (!activeTaskId || isExecutorStartLine(taskOutput)) {
       activeTaskId = taskId;
       answerLines.length = 0;

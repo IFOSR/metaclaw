@@ -99,28 +99,33 @@ export class SessionIntentApplicationService {
         ? `复用已有任务并派发给 ${selectedExecutor}`
         : `创建可追踪任务并派发给 ${selectedExecutor}`;
       return [
-        '→ 已识别：可执行任务',
-        `→ 执行策略：${strategy}`,
+        '→ MetaClaw：已识别可执行任务',
+        `→ MetaClaw：执行策略：${strategy}`,
+        `【Executor: ${selectedExecutor}｜派发准备】`,
+        `→ Executor: ${selectedExecutor} 将处理该任务`,
       ];
     }
 
     if (decision.interactionType === 'task_control') {
       return [
-        '→ 已识别：任务控制请求',
-        `→ 执行策略：由 Metaclaw 处理 ${decision.task.control}`,
+        '→ MetaClaw：已识别任务控制请求',
+        `→ MetaClaw：执行策略：由 MetaClaw 处理 ${decision.task.control}`,
       ];
     }
 
     if (decision.interactionType === 'direct_reply') {
+      const selectedExecutor = decision.execution.selectedExecutor ?? this.deps.executor.name;
       return [
-        '→ 已识别：普通对话',
-        '→ 执行策略：直接回答，不创建任务',
+        '→ MetaClaw：已识别普通对话',
+        '→ MetaClaw：执行策略：直接回答，不创建任务',
+        `【Executor: ${selectedExecutor}｜回答】`,
+        `→ Executor: ${selectedExecutor} 处理本次回答`,
       ];
     }
 
     return [
-      '→ 已识别：需要澄清',
-      '→ 执行策略：先向用户确认，不创建任务',
+      '→ MetaClaw：已识别需要澄清',
+      '→ MetaClaw：执行策略：先向用户确认，不创建任务',
     ];
   }
 
