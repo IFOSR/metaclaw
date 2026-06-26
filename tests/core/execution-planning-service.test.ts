@@ -128,7 +128,7 @@ describe('ExecutionPlanningService', () => {
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('repo_execution_verified');
   });
 
-  it('creates a race plan for research workflows with multiple research executors', () => {
+  it('keeps research workflows on a single executor even with multiple research candidates', () => {
     const plan = new ExecutionPlanningService().plan({
       task: task(),
       userPrompt: '调研 pi agent 和 hermes agent 并输出报告',
@@ -150,7 +150,7 @@ describe('ExecutionPlanningService', () => {
       resources: [],
     });
 
-    expect(plan.mode).toBe('race_executors');
+    expect(plan.mode).toBe('single_executor');
     expect(plan.candidateExecutors).toContain('pi-agent');
     expect(plan.candidateExecutors).toContain('hermes-agent');
   });

@@ -277,7 +277,7 @@ describe('IntentOrchestrator', () => {
     expect(decision.clarificationQuestion).toContain('确认');
   });
 
-  it('maps race executor action to race execution mode', async () => {
+  it('downgrades legacy race executor action to single execution mode', async () => {
     const orchestrator = new IntentOrchestrator({
       semanticRouter: {
         decide: vi.fn().mockResolvedValue(semanticDecision({
@@ -301,7 +301,7 @@ describe('IntentOrchestrator', () => {
     const decision = await orchestrator.decide(input());
 
     expect(decision.execution).toMatchObject({
-      mode: 'race_executors',
+      mode: 'single_executor',
       complexity: 'moderate',
       selectedExecutor: 'pi-agent',
       candidateExecutors: ['pi-agent', 'codex-cli'],

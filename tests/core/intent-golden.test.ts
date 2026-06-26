@@ -186,7 +186,7 @@ function cases(): Case[] {
     ...raceInputs.map(input => ({
       input,
       semantic: { interactionType: 'executor_dispatch' as const, taskBinding: { type: 'new', taskId: null, reason: 'race' }, executorDecision: executorDecision('race', 'research_workflow') },
-      expected: expected('executor_dispatch', 'new', 'none', 'race_executors', 'low', false),
+      expected: expected('executor_dispatch', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...resumeInputs.map(input => ({
       input,

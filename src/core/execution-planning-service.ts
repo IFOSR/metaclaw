@@ -15,6 +15,7 @@ import {
 import type { ExecutionContextBundleV2, ResolvedPreference, Task } from './types.js';
 import type { WorkUnitResult } from './multi-executor-orchestrator.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
+import type { CapabilityClass } from './capability-class.js';
 
 export type ExecutionPlanModeV2 = 'single_executor' | 'race_executors' | 'multi_executor';
 
@@ -66,6 +67,16 @@ export interface ExecutionResult {
     fallbackReason: string | null;
     fallbackLines: string[];
   };
+}
+
+function capabilityClassToLegacyIntent(capabilityClass: CapabilityClass): IntentDecision['route']['primaryIntent'] {
+  if (capabilityClass === 'code_edit') return 'repo_execution';
+  if (capabilityClass === 'research') return 'research_workflow';
+  if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
+    return 'memory_agent_ops';
+  }
+  if (capabilityClass === 'conversation') return 'conversation_or_control';
+  return 'general';
 }
 
 export class ExecutionPlanningService {
@@ -135,10 +146,10 @@ export class ExecutionPlanningService {
     const target = decision.execution.selectedExecutor
       ?? decision.execution.candidateExecutors[0]
       ?? defaultExecutorName;
-    const primaryIntent = decision.execution.primaryIntent ?? this.inferTaskRouteIntent(decision);
-    const action = decision.execution.mode === 'race_executors'
-      ? 'race_executors'
-      : decision.risk.requiresConfirmation
+    const primaryIntent = decision.execution.primaryIntent
+      ?? capabilityClassToLegacyIntent(decision.execution.capabilityClass)
+      ?? this.inferTaskRouteIntent(decision);
+    const action = decision.risk.requiresConfirmation
         ? 'ask_review'
         : 'auto_dispatch';
 
@@ -146,7 +157,7 @@ export class ExecutionPlanningService {
       target,
       action,
       primaryIntent,
-      capabilityClass: primaryIntent,
+      capabilityClass: capabilityClassToLegacyIntent(decision.execution.capabilityClass),
       matchedBoundary: [
         ...(decision.execution.matchedBoundary && decision.execution.matchedBoundary.length > 0
           ? decision.execution.matchedBoundary
@@ -160,7 +171,7 @@ export class ExecutionPlanningService {
       needsLongRunningTask: decision.interactionType === 'durable_task' || decision.interactionType === 'executor_dispatch',
       requiresLocalRepo: decision.execution.canModifyFiles,
       requiresResearch: primaryIntent === 'research_workflow',
-      requiresMultiTool: decision.execution.mode === 'multi_executor' || decision.execution.mode === 'race_executors',
+      requiresMultiTool: decision.execution.mode === 'multi_executor',
       requiresLongTermMemory: decision.hints.some(hint => hint.kind === 'resource_reference'),
       requiresExternalGateway: decision.execution.requiresExternalGateway,
       canModifyFiles: decision.execution.canModifyFiles,
@@ -175,7 +186,7 @@ export class ExecutionPlanningService {
     if (decision.execution.canModifyFiles) {
       return 'repo_execution';
     }
-    if (decision.execution.mode === 'multi_executor' || decision.execution.mode === 'race_executors') {
+    if (decision.execution.mode === 'multi_executor') {
       return 'research_workflow';
     }
     return 'general';
@@ -184,19 +195,6 @@ export class ExecutionPlanningService {
   private resolveMode(routeDecision: ExecutorRouteDecision, strategy: ExecutionStrategy): ExecutionPlanModeV2 {
     if (strategy.mode === 'multi_executor') {
       return 'multi_executor';
-    }
-
-    if (routeDecision.action === 'race_executors') {
-      return 'race_executors';
-    }
-
-    if (routeDecision.primaryIntent === 'research_workflow' || routeDecision.primaryIntent === 'memory_agent_ops') {
-      const researchCandidateCount = routeDecision.candidates
-        .filter(candidate => candidate.executorName === 'pi-agent' || candidate.executorName === 'hermes-agent')
-        .length;
-      if (researchCandidateCount >= 2) {
-        return 'race_executors';
-      }
     }
 
     return 'single_executor';

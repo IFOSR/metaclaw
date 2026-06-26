@@ -114,9 +114,7 @@ function inferPreviewPrimaryIntent(userInput: string): TaskRouteIntent {
 function inferPreviewExecutionMode(userInput: string): IntentExecutionMode {
   return /多个 agent|多执行器|并行|分别做|多视角|subagent/i.test(userInput)
     ? 'multi_executor'
-    : /竞速|race/i.test(userInput)
-      ? 'race_executors'
-      : 'single_executor';
+    : 'single_executor';
 }
 
 function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile[], defaultExecutorName: string): IntentDecisionV2 {
