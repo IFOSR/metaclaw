@@ -6,7 +6,7 @@ import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { TaskEngine } from '../../src/core/task-engine.js';
 import { MemoryEngine } from '../../src/memory/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
 import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';

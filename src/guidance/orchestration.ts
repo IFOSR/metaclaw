@@ -4,10 +4,10 @@ import type {
   GuidanceProposal,
   PriorityScore,
   Suggestion,
-} from './types.js';
-import type { TaskEngine } from './task-engine.js';
+} from '../core/types.js';
+import type { TaskEngine } from '../core/task-engine.js';
 import dayjs from 'dayjs';
-import { filterDurableTasks } from './task-routing.js';
+import { filterDurableTasks } from '../core/task-routing.js';
 import { GuidancePolicyEngine } from './guidance-policy-engine.js';
 import { TaskSignalService } from './task-signal-service.js';
 

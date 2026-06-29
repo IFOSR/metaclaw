@@ -1,5 +1,5 @@
 import type { TaskRepo } from '../storage/task-repo.js';
-import type { OrchestrationEngine } from './orchestration.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { TaskEngine } from './task-engine.js';
 import { filterDurableTasks, type TaskClearScope } from './task-routing.js';
 import type { Dependency, RuntimeState, Task, TaskSnapshot, TaskStatus } from './types.js';

@@ -10,7 +10,7 @@ import type {
 } from '../core/types.js';
 import type { TaskEngine } from '../core/task-engine.js';
 import type { MemoryEngine } from '../memory/memory-engine.js';
-import type { OrchestrationEngine } from '../core/orchestration.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../memory/context-recaller.js';

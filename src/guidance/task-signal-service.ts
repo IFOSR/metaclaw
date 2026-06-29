@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
-import type { Task, TaskStatus } from './types.js';
-import type { TaskEngine } from './task-engine.js';
+import type { Task, TaskStatus } from '../core/types.js';
+import type { TaskEngine } from '../core/task-engine.js';
 
 export type TaskResumability = 'low' | 'medium' | 'high';
 

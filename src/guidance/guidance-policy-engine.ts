@@ -1,5 +1,5 @@
-import type { Task } from './types.js';
-import type { GuidanceProposal } from './types.js';
+import type { Task } from '../core/types.js';
+import type { GuidanceProposal } from '../core/types.js';
 import type { TaskSignal } from './task-signal-service.js';
 
 interface GuidanceBuildOptions {

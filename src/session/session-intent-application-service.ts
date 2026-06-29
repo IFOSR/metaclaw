@@ -1,4 +1,4 @@
-import type { OrchestrationEngine } from '../core/orchestration.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
 import type { TaskSummary } from '../core/llm-bridge.js';
 import type { MemoryContextService } from '../memory/memory-context-service.js';

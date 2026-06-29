@@ -1,6 +1,6 @@
 // Application coordinator for one task execution attempt, from context recall through delivery.
 import type { MemoryEngine } from '../memory/memory-engine.js';
-import type { OrchestrationEngine } from '../core/orchestration.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { MemoryContextService, ExecutionRecallSelection } from '../memory/memory-context-service.js';
 import type { TaskRuntimeService } from '../core/task-runtime-service.js';
 import type { SchedulerEngine } from '../core/scheduler.js';

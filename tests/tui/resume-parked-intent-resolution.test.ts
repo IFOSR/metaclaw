@@ -9,7 +9,7 @@ import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { TaskEngine } from '../../src/core/task-engine.js';
 import { MemoryEngine } from '../../src/memory/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
 import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import { LlmBridge } from '../../src/core/llm-bridge.js';
 import type { Config } from '../../src/core/types.js';
