@@ -9,7 +9,7 @@ import type { ExecutionRuntime } from '../execution/execution-runtime.js';
 import type { ExecutionProgressService, ExecutionProgressTracker } from '../execution/execution-progress-service.js';
 import type { WorkspaceTargetService } from '../execution/workspace-target-service.js';
 import type { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
-import type { SessionPersistenceService } from '../core/session-persistence-service.js';
+import type { SessionPersistenceService } from './session-persistence-service.js';
 import type { MemoryCaptureService } from '../memory/memory-capture-service.js';
 import type { GuidanceProposal, Suggestion, Task } from '../core/types.js';
 import type { NotificationService } from '../notifications/types.js';

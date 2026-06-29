@@ -4,7 +4,7 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { ExecutorAdminService } from '../../src/executor/executor-admin-service.js';
 import { ExecutorProfileService } from '../../src/executor/executor-profile-service.js';
 import { SessionPresentationService } from '../../src/session/session-presentation-service.js';
-import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
+import { SessionPersistenceService } from '../../src/session/session-persistence-service.js';
 import { ExecutorRoutingCoordinator } from '../../src/core/executor-routing-coordinator.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { TaskEngine } from '../../src/task/task-engine.js';

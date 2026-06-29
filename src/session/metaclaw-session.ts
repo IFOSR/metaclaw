@@ -25,7 +25,7 @@ import { IntentOrchestrator, type IntentDecisionV2, type IntentOrchestratorInput
 import { ResumeContextBuilder } from '../memory/resume-context-builder.js';
 import { MemoryContextService } from '../memory/memory-context-service.js';
 import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../memory/recall-review-application-service.js';
-import { SessionPersistenceService } from '../core/session-persistence-service.js';
+import { SessionPersistenceService } from './session-persistence-service.js';
 import { MemoryCaptureService } from '../memory/memory-capture-service.js';
 import { ConversationRuntimeService } from '../execution/conversation-runtime-service.js';
 import { TaskResumePlanner } from '../task/task-resume-planner.js';

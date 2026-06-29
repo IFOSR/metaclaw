@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
+import { SessionPersistenceService } from '../../src/session/session-persistence-service.js';
 import { MemoryCaptureService } from '../../src/memory/memory-capture-service.js';
 import { TaskResumePlanner } from '../../src/task/task-resume-planner.js';
 import { MemoryEngine } from '../../src/memory/memory-engine.js';

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { ExecutorRouteDecision } from './executor-router.js';
+import type { ExecutorRouteDecision } from '../core/executor-router.js';
 import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
 import { generateInteractionId } from '../utils/id.js';
 
