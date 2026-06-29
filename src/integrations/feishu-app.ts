@@ -2498,6 +2498,7 @@ function normalizeFeishuProgressContextStep(line: string): string | null {
     || normalized === '【构建执行上下文】'
     || normalized === '【执行上下文准备完成】'
     || normalized === '【MetaClaw｜理解用户请求】'
+    || normalized === '【MetaClaw｜召回会话上下文】'
     || normalized === '【MetaClaw｜提取最近历史记录上下文】'
     || normalized === '【MetaClaw｜构建执行上下文】'
     || normalized === '【MetaClaw｜执行上下文准备完成】'

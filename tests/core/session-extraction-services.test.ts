@@ -218,6 +218,7 @@ describe('session extraction services', () => {
     const persistenceService = {
       recordInteraction: vi.fn(),
     };
+    const appendOutput = vi.fn();
     const executor: ExecutorAdapter = {
       name: 'codex-cli',
       execute: vi.fn().mockResolvedValue({
@@ -233,6 +234,7 @@ describe('session extraction services', () => {
       executor,
       memoryContextService,
       persistenceService,
+      appendOutput,
     });
 
     const result = await service.run({
@@ -249,6 +251,16 @@ describe('session extraction services', () => {
       sessionId: 'session_1',
       userInput: 'hi',
     });
+    expect(appendOutput).toHaveBeenCalledWith(
+      '【MetaClaw｜召回会话上下文】',
+      '→ MetaClaw：正在召回与本次问答相关的最近对话',
+    );
+    expect(appendOutput).toHaveBeenCalledWith(
+      '→ MetaClaw：已召回 1 条相关会话上下文',
+      '→ MetaClaw：会把召回上下文注入给 Executor，保持连续问答衔接',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题和会话上下文生成回答',
+    );
     expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({
       preferences: [],
       userPrompt: 'hi',
@@ -314,5 +326,43 @@ describe('session extraction services', () => {
       focus: null,
     });
     expect(persistenceService.recordInteraction).not.toHaveBeenCalled();
+  });
+
+  it('shows when a conversation answer has no recalled context', async () => {
+    const memoryContextService = {
+      recallConversationContext: vi.fn().mockResolvedValue([]),
+    };
+    const persistenceService = {
+      recordInteraction: vi.fn(),
+    };
+    const appendOutput = vi.fn();
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '这是一个新的回答。',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const service = new ConversationRuntimeService({
+      executor,
+      memoryContextService,
+      persistenceService,
+      appendOutput,
+    });
+
+    await service.run({
+      sessionId: 'session_1',
+      userInput: '新问题',
+    });
+
+    expect(appendOutput).toHaveBeenCalledWith(
+      '→ MetaClaw：没有召回到相关会话上下文，将按全新问题回答',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题生成回答',
+    );
   });
 });

@@ -2839,6 +2839,37 @@ describe('Feishu app helpers', () => {
     expect(formatFeishuReply(outputLines)).toBe('最终答案第一行\n\n最终答案第二行');
   });
 
+  it('formats direct-reply conversation recall progress for Feishu', () => {
+    expect(formatFeishuProgressReply([
+      '> 这跟刚才那个结论有什么关系？',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：已识别普通对话',
+      '→ MetaClaw：执行策略：直接回答，不创建任务',
+      '【Executor: codex-cli｜回答】',
+      '→ Executor: codex-cli 处理本次回答',
+      '【MetaClaw｜召回会话上下文】',
+      '→ MetaClaw：正在召回与本次问答相关的最近对话',
+      '→ MetaClaw：已召回 2 条相关会话上下文',
+      '→ MetaClaw：会把召回上下文注入给 Executor，保持连续问答衔接',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题和会话上下文生成回答',
+      '最终回答',
+    ])).toBe([
+      '**处理步骤**',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：已识别普通对话',
+      '→ MetaClaw：执行策略：直接回答，不创建任务',
+      '【Executor: codex-cli｜回答】',
+      '→ Executor: codex-cli 处理本次回答',
+      '【MetaClaw｜召回会话上下文】',
+      '→ MetaClaw：正在召回与本次问答相关的最近对话',
+      '→ MetaClaw：已召回 2 条相关会话上下文',
+      '→ MetaClaw：会把召回上下文注入给 Executor，保持连续问答衔接',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题和会话上下文生成回答',
+    ].join('\n'));
+  });
+
   it('formats streaming progress replies as one card per newly observed step', () => {
     const sent = new Set<string>();
     expect(formatFeishuStreamingProgressReplies([

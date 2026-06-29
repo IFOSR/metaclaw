@@ -201,6 +201,7 @@ export class MetaclawSession {
       executor: deps.executor,
       memoryContextService: this.memoryContextService,
       persistenceService: this.persistenceService,
+      appendOutput: (...lines) => this.appendOutput(...lines),
     });
     this.memoryCaptureService = new MemoryCaptureService({
       db: deps.db,
