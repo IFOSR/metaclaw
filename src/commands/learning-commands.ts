@@ -4,11 +4,11 @@ import { TaskMemoryCardRepo, type TaskMemoryCardOutcome } from '../storage/task-
 import { SkillEffectSummaryRepo, type SkillEffectSummaryRecord } from '../storage/skill-effect-summary-repo.js';
 import { SkillUsageEventRepo } from '../storage/skill-usage-event-repo.js';
 import { ReflectionEventRepo } from '../storage/reflection-event-repo.js';
-import { ReflectionEngine } from '../core/reflection-engine.js';
-import { PromotionGate } from '../core/promotion-gate.js';
+import { ReflectionEngine } from '../learning/reflection-engine.js';
+import { PromotionGate } from '../learning/promotion-gate.js';
 import { buildExecutorSkillPackage } from '../executor/skill-package-builder.js';
-import { SkillGovernanceEngine, assessSkillGovernance, type SkillGovernanceAction } from '../core/skill-governance-engine.js';
-import { LearningWeeklyReviewBuilder } from '../core/learning-weekly-review-builder.js';
+import { SkillGovernanceEngine, assessSkillGovernance, type SkillGovernanceAction } from '../learning/skill-governance-engine.js';
+import { LearningWeeklyReviewBuilder } from '../learning/learning-weekly-review-builder.js';
 import { generateInteractionId } from '../utils/id.js';
 import type { CommandHandler } from './router.js';
 

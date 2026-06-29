@@ -4,7 +4,7 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { LearningCandidateRepo } from '../../src/storage/learning-candidate-repo.js';
 import { TaskMemoryCardRepo } from '../../src/storage/task-memory-card-repo.js';
 import { SkillEffectSummaryRepo } from '../../src/storage/skill-effect-summary-repo.js';
-import { LearningWeeklyReviewBuilder } from '../../src/core/learning-weekly-review-builder.js';
+import { LearningWeeklyReviewBuilder } from '../../src/learning/learning-weekly-review-builder.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
@@ -58,7 +58,7 @@ describe('LearningWeeklyReviewBuilder', () => {
       goal: '让 MetaClaw 生成可审核治理候选',
       summary: '已完成 disable/deprecation candidate 与 promote audit。',
       keyDecisions: ['MetaClaw 不直接禁用 Skill'],
-      changedFiles: ['src/core/skill-governance-engine.ts'],
+      changedFiles: ['src/learning/skill-governance-engine.ts'],
       verificationCommands: ['npm test -- tests/core/phase-e6-skill-governance-engine.test.ts'],
       pitfalls: ['旧 executor 可能不支持 governance API'],
       artifacts: [],

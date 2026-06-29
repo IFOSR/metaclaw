@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { ReflectionEngine } from '../../src/core/reflection-engine.js';
+import { ReflectionEngine } from '../../src/learning/reflection-engine.js';
 import { learningCommand } from '../../src/commands/learning-commands.js';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReflectionEngine } from '../../src/core/reflection-engine.js';
+import { ReflectionEngine } from '../../src/learning/reflection-engine.js';
 
 const createdAt = '2026-04-27T03:00:00Z';
 

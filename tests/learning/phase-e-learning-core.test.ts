@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { SafetyScanner } from '../../src/core/safety-scanner.js';
-import { PromotionGate } from '../../src/core/promotion-gate.js';
-import { ReflectionEngine } from '../../src/core/reflection-engine.js';
+import { SafetyScanner } from '../../src/learning/safety-scanner.js';
+import { PromotionGate } from '../../src/learning/promotion-gate.js';
+import { ReflectionEngine } from '../../src/learning/reflection-engine.js';
 
 describe('Phase E learning core skeletons', () => {
   it('SafetyScanner redacts secrets and blocks unsafe learning candidates', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReflectionEngine } from '../../src/core/reflection-engine.js';
+import { ReflectionEngine } from '../../src/learning/reflection-engine.js';
 import type { SkillUsageEventRecord } from '../../src/storage/skill-usage-event-repo.js';
 
 function skillEvent(overrides: Partial<SkillUsageEventRecord> = {}): SkillUsageEventRecord {

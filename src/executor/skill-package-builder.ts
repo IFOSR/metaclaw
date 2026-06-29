@@ -1,5 +1,5 @@
 import type { LearningCandidateRecord } from '../storage/learning-candidate-repo.js';
-import { SafetyScanner } from '../core/safety-scanner.js';
+import { SafetyScanner } from '../learning/safety-scanner.js';
 
 export type ExecutorSkillPackageKind = 'skill' | 'skill_patch';
 

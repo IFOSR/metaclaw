@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { SkillEffectSummaryRepo } from '../../src/storage/skill-effect-summary-repo.js';
-import { SkillGovernanceEngine } from '../../src/core/skill-governance-engine.js';
+import { SkillGovernanceEngine } from '../../src/learning/skill-governance-engine.js';
 
 function createTestDb() {
   const db = new Database(':memory:');
