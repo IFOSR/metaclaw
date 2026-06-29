@@ -1,13 +1,17 @@
 import type { Task } from './types.js';
+import type { CapabilityClass } from './capability-class.js';
 import type { ExecutionPlan } from '../session/session-helpers.js';
-import type { ExecutorRouteDecision } from './executor-router.js';
 import type { RetrievedTaskCandidate } from './hybrid-task-retriever.js';
 
 export interface ExecutionStrategyInput {
   task: Task;
   userPrompt: string;
   executionPlan: ExecutionPlan;
-  routeDecision: ExecutorRouteDecision;
+  primaryExecutor: string;
+  candidateExecutors: string[];
+  capabilityClass: CapabilityClass;
+  matchedBoundary: string[];
+  riskLevel: 'low' | 'medium' | 'high';
   retrievedTasks: RetrievedTaskCandidate[];
   resources: string[];
 }
@@ -90,8 +94,8 @@ function getDomainCount(prompt: string): number {
 }
 
 function hasRepoMutation(input: ExecutionStrategyInput): boolean {
-  return input.routeDecision.primaryIntent === 'repo_execution'
-    || input.routeDecision.matchedBoundary.includes('repo_mutation')
+  return input.capabilityClass === 'code_edit'
+    || input.matchedBoundary.includes('repo_mutation')
     || containsAny(input.userPrompt, IMPLEMENTATION_TERMS);
 }
 
@@ -102,14 +106,20 @@ function hasHighRiskValidationSignal(input: ExecutionStrategyInput): boolean {
 }
 
 function preferredResearchExecutor(input: ExecutionStrategyInput): string {
-  if (input.routeDecision.selectedExecutor === 'hermes-agent' || input.routeDecision.selectedExecutor === 'pi-agent') {
-    return input.routeDecision.selectedExecutor;
+  if (input.primaryExecutor === 'hermes-agent' || input.primaryExecutor === 'pi-agent') {
+    return input.primaryExecutor;
+  }
+  const researchCandidate = input.candidateExecutors.find(executorName =>
+    executorName === 'hermes-agent' || executorName === 'pi-agent'
+  );
+  if (researchCandidate) {
+    return researchCandidate;
   }
   return 'hermes-agent';
 }
 
 function preferredReviewExecutor(input: ExecutionStrategyInput): string {
-  if (input.routeDecision.selectedExecutor === 'deepseek-tui') {
+  if (input.primaryExecutor === 'deepseek-tui') {
     return 'deepseek-tui';
   }
   return 'codex-cli';
@@ -173,7 +183,7 @@ export class ExecutionStrategyPlanner {
     if (!shouldUseMultiExecutor) {
       return {
         mode: 'single_executor',
-        executorName: input.routeDecision.selectedExecutor,
+        executorName: input.primaryExecutor,
         reason: signals.length === 0
           ? '未命中复杂任务强信号，保持单 executor 执行'
           : `复杂度信号不足以拆分：${signals.map(signal => signal.reason).join('；')}`,
@@ -306,7 +316,7 @@ export class ExecutionStrategyPlanner {
         id: 'wu_artifact',
         title: '产物生成',
         goal: '生成用户要求的文档、报告、方案或说明',
-        executorHint: input.routeDecision.selectedExecutor,
+        executorHint: input.primaryExecutor,
         dependsOn: needsResearch ? ['wu_research'] : [],
         inputs: {
           taskId: input.task.id,
@@ -342,7 +352,7 @@ export class ExecutionStrategyPlanner {
         id: 'wu_summary',
         title: '综合总结',
         goal: '整合多来源上下文并给出最终结论',
-        executorHint: input.routeDecision.selectedExecutor,
+        executorHint: input.primaryExecutor,
         dependsOn: [],
         inputs: {
           taskId: input.task.id,

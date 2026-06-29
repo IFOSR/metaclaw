@@ -220,26 +220,21 @@ export class ExecutionPolicyPlanner {
     const candidates = buildCandidates(input, capabilityClass);
     const primaryExecutor = selectPrimary(input, candidates);
     const primaryProfile = input.executorProfiles.find(profile => profile.name === primaryExecutor) ?? null;
-    const primaryIntent = capabilityClassToLegacyIntent(capabilityClass);
+    const riskLevel = getRiskLevel(input, primaryProfile);
     const matchedBoundary = input.intentDecision?.execution.matchedBoundary?.length
       ? input.intentDecision.execution.matchedBoundary
       : input.semanticDecision?.route.matchedBoundary?.length
         ? input.semanticDecision.route.matchedBoundary
         : [capabilityClass];
-    const routeDecision = buildRouteDecision({
-      primaryExecutor,
-      candidates,
-      primaryIntent,
-      matchedBoundary,
-      reason: input.intentDecision?.reason ?? input.semanticDecision?.reason ?? `ExecutionPolicy selected ${primaryExecutor}`,
-      confidence: input.intentDecision?.confidence ?? input.semanticDecision?.confidence ?? 0.7,
-      riskLevel: getRiskLevel(input, primaryProfile),
-    });
     const strategy = this.strategyPlanner.plan({
       task: input.task,
       userPrompt: input.userPrompt,
       executionPlan: input.taskExecutionPlan,
-      routeDecision,
+      primaryExecutor,
+      candidateExecutors: candidates,
+      capabilityClass,
+      matchedBoundary,
+      riskLevel,
       retrievedTasks: (input.recalledTaskIds ?? []).map(taskId => ({
         taskId,
         score: 1,
@@ -267,7 +262,7 @@ export class ExecutionPolicyPlanner {
       isolationRequired: strategy.mode === 'multi_executor' || capabilityClass === 'code_edit',
       verificationLevel: getVerificationLevel(input, capabilityClass),
       reviewerExecutor: null,
-      riskLevel: getRiskLevel(input, primaryProfile),
+      riskLevel,
       estimatedCostClass: getEstimatedCostClass(input, capabilityClass),
       fallbackChain: buildFallbackChain(input, primaryExecutor),
       acceptanceCriteria,
