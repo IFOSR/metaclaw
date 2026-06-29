@@ -2,7 +2,7 @@
 import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planner.js';
 import { ExecutionPlanningService } from './execution-planning-service.js';
 import type { ExecutionPolicy } from './execution-policy.js';
-import type { ExecutorProfileService } from './executor-profile-service.js';
+import type { ExecutorProfileService } from '../executor/executor-profile-service.js';
 import type { ExecutorRouteDecision, IntentDecision } from './executor-router.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
 import type { SessionPersistenceService } from './session-persistence-service.js';

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { ExecutorAdminService } from '../../src/core/executor-admin-service.js';
-import { ExecutorProfileService } from '../../src/core/executor-profile-service.js';
+import { ExecutorAdminService } from '../../src/executor/executor-admin-service.js';
+import { ExecutorProfileService } from '../../src/executor/executor-profile-service.js';
 import { SessionPresentationService } from '../../src/session/session-presentation-service.js';
 import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
 import { ExecutorRoutingCoordinator } from '../../src/core/executor-routing-coordinator.js';

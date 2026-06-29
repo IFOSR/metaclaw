@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import type { ExecutorProfile } from './executor-router.js';
+import type { ExecutorProfile } from '../core/executor-router.js';
 import type { ExecutorProfileService } from './executor-profile-service.js';
 import type { SessionPresentationService } from '../session/session-presentation-service.js';
 

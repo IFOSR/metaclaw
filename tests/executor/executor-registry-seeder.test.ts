@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { ExecutorProfileRepo } from '../../src/storage/executor-profile-repo.js';
-import { seedDefaultExecutorProfiles } from '../../src/core/executor-registry-seeder.js';
+import { seedDefaultExecutorProfiles } from '../../src/executor/executor-registry-seeder.js';
 
 function createDb(): Database.Database {
   const db = new Database(':memory:');

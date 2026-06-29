@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import type { ExecutorProfile } from './executor-router.js';
+import type { ExecutorProfile } from '../core/executor-router.js';
 import type { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 
 export interface ExecutorRegistrySeedInput {

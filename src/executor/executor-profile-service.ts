@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { ExecutorProfile } from './executor-router.js';
+import type { ExecutorProfile } from '../core/executor-router.js';
 import { seedDefaultExecutorProfiles } from './executor-registry-seeder.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 

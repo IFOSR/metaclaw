@@ -4,7 +4,7 @@ import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planne
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
 import type { CapabilityClass } from '../core/capability-class.js';
 import type { Task } from '../core/types.js';
-import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
+import { seedDefaultExecutorProfiles } from '../executor/executor-registry-seeder.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
 import { generateInteractionId } from '../utils/id.js';
