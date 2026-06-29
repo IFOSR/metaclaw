@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { TaskSearchIndexRepo } from '../../src/storage/task-search-index-repo.js';
 import { TaskRelationRepo } from '../../src/storage/task-relation-repo.js';
 import { TaskMemoryEmbeddingRepo } from '../../src/storage/task-memory-embedding-repo.js';
 import { RecallFeedbackRepo } from '../../src/storage/recall-feedback-repo.js';
-import { HybridTaskRetriever } from '../../src/core/hybrid-task-retriever.js';
+import { HybridTaskRetriever } from '../../src/task/hybrid-task-retriever.js';
 import { HybridMemoryRecaller } from '../../src/memory/hybrid-memory-recaller.js';
 
 function createHarness() {

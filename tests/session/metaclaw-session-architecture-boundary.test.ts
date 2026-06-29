@@ -263,7 +263,7 @@ describe('MetaclawSession architecture boundaries', () => {
 
 describe('TaskRuntimeService architecture boundaries', () => {
   it('does not format UI text or abort executors directly', () => {
-    const source = readSource('src/core/task-runtime-service.ts');
+    const source = readSource('src/task/task-runtime-service.ts');
 
     expect(source).not.toContain('formatTaskStatus');
     expect(source).not.toContain('formatTaskClearResult');

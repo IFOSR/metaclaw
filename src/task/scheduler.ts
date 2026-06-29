@@ -1,5 +1,5 @@
 import type { ExecutorAdapter } from '../executor/adapter.js';
-import type { RuntimeState, Task } from './types.js';
+import type { RuntimeState, Task } from '../core/types.js';
 import type { TaskEngine } from './task-engine.js';
 import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import { TaskRuntimeService, type SchedulableTask, type TaskDispatchResult } from './task-runtime-service.js';

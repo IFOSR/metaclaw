@@ -1,9 +1,9 @@
-import type { IntentDecisionV2 } from './intent-orchestrator.js';
+import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
 import type { TaskSemanticService } from './task-semantic-service.js';
 import type { TaskRuntimeService } from './task-runtime-service.js';
-import type { TaskSummary } from './llm-bridge.js';
-import type { Task } from './types.js';
-import { filterDurableTasks } from './task-routing.js';
+import type { TaskSummary } from '../core/llm-bridge.js';
+import type { Task } from '../core/types.js';
+import { filterDurableTasks } from '../core/task-routing.js';
 import { reconcileBlockedTasksFromInput } from './blocked-task-reconciler.js';
 import {
   isContinuePreviousTaskInstruction,

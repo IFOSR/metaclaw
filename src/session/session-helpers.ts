@@ -1,7 +1,7 @@
 import type { TaskRecoveryTrigger } from '../core/types.js';
 import type { IntentDecision } from '../core/executor-router.js';
 import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
-export { planTaskExecution, type TaskExecutionPlan as ExecutionPlan } from '../core/task-execution-planner.js';
+export { planTaskExecution, type TaskExecutionPlan as ExecutionPlan } from '../task/task-execution-planner.js';
 export {
   extractInlineResourceMatches,
   stripInlineResourceMatches,

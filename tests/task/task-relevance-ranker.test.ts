@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TaskRelevanceRanker } from '../../src/core/task-relevance-ranker.js';
+import { TaskRelevanceRanker } from '../../src/task/task-relevance-ranker.js';
 import type { Task } from '../../src/core/types.js';
 
 function createTask(overrides: Partial<Task> = {}): Task {

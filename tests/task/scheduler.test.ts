@@ -4,9 +4,9 @@ import { tmpdir } from 'os';
 import { resolve } from 'path';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
-import { SchedulerEngine } from '../../src/core/scheduler.js';
+import { SchedulerEngine } from '../../src/task/scheduler.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 
 function createTestDb() {

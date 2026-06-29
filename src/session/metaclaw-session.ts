@@ -8,15 +8,15 @@ import type {
   Task,
   TaskRecoveryTrigger,
 } from '../core/types.js';
-import type { TaskEngine } from '../core/task-engine.js';
+import type { TaskEngine } from '../task/task-engine.js';
 import type { MemoryEngine } from '../memory/memory-engine.js';
 import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
 import type { ContextRecaller } from '../memory/context-recaller.js';
 import type { LlmBridge, TaskSummary } from '../core/llm-bridge.js';
-import { SchedulerEngine } from '../core/scheduler.js';
-import type { DispatchContext } from '../core/scheduler.js';
+import { SchedulerEngine } from '../task/scheduler.js';
+import type { DispatchContext } from '../task/scheduler.js';
 import {
   filterDurableTasks,
 } from '../core/task-routing.js';
@@ -28,7 +28,7 @@ import { RecallReviewApplicationService, createDefaultRecallReviewApplicationSer
 import { SessionPersistenceService } from '../core/session-persistence-service.js';
 import { MemoryCaptureService } from '../memory/memory-capture-service.js';
 import { ConversationRuntimeService } from '../execution/conversation-runtime-service.js';
-import { TaskResumePlanner } from '../core/task-resume-planner.js';
+import { TaskResumePlanner } from '../task/task-resume-planner.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
@@ -39,8 +39,8 @@ import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCom
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
 import type { IntentDecision } from '../core/executor-router.js';
-import { TaskRuntimeService } from '../core/task-runtime-service.js';
-import { TaskSemanticService } from '../core/task-semantic-service.js';
+import { TaskRuntimeService } from '../task/task-runtime-service.js';
+import { TaskSemanticService } from '../task/task-semantic-service.js';
 import { ExecutionRuntime, ExecutorRegistry } from '../execution/execution-runtime.js';
 import { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
 import { ExecutorProfileService } from '../executor/executor-profile-service.js';

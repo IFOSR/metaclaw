@@ -10,7 +10,7 @@ function readSource(path: string): string {
 
 describe('Task runtime architecture boundaries', () => {
   it('keeps SchedulerEngine behind TaskRuntimeService instead of direct task repo access', () => {
-    const source = readSource('src/core/scheduler.ts');
+    const source = readSource('src/task/scheduler.ts');
 
     expect(source).not.toContain("taskEngine['taskRepo']");
     expect(source).not.toContain('.findByStatus(');
@@ -20,7 +20,7 @@ describe('Task runtime architecture boundaries', () => {
   });
 
   it('keeps active dispatch lifecycle inside SchedulerEngine instead of MetaclawSession', () => {
-    const schedulerSource = readSource('src/core/scheduler.ts');
+    const schedulerSource = readSource('src/task/scheduler.ts');
     const sessionSource = readSource('src/session/metaclaw-session.ts');
 
     expect(schedulerSource).toContain('activeDispatches');
@@ -30,7 +30,7 @@ describe('Task runtime architecture boundaries', () => {
   });
 
   it('keeps queued execution requests inside SchedulerEngine instead of MetaclawSession', () => {
-    const schedulerSource = readSource('src/core/scheduler.ts');
+    const schedulerSource = readSource('src/task/scheduler.ts');
     const sessionSource = readSource('src/session/metaclaw-session.ts');
     const executionApplicationSource = readSource('src/session/session-task-execution-application-service.ts');
 
@@ -42,7 +42,7 @@ describe('Task runtime architecture boundaries', () => {
   });
 
   it('implements the SchedulerBridge dispatch lifecycle on SchedulerEngine', () => {
-    const schedulerSource = readSource('src/core/scheduler.ts');
+    const schedulerSource = readSource('src/task/scheduler.ts');
 
     expect(schedulerSource).toContain('markDispatchStarted');
     expect(schedulerSource).toContain('markDispatchFinished');
@@ -68,8 +68,8 @@ describe('Task runtime architecture boundaries', () => {
   });
 
   it('keeps TaskRuntimeService out of LLM and executor routing decisions', () => {
-    const source = readSource('src/core/task-runtime-service.ts');
-    const semanticSource = readSource('src/core/task-semantic-service.ts');
+    const source = readSource('src/task/task-runtime-service.ts');
+    const semanticSource = readSource('src/task/task-semantic-service.ts');
 
     expect(source).not.toContain("from './llm-bridge.js'");
     expect(source).not.toContain('llmBridge');
@@ -78,13 +78,13 @@ describe('Task runtime architecture boundaries', () => {
     expect(source).not.toContain('IntentOrchestrator');
     expect(source).not.toContain('ExecutorRouter');
     expect(source).not.toContain('createExecutor');
-    expect(semanticSource).toContain("from './llm-bridge.js'");
+    expect(semanticSource).toContain("from '../core/llm-bridge.js'");
     expect(semanticSource).toContain('resolveTaskPriority');
     expect(semanticSource).toContain('resolveTaskResumeIntent');
   });
 
   it('keeps clear-task presentation labels outside TaskRuntimeService', () => {
-    const runtimeSource = readSource('src/core/task-runtime-service.ts');
+    const runtimeSource = readSource('src/task/task-runtime-service.ts');
     const presentationSource = readSource('src/session/session-presentation-service.ts');
 
     expect(runtimeSource).not.toContain('CLEAR_SCOPE_LABELS');

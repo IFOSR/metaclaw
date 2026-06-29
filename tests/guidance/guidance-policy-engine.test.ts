@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { resolve } from 'path';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { GuidancePolicyEngine } from '../../src/guidance/guidance-policy-engine.js';
 import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
 

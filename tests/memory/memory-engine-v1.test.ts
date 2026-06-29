@@ -5,7 +5,7 @@ import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 

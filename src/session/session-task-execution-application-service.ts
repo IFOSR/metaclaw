@@ -1,8 +1,8 @@
-import type { DispatchContext, SchedulerEngine } from '../core/scheduler.js';
+import type { DispatchContext, SchedulerEngine } from '../task/scheduler.js';
 import type { RecallReviewApplicationService } from '../memory/recall-review-application-service.js';
 import type { SessionExecutionCoordinator } from './session-execution-coordinator.js';
 import type { SessionPresentationService } from './session-presentation-service.js';
-import type { TaskRuntimeService } from '../core/task-runtime-service.js';
+import type { TaskRuntimeService } from '../task/task-runtime-service.js';
 import type { GuidanceActionType, Task } from '../core/types.js';
 import type { QueuedExecutionRequest } from './session-helpers.js';
 import type { ExecutionRecallSelection } from '../memory/memory-context-service.js';

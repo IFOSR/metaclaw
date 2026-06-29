@@ -1,4 +1,4 @@
-import type { Task } from './types.js';
+import type { Task } from '../core/types.js';
 import { isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { extractInlineResourceMatches, isRecoverableBlockedResumeInstruction } from '../session/session-helpers.js';
 

@@ -5,7 +5,7 @@ import type {
   PriorityScore,
   Suggestion,
 } from '../core/types.js';
-import type { TaskEngine } from '../core/task-engine.js';
+import type { TaskEngine } from '../task/task-engine.js';
 import dayjs from 'dayjs';
 import { filterDurableTasks } from '../core/task-routing.js';
 import { GuidancePolicyEngine } from './guidance-policy-engine.js';

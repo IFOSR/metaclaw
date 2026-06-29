@@ -7,9 +7,9 @@ import { SessionPresentationService } from '../../src/session/session-presentati
 import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
 import { ExecutorRoutingCoordinator } from '../../src/core/executor-routing-coordinator.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
-import { TaskRuntimeService } from '../../src/core/task-runtime-service.js';
+import { TaskRuntimeService } from '../../src/task/task-runtime-service.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 
 function createDb() {

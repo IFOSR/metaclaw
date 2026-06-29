@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TaskEmbeddingService } from '../../src/core/task-embedding-service.js';
+import { TaskEmbeddingService } from '../../src/task/task-embedding-service.js';
 import { buildTaskMemoryDocuments } from '../../src/memory/resume-context-builder.js';
 import type { Task } from '../../src/core/types.js';
 

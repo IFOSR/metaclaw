@@ -1,7 +1,7 @@
 import type { Task } from './types.js';
 import type { CapabilityClass } from './capability-class.js';
 import type { ExecutionPlan } from '../session/session-helpers.js';
-import type { RetrievedTaskCandidate } from './hybrid-task-retriever.js';
+import type { RetrievedTaskCandidate } from '../task/hybrid-task-retriever.js';
 
 export interface ExecutionStrategyInput {
   task: Task;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../src/core/types.js';
-import { reconcileBlockedTasksFromInput } from '../../src/core/blocked-task-reconciler.js';
+import { reconcileBlockedTasksFromInput } from '../../src/task/blocked-task-reconciler.js';
 
 function blockedTask(input: Partial<Task> & { id: string; goal: string; dependency: string }): Task {
   const now = new Date().toISOString();

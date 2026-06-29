@@ -1,4 +1,4 @@
-import type { Task } from './types.js';
+import type { Task } from '../core/types.js';
 
 export type TaskRelevanceRecommendation = 'inject' | 'review' | 'more' | 'reject';
 

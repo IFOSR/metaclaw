@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from './types.js';
+import type { Task, TaskStatus } from '../core/types.js';
 
 export type TaskExecutionPlan =
   | {

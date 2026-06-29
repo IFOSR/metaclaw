@@ -7,7 +7,7 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import { ResumeContextBuilder } from '../../src/memory/resume-context-builder.js';

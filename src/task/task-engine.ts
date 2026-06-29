@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, TaskSnapshot, Dependency, ResumeSummary } from './types.js';
+import type { Task, TaskStatus, TaskSnapshot, Dependency, ResumeSummary } from '../core/types.js';
 import type { TaskRepo } from '../storage/task-repo.js';
 import { generateTaskId } from '../utils/id.js';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';

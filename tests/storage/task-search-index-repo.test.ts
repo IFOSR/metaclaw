@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { TaskMemoryCardRepo } from '../../src/storage/task-memory-card-repo.js';
 import { TaskSearchIndexRepo } from '../../src/storage/task-search-index-repo.js';

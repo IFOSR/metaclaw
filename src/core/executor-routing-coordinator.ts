@@ -6,7 +6,7 @@ import type { ExecutorProfileService } from '../executor/executor-profile-servic
 import type { ExecutorRouteDecision, IntentDecision } from './executor-router.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
 import type { SessionPersistenceService } from './session-persistence-service.js';
-import type { TaskRuntimeService } from './task-runtime-service.js';
+import type { TaskRuntimeService } from '../task/task-runtime-service.js';
 import type { Task } from './types.js';
 
 export interface RoutedExecutorSelection {

@@ -1,4 +1,4 @@
-import type { IntentResult, LlmBridge, RouteResult, TaskPriorityResult, TaskResumeIntentResult, TaskSummary } from './llm-bridge.js';
+import type { IntentResult, LlmBridge, RouteResult, TaskPriorityResult, TaskResumeIntentResult, TaskSummary } from '../core/llm-bridge.js';
 
 export interface TaskSemanticServiceDeps {
   llmBridge: Partial<Pick<LlmBridge, 'resolveTaskPriority' | 'resolveTaskResumeIntent' | 'resolveRoute' | 'resolveIntent'>>;

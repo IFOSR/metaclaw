@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { TaskEngine } from '../core/task-engine.js';
+import type { TaskEngine } from '../task/task-engine.js';
 import type { MemoryEngine } from '../memory/memory-engine.js';
 import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { Config } from '../core/types.js';

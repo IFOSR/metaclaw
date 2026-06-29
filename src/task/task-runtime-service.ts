@@ -1,8 +1,8 @@
 import type { TaskRepo } from '../storage/task-repo.js';
 import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { TaskEngine } from './task-engine.js';
-import { filterDurableTasks, type TaskClearScope } from './task-routing.js';
-import type { Dependency, RuntimeState, Task, TaskSnapshot, TaskStatus } from './types.js';
+import { filterDurableTasks, type TaskClearScope } from '../core/task-routing.js';
+import type { Dependency, RuntimeState, Task, TaskSnapshot, TaskStatus } from '../core/types.js';
 import { planTaskExecution, type TaskExecutionPlan } from './task-execution-planner.js';
 
 export type SchedulableTaskPriority = 'normal' | 'high' | 'urgent';

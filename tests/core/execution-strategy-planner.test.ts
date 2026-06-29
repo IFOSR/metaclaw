@@ -3,7 +3,7 @@ import { ExecutionStrategyPlanner } from '../../src/core/execution-strategy-plan
 import type { Task } from '../../src/core/types.js';
 import type { CapabilityClass } from '../../src/core/capability-class.js';
 import type { ExecutionPlan } from '../../src/session/session-helpers.js';
-import type { RetrievedTaskCandidate } from '../../src/core/hybrid-task-retriever.js';
+import type { RetrievedTaskCandidate } from '../../src/task/hybrid-task-retriever.js';
 
 function createTask(overrides: Partial<Task> = {}): Task {
   return {

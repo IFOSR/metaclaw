@@ -2,8 +2,8 @@
 import type { MemoryEngine } from '../memory/memory-engine.js';
 import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { MemoryContextService, ExecutionRecallSelection } from '../memory/memory-context-service.js';
-import type { TaskRuntimeService } from '../core/task-runtime-service.js';
-import type { SchedulerEngine } from '../core/scheduler.js';
+import type { TaskRuntimeService } from '../task/task-runtime-service.js';
+import type { SchedulerEngine } from '../task/scheduler.js';
 import type { ExecutorRoutingCoordinator } from '../core/executor-routing-coordinator.js';
 import type { ExecutionRuntime } from '../execution/execution-runtime.js';
 import type { ExecutionProgressService, ExecutionProgressTracker } from '../execution/execution-progress-service.js';

@@ -1,7 +1,7 @@
 import type { ConversationTurn, ExecutorAdapter } from '../executor/adapter.js';
 import { generateInteractionId } from '../utils/id.js';
 import type { SessionPersistenceService } from '../core/session-persistence-service.js';
-import type { TaskFocusContext } from '../core/task-runtime-service.js';
+import type { TaskFocusContext } from '../task/task-runtime-service.js';
 import type { Task } from '../core/types.js';
 
 export interface ConversationMemoryContextService {

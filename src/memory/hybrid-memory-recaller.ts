@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
-import { TaskRelevanceRanker } from '../core/task-relevance-ranker.js';
+import { TaskRelevanceRanker } from '../task/task-relevance-ranker.js';
 import type { EmbeddingProvider } from '../core/embedding-provider.js';
 import {
   PreferenceScope,
@@ -14,7 +14,7 @@ import type { PreferenceEmbeddingRecord } from '../storage/preference-embedding-
 import type { TaskMemoryEmbeddingRecord } from '../storage/task-memory-embedding-repo.js';
 import type { RecallFeedbackAction, RecallFeedbackRecord } from '../storage/recall-feedback-repo.js';
 import type { MemoryRecallEventRecord } from '../storage/memory-recall-event-repo.js';
-import type { HybridTaskRetriever } from '../core/hybrid-task-retriever.js';
+import type { HybridTaskRetriever } from '../task/hybrid-task-retriever.js';
 
 interface PreferenceRepoLike {
   findById(id: string): Preference | null;

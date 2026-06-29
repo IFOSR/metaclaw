@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { EmbeddingProvider } from './embedding-provider.js';
-import type { TaskMemoryKind } from './types.js';
+import type { EmbeddingProvider } from '../core/embedding-provider.js';
+import type { TaskMemoryKind } from '../core/types.js';
 import type { TaskMemoryEmbeddingRecord } from '../storage/task-memory-embedding-repo.js';
 
 export interface TaskMemoryDocument {
