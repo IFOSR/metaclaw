@@ -1,145 +1,129 @@
-# MetaClaw 当前架构升级方案
+# MetaClaw 仓库结构梳理方案
 
 日期：2026-06-29
 
-## 1. 背景
+## 1. 背景与本轮范围
 
-`docs/plans/2026-06-21-metaclaw-architecture-convergence-roadmap.md` 仍然是 MetaClaw 架构收敛的总路线。那份 roadmap 的核心判断是正确的：系统要从 session-centric 结构收敛到清晰的主路径，让自然语言裁决、任务生命周期、上下文构建、执行规划、执行运行时、验收交付分别位于明确的 module seam 后面。
+`src/core` 目前是一个 52 文件的 catch-all 目录，把 memory、task、execution、delivery、learning、guidance、intent、routing、shared-types 等所有职责混在一起，是当前可读性最大的瓶颈。此前已把 execution / delivery 的一部分抽到 `src/execution`、`src/delivery`（提交 `c6899c3`）。
 
-截至当前实现，`2026-06-21` roadmap 中的大量主路径收敛已经完成：`InputController`、`IntentOrchestrator`、`TaskRuntimeService`、`MemoryContextService`、`ExecutionPlanningService`、`ExecutionRuntime`、`VerificationAndDeliveryService`、`SessionExecutionCoordinator` 都已经进入主路径。`MetaclawSession` 的 God Object 问题已经明显缓解。
+**本轮目标：纯文件/模块搬家 + 目录结构梳理，不做任何逻辑重构。** 把 `src/core` 里与路由无关的职责拆进清晰的领域包，得到一个功能结构清晰、高可读的仓库。
 
-新的主要问题从 `MetaclawSession` 转移到了 `src/core`。许多职责虽然已经从 session 中迁出，但仍混在 `core` 目录内：intent、routing、execution runtime、task runtime、memory、delivery、types 等都在同一个大包里。当前架构升级的重点因此进入第二阶段：不再只是收缩 `MetaclawSession`，而是收缩 `src/core`，把职责拆分成清晰的领域包。
+本轮原则（沿用并强化之前的约定）：
 
-`docs/plans/2026-06-24-metaclaw-roadmap-remaining-todos.md` 暂时不作为新的待办清单推进。当前方案只吸收其中已经完成的事实，不重新打开那份文档里的 remaining todos。
+- **只搬家，不改逻辑**：用 `git mv` 移动文件，只更新 import 路径，不改动任何函数/类的实现。
+- **路由规则相关代码完全不碰**，留待后续「智能路由阶段」统一改造。
+- **不留 re-export 兼容 shim**：所有引用方一次性改成直接指向新位置。
+- 唯一例外：有 5 个非路由文件被 3 个路由文件 import，搬走它们会导致那 3 个路由文件的 import **路径字符串**失效。本轮允许对这 3 个文件做**机械的路径更新（零逻辑改动）**，详见第 5 节。
 
-## 2. 本轮范围与边界
+`docs/plans/2026-06-21-metaclaw-architecture-convergence-roadmap.md` 仍是总路线北极星；`docs/plans/2026-06-24-metaclaw-roadmap-remaining-todos.md` 不作为当前待办。本轮只做结构梳理，不重开这两份文档。
 
-本轮**只做智能路由之外的架构拆分**。
-
-- 本轮聚焦：把 `src/core` 里智能路由之外的职责拆分成清晰领域包（execution / delivery / task / memory / intent 等），让每个 module 拥有小 interface 和深 implementation。
-- 本轮**不碰**智能路由，也不动现有路由层：routing seam、selection signals、execution policy、runtime 内的 fallback 失败判定等，全部留待后续「智能路由阶段」统一改造。这样做的原因是：现在按当前形状改一遍 routing，等真正实现智能路由时还要再改一遍，重复劳动且容易引入互相矛盾的中间态。届时统一改。
-- 和 `2026-06-21` roadmap 的关系：保留其 7 层主路径作为北极星；其中执行规划 / routing / runtime policy 那一段的**目标形态推迟到智能路由阶段再定**，本轮不把它作为执行目标。
-
-```text
-InputController
-  -> IntentOrchestrator
-  -> TaskRuntimeService
-  -> MemoryContextService
-  -> ExecutionPlanningService
-  -> ExecutionRuntime
-  -> VerificationAndDeliveryService
-```
-
-## 3. 当前目标架构
-
-目标不是先做大规模目录搬家，而是让每个 module 拥有小 interface 和深 implementation。目录拆分应服务于 seam，而不是把现有复杂度机械移动到新文件夹。迁移要一次性迁干净：更新所有引用方直接指向新位置，不在旧路径保留 re-export 兼容 shim。
-
-建议最终包结构：
+## 2. 目标目录结构
 
 ```text
-src/routing/     （智能路由阶段再落地，本轮不动）
-src/execution/
-src/task/
-src/memory/
-src/intent/
-src/delivery/
-src/executor/
-src/storage/
-src/session/
+src/
+  memory/      # 记忆引擎、召回、召回复核、偏好/任务嵌入、上下文 bundle 构建、记忆捕获
+  task/        # 任务模型/引擎、生命周期/运行时、调度、检索/排序/语义、阻塞重算、恢复规划
+  execution/   # 执行运行时、executor registry、agentic loop、多 executor 编排、进度、聚合、workspace、会话运行时
+  executor/    # 具体 executor 适配器 + executor profile/admin/seeder 注册表管理
+  learning/    # 反思引擎、周报、技能治理、晋升闸门、安全扫描
+  guidance/    # 主动引导：任务信号、引导策略、编排/看板优先级
+  intent/      # 输入/资源归一化等非路由意图助手
+  delivery/    # 验收流水线、产物抽取、最终格式化、通知投递
+  session/     # 会话编排/状态/输出门面、用户交互协调、会话持久化
+  routing/     # 路由层（本轮不动，留待智能路由阶段）
+  core/        # 仅剩路由/意图裁决 + 共享类型残留（见第 4 节）
+  storage/ gateway/ commands/ tui/ cli/ utils/ notifications/ integrations/   # 维持现状
 ```
 
-职责方向：
+目录拆分服务于 seam：每个领域包对外是小 interface、内部是深 implementation，而不是把复杂度机械搬到新文件夹。
 
-- `src/execution/`：runtime、executor registry、progress、multi-executor orchestration、agentic loop、aggregation。
-- `src/task/`：task model、task lifecycle、task execution planning、scheduling eligibility。
-- `src/memory/`：memory engine、recall、execution context bundle、recall review、memory capture。
-- `src/intent/`：natural-language decision、rule hints、intent schemas。（其中 semantic routing adapter 属于路由层，本轮不动。）
-- `src/delivery/`：verification pipeline、artifact extraction、final formatting、notification delivery。
-- `src/executor/`：concrete executor adapters and executor prompt/runtime adapter utilities。
-- `src/session/`：composition/state/output facade and user interaction coordination。
-- `src/routing/`：`CapabilityClass`、`ExecutionPolicy`、policy planning、strategy planning、selection signals、route event projection——**留待智能路由阶段**。
+## 3. 搬家映射（39 个文件离开 core）
 
-`src/core` 应逐步退化为空目录或仅保留尚未拆分的 routing/types 内容，最终被上述领域包替代。
+> 每个文件 `git mv`，仅更新自身与引用方的 import 路径，内容逻辑不动。
 
-## 4. 当前优先级（智能路由之外）
+| 目标包 | 文件 |
+|---|---|
+| `src/memory/`（11） | memory-engine, memory-capture-service, memory-context-service, memory-vault-exporter, hybrid-memory-recaller, context-recaller, resume-context-builder, recall-policy-service, recall-review-application-service, recall-review-builder, preference-embedding-service |
+| `src/task/`（10） | task-engine, task-runtime-service, task-execution-planner, task-resume-planner, task-relevance-ranker, task-semantic-service, task-embedding-service, hybrid-task-retriever, blocked-task-reconciler, scheduler |
+| `src/execution/`（+4，已有 3） | execution-runtime, agentic-loop-controller, multi-executor-orchestrator, conversation-runtime-service |
+| `src/executor/`（+3，已有适配器） | executor-profile-service, executor-admin-service, executor-registry-seeder |
+| `src/learning/`（5，新建） | reflection-engine, learning-weekly-review-builder, skill-governance-engine, promotion-gate, safety-scanner |
+| `src/guidance/`（3，新建） | orchestration, guidance-policy-engine, task-signal-service |
+| `src/intent/`（2，新建） | inline-resource-normalizer, material-utils |
+| `src/session/`（+1） | session-persistence-service |
 
-Priority 1：抽取 execution 与 delivery 模块（本提交已完成）。
+说明：
 
-- `execution-aggregator`、`execution-progress-service`、`workspace-target-service` 移到 `src/execution/`。
-- `verification-and-delivery-service` 移到 `src/delivery/`。
-- 所有引用方（session、coordinator、agentic-loop-controller、memory-capture-service、测试）直接指向新位置，`src/core` 不保留 re-export shim。
-- boundary test 断言实现在新位置、且旧 `core` 文件已移除。
+- `safety-scanner` 主用于 learning 的反思候选安全；`src/executor/skill-package-builder` 会跨域 import 它，属正常依赖。
+- `conversation-runtime-service` 仅被 `metaclaw-session` 使用，归入 execution 运行时。
+- `task-signal-service` 是 guidance 流水线的输入，与 `guidance-policy-engine`、`orchestration` 一起进 `src/guidance`。
 
-Priority 2：继续把 execution runtime 相关代码从 `core` 收敛到 `src/execution`。
+## 4. 留在 src/core 的残留（13 文件，本轮不动）
 
-- `ExecutionRuntime`、`ExecutorRegistry`、progress service、multi-executor orchestration、agentic loop、aggregation 逐步收敛到 `src/execution/`。`src/executor/` 继续只放 concrete adapters。
-- 注意：runtime 内 `fallbackChain` 的 peer-retry 失败判定涉及路由语义，**不在本轮处理**，留待智能路由阶段（见第 5 节）。
+- **路由 / 意图裁决（→ 智能路由阶段接手）**：capability-class, execution-policy, execution-strategy-planner, execution-planning-service, executor-router, executor-routing-coordinator, semantic-intent-router, intent-orchestrator, rule-hints-provider, llm-bridge, task-routing
+- **共享原语（→ types 拆分阶段处理）**：types.ts, embedding-provider.ts
 
-Priority 3：拆 task / memory / intent / delivery 领域包。
+搬完后 `src/core` = 11 个路由文件 + 2 个共享文件，恰好是未来「智能路由阶段」要接手的范围，交接干净。
 
-- 按职责把 `core` 中对应代码搬到 `src/task`、`src/memory`、`src/intent`、`src/delivery`，同样要求一次性更新引用、不留兼容 shim。
+> 备注：`task-routing.ts` 实质是任务过滤谓词（`filterDurableTasks` 等），并非路由规则；但它被路由文件 `rule-hints-provider` / `semantic-intent-router` import，单独搬会强制改动路由文件，故本轮保留在 core。
+> `llm-bridge.ts` 是通用 LLM 客户端但混入了 legacy 路由 schema 且被路由文件依赖，本轮保留；将来可在路由阶段把通用 LLM 适配层与路由 schema 拆开。
 
-Priority 4：最后拆 `core/types.ts`。
+## 5. 路由 seam 与 3 处「机械改路径」
 
-- `core/types.ts` 混合了 task、memory、execution context、config、runtime state。拆分应放在行为 seam 稳定之后进行。优先一次性把引用方更新到拆分后的类型模块；如确需临时 re-export 过渡，必须在同一轮内清除，不长期保留。
+经逐文件核实 import：**没有任何路由文件 import memory / learning / guidance / intent 域**，这些域可零路由改动搬走。唯一耦合是 5 个待搬文件被 3 个路由文件 import。搬走它们时，仅对下列 3 个路由文件做 **import 路径字符串更新（不改任何路由逻辑）**：
 
-Priority 5：用 architecture boundary tests 防止逻辑回流 `MetaclawSession` 或 `core`。
+- `src/core/executor-routing-coordinator.ts`
+  - `./executor-profile-service.js` → `../executor/executor-profile-service.js`
+  - `./task-runtime-service.js` → `../task/task-runtime-service.js`
+  - `./session-persistence-service.js` → `../session/session-persistence-service.js`
+- `src/core/execution-planning-service.ts`
+  - `./multi-executor-orchestrator.js` → `../execution/multi-executor-orchestrator.js`
+- `src/core/execution-strategy-planner.ts`
+  - `./hybrid-task-retriever.js` → `../task/hybrid-task-retriever.js`
 
-## 5. 暂缓：智能路由阶段统一处理
+> 这些是纯路径更新，未来路由阶段无论怎么重写这些文件都会重排 import，本轮改动对其零负担。
 
-以下条目本轮不执行，等到具体实现智能路由时统一改造，避免反复改写。此处仅记录已达成的方向共识，供后续阶段参考。
+## 6. 分阶段执行顺序
 
-- 清理 routing seam：让 `ExecutionStrategyPlanner` 不再依赖 `ExecutorRouteDecision`，strategy planning 的输入围绕 policy 语义（`capabilityClass`、`primaryExecutor`、`candidateExecutors`、`riskLevel`、`matchedBoundary`、`resources`、`recalledTaskIds`、`taskExecutionPlan`）。`ExecutorRouteDecision` 只保留为 route event persistence/display 的 projection。
-- 新增 `ExecutorSelectionSignalService`：只提供数据不做加权评分（recent success rate / pending load / price），由 LLM 或 policy decision layer 决定如何组合。tool layer 不恢复静态 affinity scoring。
-- 在 runtime 内引入 `shouldRetryOnPeer` 失败判定 seam：区分 force-majeure / environmental failure（不试 peer，返回用户）与 capability shortfall（才尝试 fallback peer）。可复用现有 `isRecoverableExecutorFailure` 语义，但包在可替换 interface 后面。
-- 执行规划层替换关系（届时落地）：
-  - `ExecutionPlanV2` -> `ExecutionPolicy`
-  - `race_executors` -> sequential fallback policy
-  - static affinity / `TaskRouteIntent` -> `CapabilityClass + selection signals`
-  - hardcoded fallback -> `fallbackChain + failure judgment seam`
+按「先叶子后核心、最少级联」排序。每个 Phase 一个可验证提交，步骤固定：`git mv` → `tsc --noEmit` 找出断裂 import 并修路径 → 镜像迁移对应测试文件并改其 import / readSource 路径 → 更新/新增 boundary test → Docker 跑 `npm test` → 提交。
 
-## 6. 非目标
+- **Phase A — intent 助手** → `src/intent/`（叶子，零路由）
+- **Phase B — memory 域** → `src/memory/`（零路由）
+- **Phase C — learning 域**（含 safety-scanner）→ `src/learning/`（零路由）
+- **Phase D — guidance 域** → `src/guidance/`（零路由）
+- **Phase E — execution runtime** → `src/execution/`（含 1 处路由改路径：execution-planning-service）
+- **Phase F — executor 服务** → `src/executor/`（含 1 处路由改路径：executor-routing-coordinator）
+- **Phase G — task 域** → `src/task/`（含 2 处路由改路径：executor-routing-coordinator、execution-strategy-planner）
+- **Phase H — session-persistence-service** → `src/session/`（含 1 处路由改路径：executor-routing-coordinator）
+- **Phase I（本轮不做，标注为后续）** — 拆 `types.ts`、安置 `embedding-provider.ts`；blast radius 大，留待行为 seam 稳定后单独处理。
 
-- 不在本轮改动智能路由或现有路由层。
-- 不恢复 `ExecutionPlanV2`。
-- 不恢复 `race_executors`。
-- 不把 `candidateExecutors` 当作 `fallbackChain`。
-- 不在 routing tool layer 重新做静态加权评分。
-- 不让 `TaskRouteIntent` 和 legacy `ExecutorRouter` scoring 回到新主路径。
-- 不先做大规模目录搬家。
-- 迁移时不长期保留旧路径的 re-export 兼容 shim。
-- 不把 `2026-06-24` remaining todos 重新作为当前执行清单。
+## 7. Boundary tests 处理
 
-## 7. 验收标准
+- **路径需更新**（readSource 指向旧 core 路径）：`task-runtime-boundary`、`memory-context-boundary`、`execution-runtime-boundary`、`metaclaw-session-architecture-boundary`（按其引用到的被搬文件）。
+- **不变**（断言对象仍在 core）：`executor-factory-boundary`、`llm-bridge-boundary`、`execution-planning-boundary`（llm-bridge / execution-planning-service / executor-router 都留在 core）。
+- **已完成**：`execution-module-boundary`、`verification-and-delivery-boundary`。
+- 每个新域加一条轻量 boundary test：断言实现已在 `src/<domain>/`、且旧 `src/core/<file>.ts` 不存在（复用 `existsSync` 模式）。
+- 测试文件随源码**镜像迁移**：`tests/core/<x>.test.ts` → `tests/<domain>/<x>.test.ts`（AGENTS.md 约定 tests 镜像 src）。
 
-本轮（结构性拆分）：
+## 8. 非目标
 
-- execution / delivery 模块的实现位于 `src/execution` / `src/delivery`，`src/core` 不再保留对应文件或 re-export shim。
-- 所有引用方直接 import 新位置，`tsc --noEmit` 通过。
-- `src/core` 开始按 execution / delivery / task / memory / intent 收敛。
-- architecture boundary tests 断言实现在新位置、旧 `core` 文件已移除，防止逻辑回流。
+- 不改动任何路由规则 / 路由层逻辑（仅第 5 节的机械路径更新）。
+- 不拆 `types.ts`（留 Phase I）。
+- 不保留旧路径的 re-export 兼容 shim。
+- 不做任何逻辑重构、不改函数行为、不改公共契约。
+- 不重开 `2026-06-24` remaining todos。
 
-智能路由阶段（后续）：
+## 9. 验收与验证
 
-- 新 routing 主路径不再依赖 legacy `ExecutorRouter` scoring。
-- `ExecutionStrategyPlanner` 不再消费 `ExecutorRouteDecision`。
-- runtime 只消费 `ExecutionPolicy`，不消费 `ExecutionPlanV2` 或旧 plan adapter。
-- force-majeure failure 不会继续尝试 peer executor。
-- `fallbackChain` 只表达 policy 决定的 sequential fallback，不与 candidates 混用。
+- 每阶段 `npm run lint`（`tsc --noEmit` 零报错，确认无悬空 import）。
+- 每阶段 Docker 全量测试保持全绿：
 
-## 8. 验证方式
-
-本轮已包含代码行为之外的结构迁移，验证方式：
-
-```powershell
-npm run lint        # tsc --noEmit，确认无悬空 import
-npx vitest run tests/core/execution-module-boundary.test.ts tests/core/verification-and-delivery-boundary.test.ts
-git diff -- docs/plans
+```bash
+docker build -f Dockerfile.test -t metaclaw-test .
+docker run --rm metaclaw-test
 ```
 
-预期结果：
-
-- 类型检查通过，无对已删除 `core` shim 的引用。
-- boundary tests 通过：实现在 `src/execution` / `src/delivery`，旧 `core` 文件已移除。
-- 不修改 `2026-06-21-metaclaw-architecture-convergence-roadmap.md`。
-- 不修改 `2026-06-24-metaclaw-roadmap-remaining-todos.md`。
+- 终态自检：
+  - `src/core` 仅剩 13 个文件（11 路由 + types + embedding-provider）。
+  - 已搬模块的旧 `core/` 路径不再被任何文件引用（除第 5 节 3 个路由文件对残留 core 文件的正常引用）。
+  - `git diff -- docs/plans` 仅改本文件；不动 `2026-06-21` roadmap 与 `2026-06-24` todos。
