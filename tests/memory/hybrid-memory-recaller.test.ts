@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HybridMemoryRecaller } from '../../src/core/hybrid-memory-recaller.js';
+import { HybridMemoryRecaller } from '../../src/memory/hybrid-memory-recaller.js';
 import type { Preference, Task } from '../../src/core/types.js';
 
 function createPreference(overrides: Partial<Preference> = {}): Preference {

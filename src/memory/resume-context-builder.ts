@@ -1,9 +1,9 @@
 import type { ConversationTurn } from '../executor/adapter.js';
 import type { ContextRecaller } from './context-recaller.js';
 import type { MemoryEngine } from './memory-engine.js';
-import type { TaskMemoryDocument } from './task-embedding-service.js';
-import type { TaskEngine } from './task-engine.js';
-import type { ExecutionContextBundle, ResolvedPreference, Task, TaskMemoryCandidate, TaskSnapshot, WorkspaceContext } from './types.js';
+import type { TaskMemoryDocument } from '../core/task-embedding-service.js';
+import type { TaskEngine } from '../core/task-engine.js';
+import type { ExecutionContextBundle, ResolvedPreference, Task, TaskMemoryCandidate, TaskSnapshot, WorkspaceContext } from '../core/types.js';
 import { buildMaterialSummary, extractMaterialTextSnippets } from '../intent/material-utils.js';
 import { resolve } from 'path';
 

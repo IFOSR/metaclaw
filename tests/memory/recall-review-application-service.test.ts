@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RecallReviewApplicationService } from '../../src/core/recall-review-application-service.js';
+import { RecallReviewApplicationService } from '../../src/memory/recall-review-application-service.js';
 import type { PreferenceMemoryCandidate, TaskMemoryCandidate } from '../../src/core/types.js';
 
 function preference(overrides: Partial<PreferenceMemoryCandidate> = {}): PreferenceMemoryCandidate {

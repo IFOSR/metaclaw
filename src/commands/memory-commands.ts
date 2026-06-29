@@ -1,6 +1,6 @@
 import { RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 import { MemoryAuditEventRepo, type MemoryAuditEventRecord } from '../storage/memory-audit-event-repo.js';
-import { MemoryVaultExporter } from '../core/memory-vault-exporter.js';
+import { MemoryVaultExporter } from '../memory/memory-vault-exporter.js';
 import type { PreferenceScope } from '../core/types.js';
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
 import { generateInteractionId } from '../utils/id.js';

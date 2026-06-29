@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { GuidanceActionType, PreferenceMemoryCandidate, TaskMemoryCandidate } from './types.js';
+import type { GuidanceActionType, PreferenceMemoryCandidate, TaskMemoryCandidate } from '../core/types.js';
 import type { ExecutionRecallSelection, MemoryContextService } from './memory-context-service.js';
 import type { MemoryCaptureService } from './memory-capture-service.js';
 import { RecallPolicyService } from './recall-policy-service.js';

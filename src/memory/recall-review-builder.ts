@@ -3,7 +3,7 @@ import {
   type PreferenceMemoryCandidate,
   type RecallReviewCard,
   type TaskMemoryCandidate,
-} from './types.js';
+} from '../core/types.js';
 
 export interface RecallReviewBuildInput {
   taskCandidates: TaskMemoryCandidate[];

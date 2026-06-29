@@ -9,13 +9,13 @@ import {
   type PreferenceStatus,
   type Observation,
   type TaskMemoryCandidate,
-} from './types.js';
+} from '../core/types.js';
 import type { PreferenceRepo } from '../storage/preference-repo.js';
 import type { ObservationRepo } from '../storage/observation-repo.js';
 import type { TaskMemoryCardRepo } from '../storage/task-memory-card-repo.js';
 import type { PreferenceEmbeddingService } from './preference-embedding-service.js';
 import type { HybridMemoryRecaller, HybridMemoryRecallResult } from './hybrid-memory-recaller.js';
-import type { PreferenceRecallDecision } from './llm-bridge.js';
+import type { PreferenceRecallDecision } from '../core/llm-bridge.js';
 import { generatePreferenceId } from '../utils/id.js';
 
 const CONFIRM_THRESHOLD = 3;

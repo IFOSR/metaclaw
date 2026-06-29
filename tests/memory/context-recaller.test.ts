@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
 
 function createTestDb() {

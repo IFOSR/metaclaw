@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
-import { TaskRelevanceRanker } from './task-relevance-ranker.js';
-import type { EmbeddingProvider } from './embedding-provider.js';
+import { TaskRelevanceRanker } from '../core/task-relevance-ranker.js';
+import type { EmbeddingProvider } from '../core/embedding-provider.js';
 import {
   PreferenceScope,
   type Preference,
@@ -9,12 +9,12 @@ import {
   type Task,
   type TaskMemoryCandidate,
   type TaskMemoryKind,
-} from './types.js';
+} from '../core/types.js';
 import type { PreferenceEmbeddingRecord } from '../storage/preference-embedding-repo.js';
 import type { TaskMemoryEmbeddingRecord } from '../storage/task-memory-embedding-repo.js';
 import type { RecallFeedbackAction, RecallFeedbackRecord } from '../storage/recall-feedback-repo.js';
 import type { MemoryRecallEventRecord } from '../storage/memory-recall-event-repo.js';
-import type { HybridTaskRetriever } from './hybrid-task-retriever.js';
+import type { HybridTaskRetriever } from '../core/hybrid-task-retriever.js';
 
 interface PreferenceRepoLike {
   findById(id: string): Preference | null;

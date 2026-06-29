@@ -1,4 +1,4 @@
-import { PreferenceScope, RecallReviewPolicyType, type GuidanceActionType, type PreferenceMemoryCandidate, type RecallReviewPolicy, type TaskMemoryCandidate } from './types.js';
+import { PreferenceScope, RecallReviewPolicyType, type GuidanceActionType, type PreferenceMemoryCandidate, type RecallReviewPolicy, type TaskMemoryCandidate } from '../core/types.js';
 import type { RecallReviewPolicyLookup, RecallReviewPolicyRepo } from '../storage/recall-review-policy-repo.js';
 
 export interface RecallPolicyResolveInput {

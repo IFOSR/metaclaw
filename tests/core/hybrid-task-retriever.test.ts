@@ -8,7 +8,7 @@ import { TaskRelationRepo } from '../../src/storage/task-relation-repo.js';
 import { TaskMemoryEmbeddingRepo } from '../../src/storage/task-memory-embedding-repo.js';
 import { RecallFeedbackRepo } from '../../src/storage/recall-feedback-repo.js';
 import { HybridTaskRetriever } from '../../src/core/hybrid-task-retriever.js';
-import { HybridMemoryRecaller } from '../../src/core/hybrid-memory-recaller.js';
+import { HybridMemoryRecaller } from '../../src/memory/hybrid-memory-recaller.js';
 
 function createHarness() {
   const db = new Database(':memory:');

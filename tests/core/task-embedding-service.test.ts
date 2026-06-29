@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TaskEmbeddingService } from '../../src/core/task-embedding-service.js';
-import { buildTaskMemoryDocuments } from '../../src/core/resume-context-builder.js';
+import { buildTaskMemoryDocuments } from '../../src/memory/resume-context-builder.js';
 import type { Task } from '../../src/core/types.js';
 
 function createTask(overrides: Partial<Task> = {}): Task {

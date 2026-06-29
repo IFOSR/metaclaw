@@ -6,7 +6,7 @@ import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { OrchestrationEngine } from '../../src/core/orchestration.js';
 import type { Config } from '../../src/core/types.js';
 

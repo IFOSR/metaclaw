@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { RecallReviewBuilder } from '../../src/core/recall-review-builder.js';
-import { RecallPolicyService } from '../../src/core/recall-policy-service.js';
+import { RecallReviewBuilder } from '../../src/memory/recall-review-builder.js';
+import { RecallPolicyService } from '../../src/memory/recall-policy-service.js';
 import { RecallReviewPolicyRepo } from '../../src/storage/recall-review-policy-repo.js';
 import type {
   PreferenceMemoryCandidate,

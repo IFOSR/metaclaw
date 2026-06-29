@@ -23,7 +23,7 @@ describe('Memory context architecture boundaries', () => {
   });
 
   it('keeps MemoryContextService out of intent routing and executor selection', () => {
-    const source = readSource('src/core/memory-context-service.ts');
+    const source = readSource('src/memory/memory-context-service.ts');
 
     expect(source).not.toContain('IntentOrchestrator');
     expect(source).not.toContain('ExecutorRouter');

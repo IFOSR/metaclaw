@@ -4,14 +4,14 @@ import type { MemoryEngine } from './memory-engine.js';
 import type { ContextRecaller } from './context-recaller.js';
 import { extractInlineResourceMatches, stripInlineResourceMatches } from '../intent/inline-resource-normalizer.js';
 import type { ResumeContextBuilder } from './resume-context-builder.js';
-import { MemoryApplicabilityAction } from './types.js';
+import { MemoryApplicabilityAction } from '../core/types.js';
 import type {
   ExecutionContextBundle,
   Preference,
   PreferenceMemoryCandidate,
   ResolvedPreference,
   TaskMemoryCandidate,
-} from './types.js';
+} from '../core/types.js';
 
 export interface ExecutionRecallSelection {
   authoritative: boolean;

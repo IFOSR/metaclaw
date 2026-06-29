@@ -3,8 +3,8 @@ import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { PreferenceEmbeddingService } from '../../src/core/preference-embedding-service.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { PreferenceEmbeddingService } from '../../src/memory/preference-embedding-service.js';
 
 function createTestDb() {
   const db = new Database(':memory:');

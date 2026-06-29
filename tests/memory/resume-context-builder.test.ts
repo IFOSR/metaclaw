@@ -9,9 +9,9 @@ import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { TaskMemoryCardRepo } from '../../src/storage/task-memory-card-repo.js';
 import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
-import { ResumeContextBuilder } from '../../src/core/resume-context-builder.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
+import { ResumeContextBuilder } from '../../src/memory/resume-context-builder.js';
 import type { Preference } from '../../src/core/types.js';
 
 function createTestDb() {

@@ -1,7 +1,7 @@
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
 import type { TaskSummary } from '../core/llm-bridge.js';
-import type { MemoryContextService } from '../core/memory-context-service.js';
+import type { MemoryContextService } from '../memory/memory-context-service.js';
 import type { TaskResumePlanner, ResumePlanResult } from '../core/task-resume-planner.js';
 import type { TaskRuntimeService } from '../core/task-runtime-service.js';
 import type { TaskSemanticService } from '../core/task-semantic-service.js';

@@ -9,11 +9,11 @@ import type {
   TaskRecoveryTrigger,
 } from '../core/types.js';
 import type { TaskEngine } from '../core/task-engine.js';
-import type { MemoryEngine } from '../core/memory-engine.js';
+import type { MemoryEngine } from '../memory/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
-import type { ContextRecaller } from '../core/context-recaller.js';
+import type { ContextRecaller } from '../memory/context-recaller.js';
 import type { LlmBridge, TaskSummary } from '../core/llm-bridge.js';
 import { SchedulerEngine } from '../core/scheduler.js';
 import type { DispatchContext } from '../core/scheduler.js';
@@ -22,11 +22,11 @@ import {
 } from '../core/task-routing.js';
 import { RuleHintsProvider } from '../core/rule-hints-provider.js';
 import { IntentOrchestrator, type IntentDecisionV2, type IntentOrchestratorInput } from '../core/intent-orchestrator.js';
-import { ResumeContextBuilder } from '../core/resume-context-builder.js';
-import { MemoryContextService } from '../core/memory-context-service.js';
-import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../core/recall-review-application-service.js';
+import { ResumeContextBuilder } from '../memory/resume-context-builder.js';
+import { MemoryContextService } from '../memory/memory-context-service.js';
+import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../memory/recall-review-application-service.js';
 import { SessionPersistenceService } from '../core/session-persistence-service.js';
-import { MemoryCaptureService } from '../core/memory-capture-service.js';
+import { MemoryCaptureService } from '../memory/memory-capture-service.js';
 import { ConversationRuntimeService } from '../core/conversation-runtime-service.js';
 import { TaskResumePlanner } from '../core/task-resume-planner.js';
 import { CommandRouter } from '../commands/router.js';

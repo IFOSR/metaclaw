@@ -5,7 +5,7 @@ import { learningCommand } from '../../src/commands/learning-commands.js';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { LearningCandidateRepo } from '../../src/storage/learning-candidate-repo.js';
 import { ReflectionEventRepo } from '../../src/storage/reflection-event-repo.js';
 import { ExecutorSkillInstallEventRepo } from '../../src/storage/executor-skill-install-event-repo.js';

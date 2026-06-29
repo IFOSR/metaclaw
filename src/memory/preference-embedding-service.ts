@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { Preference } from './types.js';
-import type { EmbeddingProvider } from './embedding-provider.js';
+import type { Preference } from '../core/types.js';
+import type { EmbeddingProvider } from '../core/embedding-provider.js';
 import type { PreferenceEmbeddingRecord } from '../storage/preference-embedding-repo.js';
 
 interface PreferenceEmbeddingRepoLike {
