@@ -22,7 +22,7 @@ describe('executor factory architecture boundaries', () => {
   });
 
   it('keeps legacy factory imports out of core runtime and session paths', () => {
-    expect(readSource('src/core/execution-runtime.ts')).not.toContain("from '../executor/factory.js'");
+    expect(readSource('src/execution/execution-runtime.ts')).not.toContain("from '../executor/factory.js'");
     expect(readSource('src/session/metaclaw-session.ts')).not.toContain("from '../executor/factory.js'");
   });
 });

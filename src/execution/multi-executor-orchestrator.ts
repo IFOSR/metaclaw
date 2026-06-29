@@ -1,6 +1,6 @@
 import type { ExecutorAdapter, ExecutorInput } from '../executor/adapter.js';
-import type { ExecutionStrategy, ExecutionWorkUnit } from './execution-strategy-planner.js';
-import type { ExecutorResult, Task } from './types.js';
+import type { ExecutionStrategy, ExecutionWorkUnit } from '../core/execution-strategy-planner.js';
+import type { ExecutorResult, Task } from '../core/types.js';
 
 export interface WorkUnitResult {
   workUnitId: string;

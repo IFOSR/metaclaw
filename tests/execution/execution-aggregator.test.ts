@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionAggregator } from '../../src/execution/execution-aggregator.js';
 import type { AggregationPlan, ExecutionWorkUnit } from '../../src/core/execution-strategy-planner.js';
-import type { WorkUnitResult } from '../../src/core/multi-executor-orchestrator.js';
+import type { WorkUnitResult } from '../../src/execution/multi-executor-orchestrator.js';
 
 function createUnit(overrides: Partial<ExecutionWorkUnit>): ExecutionWorkUnit {
   return {
@@ -55,7 +55,7 @@ describe('ExecutionAggregator', () => {
         createResult({
           workUnitId: 'wu_implementation',
           executorName: 'codex-cli',
-          output: 'Changed docs/task-os.md. npm test -- tests/core/execution-aggregator.test.ts',
+          output: 'Changed docs/task-os.md. npm test -- tests/execution/execution-aggregator.test.ts',
           artifacts: ['docs/task-os.md'],
         }),
       ],

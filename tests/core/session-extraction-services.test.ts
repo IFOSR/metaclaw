@@ -15,7 +15,7 @@ import { TaskEngine } from '../../src/core/task-engine.js';
 import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
 import { TaskRuntimeService } from '../../src/core/task-runtime-service.js';
 import { TaskSemanticService } from '../../src/core/task-semantic-service.js';
-import { ConversationRuntimeService } from '../../src/core/conversation-runtime-service.js';
+import { ConversationRuntimeService } from '../../src/execution/conversation-runtime-service.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { ExecutorRouteDecision } from '../../src/core/executor-router.js';
 

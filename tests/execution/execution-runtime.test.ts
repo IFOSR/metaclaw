@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import type { ExecutorAdapter, ExecutorInput } from '../../src/executor/adapter.js';
 import type { ExecutorResult, Config, Task } from '../../src/core/types.js';
-import { ExecutionRuntime, ExecutorAdapterRegistry, ExecutorRegistry } from '../../src/core/execution-runtime.js';
+import { ExecutionRuntime, ExecutorAdapterRegistry, ExecutorRegistry } from '../../src/execution/execution-runtime.js';
 import type { ExecutionPolicy } from '../../src/core/execution-policy.js';
 import { ExecutorProfileRepo } from '../../src/storage/executor-profile-repo.js';
 import { runMigrations } from '../../src/storage/migrations.js';
@@ -216,7 +216,7 @@ describe('ExecutionRuntime', () => {
 
   it('runs multi-executor policies through orchestrator and agentic loop with dependency outputs', async () => {
     const hermes = createExecutor('hermes-agent', createResult('research sources: https://example.com docs/research.md'));
-    const codex = createExecutor('codex-cli', createResult('implementation used prior research. npm test -- tests/core/execution-runtime.test.ts docs/patch.md'));
+    const codex = createExecutor('codex-cli', createResult('implementation used prior research. npm test -- tests/execution/execution-runtime.test.ts docs/patch.md'));
     const runtime = createRuntime({
       defaultExecutor: codex,
       executors: { 'hermes-agent': hermes },

@@ -35,7 +35,7 @@ describe('verification and delivery architecture boundaries', () => {
 
   it('keeps verification and delivery independent from executor creation and LLM routing', () => {
     const deliverySource = readSource('src/delivery/verification-and-delivery-service.ts');
-    const runtimeSource = readSource('src/core/execution-runtime.ts');
+    const runtimeSource = readSource('src/execution/execution-runtime.ts');
 
     expect(deliverySource).not.toContain('createExecutorByName');
     expect(deliverySource).not.toContain('new CustomCliExecutorAdapter');

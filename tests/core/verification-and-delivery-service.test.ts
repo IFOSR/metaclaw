@@ -12,7 +12,7 @@ import {
   extractConciseExecutorSummary,
 } from '../../src/delivery/verification-and-delivery-service.js';
 import type { AggregationPlan, ExecutionWorkUnit } from '../../src/core/execution-strategy-planner.js';
-import type { WorkUnitResult } from '../../src/core/multi-executor-orchestrator.js';
+import type { WorkUnitResult } from '../../src/execution/multi-executor-orchestrator.js';
 
 function createAggregationWorkUnit(overrides: Partial<ExecutionWorkUnit>): ExecutionWorkUnit {
   return {

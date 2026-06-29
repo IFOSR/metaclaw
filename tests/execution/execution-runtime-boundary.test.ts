@@ -27,7 +27,7 @@ describe('Execution runtime architecture boundaries', () => {
   });
 
   it('centralizes executor registry and policy fallback behavior in ExecutionRuntime', () => {
-    const runtimeSource = readSource('src/core/execution-runtime.ts');
+    const runtimeSource = readSource('src/execution/execution-runtime.ts');
 
     expect(runtimeSource).toContain('export class ExecutorAdapterRegistry');
     expect(runtimeSource).toContain('export class ExecutorRegistry');
@@ -42,7 +42,7 @@ describe('Execution runtime architecture boundaries', () => {
   });
 
   it('routes complex execution through multi-executor orchestration and agentic loop in ExecutionRuntime', () => {
-    const runtimeSource = readSource('src/core/execution-runtime.ts');
+    const runtimeSource = readSource('src/execution/execution-runtime.ts');
 
     expect(runtimeSource).toContain('MultiExecutorOrchestrator');
     expect(runtimeSource).toContain('AgenticLoopController');
@@ -53,7 +53,7 @@ describe('Execution runtime architecture boundaries', () => {
   it('exposes the standard ExecutionResult contract to the session execution path', () => {
     const sessionSource = readSource('src/session/metaclaw-session.ts');
     const coordinatorSource = readSource('src/session/session-execution-coordinator.ts');
-    const runtimeSource = readSource('src/core/execution-runtime.ts');
+    const runtimeSource = readSource('src/execution/execution-runtime.ts');
 
     expect(runtimeSource).toContain('Promise<ExecutionResult>');
     expect(runtimeSource).toContain('toExecutionResult');

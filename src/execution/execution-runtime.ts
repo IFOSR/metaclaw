@@ -9,10 +9,10 @@ import { HermesAgentAdapter } from '../executor/hermes-agent.js';
 import { OpenClawAdapter } from '../executor/openclaw.js';
 import { PiAgentAdapter } from '../executor/pi-agent.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
-import type { Config, ExecutorResult } from './types.js';
-import type { ExecutionResult } from './execution-planning-service.js';
-import type { ExecutionPolicy } from './execution-policy.js';
-import type { ExecutionStrategy } from './execution-strategy-planner.js';
+import type { Config, ExecutorResult } from '../core/types.js';
+import type { ExecutionResult } from '../core/execution-planning-service.js';
+import type { ExecutionPolicy } from '../core/execution-policy.js';
+import type { ExecutionStrategy } from '../core/execution-strategy-planner.js';
 import { MultiExecutorOrchestrator, type WorkUnitResult } from './multi-executor-orchestrator.js';
 import { AgenticLoopController } from './agentic-loop-controller.js';
 

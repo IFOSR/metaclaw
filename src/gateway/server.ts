@@ -9,7 +9,7 @@ import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { ContextRecaller } from '../memory/context-recaller.js';
 import type { LlmBridge } from '../core/llm-bridge.js';
 import type { NotificationService } from '../notifications/types.js';
-import { createDefaultExecutor } from '../core/execution-runtime.js';
+import { createDefaultExecutor } from '../execution/execution-runtime.js';
 import { MetaclawSession } from '../session/metaclaw-session.js';
 import { createJsonLineParser, encodeJsonLine } from './jsonl.js';
 import type { GatewayClientMessage, GatewayServerMessage } from './protocol.js';

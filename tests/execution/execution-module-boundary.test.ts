@@ -13,6 +13,20 @@ function coreFileExists(path: string): boolean {
 }
 
 describe('execution module architecture boundaries', () => {
+  it('keeps execution runtime implementation in src/execution and out of core', () => {
+    const runtimeFiles = [
+      'execution-runtime',
+      'agentic-loop-controller',
+      'multi-executor-orchestrator',
+      'conversation-runtime-service',
+    ];
+
+    for (const file of runtimeFiles) {
+      expect(coreFileExists(`src/execution/${file}.ts`)).toBe(true);
+      expect(coreFileExists(`src/core/${file}.ts`)).toBe(false);
+    }
+  });
+
   it('keeps execution aggregation implementation in src/execution and out of core', () => {
     const implementationSource = readSource('src/execution/execution-aggregator.ts');
 

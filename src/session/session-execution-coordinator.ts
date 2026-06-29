@@ -5,7 +5,7 @@ import type { MemoryContextService, ExecutionRecallSelection } from '../memory/m
 import type { TaskRuntimeService } from '../core/task-runtime-service.js';
 import type { SchedulerEngine } from '../core/scheduler.js';
 import type { ExecutorRoutingCoordinator } from '../core/executor-routing-coordinator.js';
-import type { ExecutionRuntime } from '../core/execution-runtime.js';
+import type { ExecutionRuntime } from '../execution/execution-runtime.js';
 import type { ExecutionProgressService, ExecutionProgressTracker } from '../execution/execution-progress-service.js';
 import type { WorkspaceTargetService } from '../execution/workspace-target-service.js';
 import type { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';

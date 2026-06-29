@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgenticLoopController } from '../../src/core/agentic-loop-controller.js';
-import type { MultiExecutorOrchestrationResult } from '../../src/core/multi-executor-orchestrator.js';
+import { AgenticLoopController } from '../../src/execution/agentic-loop-controller.js';
+import type { MultiExecutorOrchestrationResult } from '../../src/execution/multi-executor-orchestrator.js';
 import type { ExecutionStrategy } from '../../src/core/execution-strategy-planner.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { Task } from '../../src/core/types.js';
@@ -88,7 +88,7 @@ describe('AgenticLoopController', () => {
             workUnitId: 'wu_patch',
             executorName: 'codex-cli',
             status: 'success',
-            output: 'Changed src/core/foo.ts. npm test -- tests/core/agentic-loop-controller.test.ts',
+            output: 'Changed src/core/foo.ts. npm test -- tests/execution/agentic-loop-controller.test.ts',
             artifacts: [],
             startedAt: '2026-06-15T10:01:00.000Z',
             finishedAt: '2026-06-15T10:01:01.000Z',

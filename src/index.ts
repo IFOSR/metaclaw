@@ -15,7 +15,7 @@ import { HybridTaskRetriever } from './core/hybrid-task-retriever.js';
 import { TaskEngine } from './core/task-engine.js';
 import { MemoryEngine } from './memory/memory-engine.js';
 import { OrchestrationEngine } from './guidance/orchestration.js';
-import { createDefaultExecutor } from './core/execution-runtime.js';
+import { createDefaultExecutor } from './execution/execution-runtime.js';
 import { ContextRecaller } from './memory/context-recaller.js';
 import { LlmBridge } from './core/llm-bridge.js';
 import { loadConfig, migrateLegacyFeishuConfigFileToGateway } from './utils/config.js';

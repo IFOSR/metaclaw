@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MultiExecutorOrchestrator } from '../../src/core/multi-executor-orchestrator.js';
+import { MultiExecutorOrchestrator } from '../../src/execution/multi-executor-orchestrator.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { ExecutionStrategy } from '../../src/core/execution-strategy-planner.js';
 import type { Task } from '../../src/core/types.js';
