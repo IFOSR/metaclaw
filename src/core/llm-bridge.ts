@@ -1,3 +1,4 @@
+// Process-based LLM adapter plus legacy semantic prompt schemas used by older routing paths.
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';

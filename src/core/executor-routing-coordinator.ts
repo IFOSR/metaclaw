@@ -1,4 +1,7 @@
-import { ExecutionPlanningService, type ExecutionPlanV2 } from './execution-planning-service.js';
+// Executor routing coordinator that binds session tasks to routing policies and route events.
+import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planner.js';
+import { ExecutionPlanningService } from './execution-planning-service.js';
+import type { ExecutionPolicy } from './execution-policy.js';
 import type { ExecutorProfileService } from './executor-profile-service.js';
 import type { ExecutorRouteDecision, IntentDecision } from './executor-router.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
@@ -8,7 +11,7 @@ import type { Task } from './types.js';
 
 export interface RoutedExecutorSelection {
   decision: ExecutorRouteDecision;
-  executionPlan: ExecutionPlanV2;
+  executionPolicy: ExecutionPolicy;
   eventId: string;
   effectiveAction: ExecutorRouteDecision['action'];
 }
@@ -44,12 +47,13 @@ export class ExecutorRoutingCoordinator {
       ? this.deps.taskRuntimeService.buildExecutionPlan(task, input.userInput)
       : {
           mode: 'blocked' as const,
-          error: '缺少任务，无法生成执行计划',
+          error: 'missing task; cannot build an execution plan',
         };
     if (!effectiveTask) {
-      throw new Error('缺少任务，无法生成执行计划');
+      throw new Error('missing task; cannot build an execution plan');
     }
-    const executionPlan = this.executionPlanningService.plan({
+
+    const executionPolicy = this.executionPlanningService.plan({
       task: effectiveTask,
       userPrompt: input.userInput,
       taskExecutionPlan,
@@ -59,7 +63,7 @@ export class ExecutorRoutingCoordinator {
       defaultExecutorName: this.deps.defaultExecutorName,
       resources: task?.resources ?? [],
     });
-    const decision = executionPlan.routeDecision;
+    const decision = buildRouteDecisionFromPolicy(executionPolicy);
     const eventId = this.deps.persistenceService.recordRouteEvent({
       taskId: input.taskId,
       userInput: input.userInput,
@@ -68,34 +72,33 @@ export class ExecutorRoutingCoordinator {
 
     return {
       decision,
-      executionPlan,
+      executionPolicy,
       eventId,
       effectiveAction: decision.action,
     };
   }
 
-  formatRunLabel(plan: ExecutionPlanV2): string {
-    return plan.selectedExecutor;
+  formatRunLabel(policy: ExecutionPolicy): string {
+    return policy.primaryExecutor;
   }
 
-  formatDisplayLabel(plan: ExecutionPlanV2): string {
-    return plan.selectedExecutor;
+  formatDisplayLabel(policy: ExecutionPolicy): string {
+    return policy.primaryExecutor;
   }
 
   formatRoutingDecision(routedExecutor: RoutedExecutorSelection): string[] {
     const reason = `${routedExecutor.decision.primaryIntent} / ${routedExecutor.decision.matchedBoundary.join(' + ') || routedExecutor.decision.reason}`;
     const planningLines = [
-      `→ MetaClaw：执行计划：${routedExecutor.executionPlan.mode}；${routedExecutor.executionPlan.reason}`,
-      routedExecutor.executionPlan.acceptanceCriteria.length > 0
-        ? `→ MetaClaw：验收标准：${routedExecutor.executionPlan.acceptanceCriteria.map(criterion => criterion.id).join('、')}`
-        : '→ MetaClaw：验收标准：无额外标准',
+      `-> MetaClaw: execution policy: ${routedExecutor.executionPolicy.mode}; ${routedExecutor.executionPolicy.reason}`,
+      routedExecutor.executionPolicy.acceptanceCriteria.length > 0
+        ? `-> MetaClaw: acceptance criteria: ${routedExecutor.executionPolicy.acceptanceCriteria.map(criterion => criterion.id).join(', ')}`
+        : '-> MetaClaw: acceptance criteria: none',
     ];
 
     return [
-      `→ MetaClaw：路由决策：${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
-      `→ MetaClaw：原因：${reason}`,
+      `-> MetaClaw: route decision: ${routedExecutor.decision.selectedExecutor} (${routedExecutor.effectiveAction}, confidence=${routedExecutor.decision.confidence.toFixed(2)})`,
+      `-> MetaClaw: reason: ${reason}`,
       ...planningLines,
     ];
   }
-
 }

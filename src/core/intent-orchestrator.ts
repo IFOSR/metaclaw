@@ -1,3 +1,4 @@
+// Single natural-language decision module that normalizes semantic routing into IntentDecisionV2.
 import type { ExecutorProfile, TaskRouteIntent } from './executor-router.js';
 import type { LlmBridge, TaskSummary } from './llm-bridge.js';
 import { SemanticIntentRouter, type SemanticIntentDecision } from './semantic-intent-router.js';

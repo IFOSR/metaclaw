@@ -1,3 +1,4 @@
+// Application coordinator for one task execution attempt, from context recall through delivery.
 import type { MemoryEngine } from '../core/memory-engine.js';
 import type { OrchestrationEngine } from '../core/orchestration.js';
 import type { MemoryContextService, ExecutionRecallSelection } from '../core/memory-context-service.js';
@@ -128,13 +129,13 @@ export class SessionExecutionCoordinator {
     });
     this.deps.callbacks.setRunningExecutorName(
       taskId,
-      this.deps.executorRoutingCoordinator.formatRunLabel(routedExecutor.executionPlan),
+      this.deps.executorRoutingCoordinator.formatRunLabel(routedExecutor.executionPolicy),
     );
     this.deps.callbacks.appendOutput(...this.deps.executorRoutingCoordinator.formatRoutingDecision(routedExecutor));
     this.deps.callbacks.refreshRuntimeState();
     this.deps.callbacks.appendOutput(
-      `【Executor: ${routedExecutor.executionPlan.selectedExecutor}｜执行】`,
-      `→ Executor: ${routedExecutor.executionPlan.selectedExecutor} 开始执行任务 #${taskId}`,
+      `【Executor: ${routedExecutor.executionPolicy.primaryExecutor}｜执行】`,
+      `→ Executor: ${routedExecutor.executionPolicy.primaryExecutor} 开始执行任务 #${taskId}`,
     );
 
     let progressTracker: ExecutionProgressTracker | null = null;
@@ -172,13 +173,10 @@ export class SessionExecutionCoordinator {
       const execution = await this.deps.executionRuntime.run({
         taskId,
         executionId,
-        plan: routedExecutor.executionPlan,
+        policy: routedExecutor.executionPolicy,
         executorInput,
         onProgress: progressTracker.onProgress,
       });
-      if (execution.runtime.abortedExecutors.length > 0) {
-        this.deps.callbacks.appendOutput(`→ ${execution.executorName} 已先返回，已终止：${execution.runtime.abortedExecutors.join('、')}`);
-      }
       if (execution.runtime.fallbackLines.length > 0) {
         this.deps.callbacks.appendOutput(...execution.runtime.fallbackLines.map(line => `→ ${line}`));
       }
@@ -216,7 +214,7 @@ export class SessionExecutionCoordinator {
           execution,
           routedEventId: routedExecutor.eventId,
           routedSelectedExecutor: routedExecutor.decision.selectedExecutor,
-          acceptanceCriteria: routedExecutor.executionPlan.acceptanceCriteria,
+          acceptanceCriteria: routedExecutor.executionPolicy.acceptanceCriteria,
           progressTracker,
           finishExecution,
         });
@@ -308,8 +306,8 @@ export class SessionExecutionCoordinator {
 
     this.deps.persistenceService.markRouteEventResult(
       input.routedEventId,
-      input.execution.executorName === 'codex-cli' && input.routedSelectedExecutor !== 'codex-cli'
-        ? 'fallback_codex_success'
+      input.execution.runtime.fallbackExecutors.length > 0
+        ? 'fallback_success'
         : 'success',
     );
     const artifactPaths = delivery.artifactPaths;

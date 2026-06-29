@@ -1,3 +1,4 @@
+// LLM-backed semantic classifier for one work unit; currently bridges CapabilityClass to legacy routing.
 import type { LlmBridge, TaskSummary } from './llm-bridge.js';
 import type { RuleHint } from './rule-hints-provider.js';
 import type { CapabilityClass } from './capability-class.js';

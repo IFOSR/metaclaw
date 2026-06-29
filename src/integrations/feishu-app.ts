@@ -1,3 +1,4 @@
+// Feishu app integration module for tokens, inbound events, message delivery, and file exchange.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { basename, resolve } from 'path';

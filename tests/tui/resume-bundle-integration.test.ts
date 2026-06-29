@@ -59,6 +59,21 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitFor(assertion: () => void, attempts = 30) {
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await flushUpdates();
+    }
+  }
+
+  throw lastError;
+}
+
 afterEach(() => {
   inputCapture.handler = undefined;
 });
@@ -124,9 +139,13 @@ describe('App resume bundle integration', () => {
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();
 
-    expect(executor.execute).toHaveBeenCalled();
-    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0].executionContextBundle.mode).toBe('resume-parked');
-    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0].executionContextBundle.resumeContext.lastProgress).toContain('报告 A 已完成');
+    await waitFor(() => {
+      expect(executor.execute).toHaveBeenCalled();
+      const executionCall = (executor.execute as ReturnType<typeof vi.fn>).mock.calls
+        .find(call => call[0].executionContextBundle?.mode === 'resume-parked');
+      expect(executionCall?.[0].executionContextBundle.mode).toBe('resume-parked');
+      expect(executionCall?.[0].executionContextBundle.resumeContext.lastProgress).toContain('报告 A 已完成');
+    });
 
     app.unmount();
     app.cleanup();

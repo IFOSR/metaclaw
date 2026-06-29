@@ -1,3 +1,4 @@
+// Memory context module that prepares recall selections and execution context bundles for tasks.
 import type { ConversationTurn } from '../executor/adapter.js';
 import type { MemoryEngine } from './memory-engine.js';
 import type { ContextRecaller } from './context-recaller.js';

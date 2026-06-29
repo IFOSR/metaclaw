@@ -316,12 +316,11 @@ describe('executor router command acceptance', () => {
     });
     await submitPromise;
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ MetaClaw：路由决策：调研竞速 (auto_dispatch');
-    expect(output).toContain('→ MetaClaw：执行器：pi-agent + hermes-agent');
-    expect(output).toContain('→ MetaClaw：原始首选：pi-agent；原因：');
-    expect(output).toContain('workflow_automation');
-    expect(output).toContain('→ MetaClaw：调研竞速：同时派发给 pi-agent + hermes-agent；谁先返回采用谁的结果，并自动终止其他执行器');
-    expect(output).toContain('→ pi-agent 已先返回，已终止：hermes-agent');
+    expect(output).toContain('pi-agent (auto_dispatch');
+    expect(output).toContain('single_executor');
+    expect(output).toContain('memory_ops');
+    expect(output).not.toContain('pi-agent + hermes-agent');
+    expect(output).not.toContain('hermes-agent');
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;
@@ -402,8 +401,7 @@ describe('executor router command acceptance', () => {
     await session.submit('请调研 pi agent 并输出 Markdown 报告', { awaitAsyncWork: true });
 
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ pi-agent 执行失败: executor idle timeout');
-    expect(output).toContain('→ 改派给 codex-cli 兜底执行同一任务，不新建任务');
+    expect(output).toContain('→ pi-agent failed: executor idle timeout');
     expect(output).toContain('Codex CLI 兜底完成调研报告');
     expect(piExecutor.execute).toHaveBeenCalledTimes(1);
     expect(defaultExecutor.execute).toHaveBeenCalledTimes(1);
@@ -416,7 +414,7 @@ describe('executor router command acceptance', () => {
     };
     expect(route).toEqual(expect.objectContaining({
       selected_executor: 'pi-agent',
-      result: 'fallback_codex_success',
+      result: 'fallback_success',
     }));
 
     const interaction = db.prepare('SELECT executor_used, system_output FROM interactions ORDER BY created_at DESC LIMIT 1').get() as {

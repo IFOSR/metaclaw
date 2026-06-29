@@ -1,3 +1,4 @@
+// Execution runtime module that resolves executor adapters and runs ExecutionPolicy decisions.
 import type Database from 'better-sqlite3';
 import type { ExecutorAdapter, ExecutorInput, ExecutorProgressEvent } from '../executor/adapter.js';
 import { ClaudeCodeAdapter } from '../executor/claude-code.js';
@@ -9,7 +10,8 @@ import { OpenClawAdapter } from '../executor/openclaw.js';
 import { PiAgentAdapter } from '../executor/pi-agent.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 import type { Config, ExecutorResult } from './types.js';
-import type { ExecutionPlanV2, ExecutionResult } from './execution-planning-service.js';
+import type { ExecutionResult } from './execution-planning-service.js';
+import type { ExecutionPolicy } from './execution-policy.js';
 import type { ExecutionStrategy } from './execution-strategy-planner.js';
 import { MultiExecutorOrchestrator, type WorkUnitResult } from './multi-executor-orchestrator.js';
 import { AgenticLoopController } from './agentic-loop-controller.js';
@@ -36,6 +38,10 @@ function withLongResearchTimeoutDefaults<T extends AdapterFactoryConfig>(config:
     timeout: Math.max(config.timeout, 900),
     maxDuration: Math.max(config.maxDuration ?? 0, 7200),
   };
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 export class ExecutorAdapterRegistry {
@@ -78,6 +84,7 @@ export class ExecutorRegistry {
   constructor(private readonly deps: ExecutorRegistryDeps) {
     this.adapterRegistry = deps.adapterRegistry ?? createDefaultExecutorAdapterRegistry();
   }
+
   resolve(name: string): ExecutorAdapter | null {
     if (name === this.deps.defaultExecutor.name) {
       return this.deps.defaultExecutor;
@@ -138,15 +145,18 @@ export function createDefaultExecutor(config: {
 export interface ExecutionRuntimeRunInput {
   taskId: string;
   executionId: string;
-  plan: ExecutionPlanV2;
+  policy: ExecutionPolicy;
   executorInput: Omit<ExecutorInput, 'onProgress'>;
   onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
 }
 
-interface ExecutorRaceResult {
+interface ExecutorAttemptResult {
   executor: ExecutorAdapter;
   result: ExecutorResult;
-  abortedExecutors: string[];
+  attemptedExecutors: string[];
+  fallbackExecutors: string[];
+  fallbackReason: string | null;
+  fallbackLines: string[];
 }
 
 export class ExecutionRuntime {
@@ -158,56 +168,37 @@ export class ExecutionRuntime {
   ) {}
 
   async run(input: ExecutionRuntimeRunInput): Promise<ExecutionResult> {
-    if (input.plan.mode === 'multi_executor') {
+    if (input.policy.mode === 'multi_executor') {
       return this.runMultiExecutor(input);
     }
 
-    const selectedExecutor = this.registry.resolveRequired(input.plan.selectedExecutor);
-    const raceExecutors = this.resolveRuntimeExecutors(input.plan, selectedExecutor);
-    const raceResult = await this.executeWithOptionalRace(raceExecutors, input.executorInput, input.onProgress);
-    let { executor, result } = raceResult;
-    let fallbackReason: string | null = null;
-    let fallbackLines: string[] = [];
-
-    if (!result.success && executor.name !== 'codex-cli') {
-      const fallback = await this.executeCodexFallback({
-        failedExecutor: executor,
-        failedResult: result,
-        executorInput: input.executorInput,
-        onProgress: input.onProgress,
-      });
-      if (fallback) {
-        executor = fallback.executor;
-        result = fallback.result;
-        fallbackReason = `${raceResult.executor.name} 执行失败，已改派 codex-cli 兜底`;
-        fallbackLines = [
-          `${raceResult.executor.name} 执行失败: ${raceResult.result.error || '未知错误'}`,
-          '改派给 codex-cli 兜底执行同一任务，不新建任务',
-        ];
-      }
-    }
+    const attempt = await this.executeWithFallbackChain(
+      unique([input.policy.primaryExecutor, ...input.policy.fallbackChain]),
+      input.executorInput,
+      input.onProgress,
+    );
 
     return this.toExecutionResult({
       input,
-      executor,
-      result,
+      executor: attempt.executor,
+      result: attempt.result,
       workUnitResults: [],
       runtime: {
-        raceExecutors: raceExecutors.map(item => item.name),
-        abortedExecutors: raceResult.abortedExecutors,
-        fallbackReason,
-        fallbackLines,
+        attemptedExecutors: attempt.attemptedExecutors,
+        fallbackExecutors: attempt.fallbackExecutors,
+        fallbackReason: attempt.fallbackReason,
+        fallbackLines: attempt.fallbackLines,
       },
     });
   }
 
   private async runMultiExecutor(input: ExecutionRuntimeRunInput): Promise<ExecutionResult> {
-    if (input.plan.strategy.mode !== 'multi_executor') {
-      const fallbackExecutor = this.registry.resolveRequired(input.plan.selectedExecutor);
+    if (input.policy.strategy.mode !== 'multi_executor') {
+      const fallbackExecutor = this.registry.resolveRequired(input.policy.primaryExecutor);
       const result: ExecutorResult = {
         success: false,
         output: '',
-        error: 'multi_executor plan is missing a multi-executor strategy',
+        error: 'multi_executor policy is missing a multi-executor strategy',
         exitCode: 1,
         durationMs: 0,
       };
@@ -217,8 +208,8 @@ export class ExecutionRuntime {
         result,
         workUnitResults: [],
         runtime: {
-          raceExecutors: [fallbackExecutor.name],
-          abortedExecutors: [],
+          attemptedExecutors: [fallbackExecutor.name],
+          fallbackExecutors: [],
           fallbackReason: null,
           fallbackLines: [],
         },
@@ -226,9 +217,9 @@ export class ExecutionRuntime {
     }
 
     const startedAt = Date.now();
-    const executors = this.resolveWorkUnitExecutors(input.plan.strategy);
+    const executors = this.resolveWorkUnitExecutors(input.policy.strategy);
     const loopResult = await this.agenticLoopController.run({
-      strategy: input.plan.strategy,
+      strategy: input.policy.strategy,
       task: input.executorInput.task,
       userPrompt: input.executorInput.userPrompt,
       executors,
@@ -245,12 +236,12 @@ export class ExecutionRuntime {
 
     return this.toExecutionResult({
       input,
-      executor: this.defaultExecutor,
+      executor: this.registry.resolveRequired(input.policy.primaryExecutor),
       result,
       workUnitResults: loopResult.results,
       runtime: {
-        raceExecutors: Array.from(executors.values()).map(item => item.name),
-        abortedExecutors: [],
+        attemptedExecutors: Array.from(executors.values()).map(item => item.name),
+        fallbackExecutors: [],
         fallbackReason: null,
         fallbackLines: [],
       },
@@ -298,101 +289,78 @@ export class ExecutionRuntime {
     return executors;
   }
 
-  private resolveRuntimeExecutors(plan: ExecutionPlanV2, selectedExecutor: ExecutorAdapter): ExecutorAdapter[] {
-    return [selectedExecutor];
-  }
-
-
-  private async executeWithOptionalRace(
-    executors: ExecutorAdapter[],
+  private async executeWithFallbackChain(
+    executorNames: string[],
     input: Omit<ExecutorInput, 'onProgress'>,
     onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void,
-  ): Promise<ExecutorRaceResult> {
-    if (executors.length <= 1) {
-      const executor = executors[0] ?? this.defaultExecutor;
-      return {
-        executor,
-        result: await executor.execute({
-          ...input,
-          onProgress: event => onProgress(event, executor),
-        }),
-        abortedExecutors: [],
-      };
-    }
+  ): Promise<ExecutorAttemptResult> {
+    const chain = executorNames.length > 0 ? executorNames : [this.defaultExecutor.name];
+    const attemptedExecutors: string[] = [];
+    const fallbackExecutors: string[] = [];
+    const fallbackLines: string[] = [];
+    let fallbackReason: string | null = null;
+    let lastExecutor = this.defaultExecutor;
+    let lastResult: ExecutorResult = {
+      success: false,
+      output: '',
+      error: 'No executor was attempted',
+      exitCode: 1,
+      durationMs: 0,
+    };
 
-    let settled = false;
-    const running = new Set(executors);
-    return new Promise<ExecutorRaceResult>((resolve) => {
-      for (const executor of executors) {
-        executor.execute({
-          ...input,
-          onProgress: event => onProgress(event, executor),
-        }).then((result) => {
-          running.delete(executor);
-          if (settled) return;
-
-          settled = true;
-          const abortedExecutors = this.abortOthers(running, executor);
-          resolve({ executor, result, abortedExecutors });
-        }).catch((error: Error) => {
-          running.delete(executor);
-          if (settled) return;
-
-          settled = true;
-          const abortedExecutors = this.abortOthers(running, executor);
-          resolve({
-            executor,
-            result: {
-              success: false,
-              output: '',
-              error: error.message,
-              exitCode: 1,
-              durationMs: 0,
-            },
-            abortedExecutors,
-          });
-        });
+    for (const [index, executorName] of chain.entries()) {
+      const executor = this.registry.resolveRequired(executorName);
+      lastExecutor = executor;
+      attemptedExecutors.push(executor.name);
+      if (index > 0) {
+        fallbackExecutors.push(executor.name);
       }
-    });
-  }
 
-  private abortOthers(running: Set<ExecutorAdapter>, winner: ExecutorAdapter): string[] {
-    return Array.from(running)
-      .filter(other => other !== winner)
-      .map(other => {
-        other.abort();
-        return other.name;
-      });
-  }
+      const result = await this.executeOnce(executor, input, onProgress);
+      lastResult = result;
+      if (result.success) {
+        return {
+          executor,
+          result,
+          attemptedExecutors,
+          fallbackExecutors,
+          fallbackReason,
+          fallbackLines,
+        };
+      }
 
-  private async executeCodexFallback(input: {
-    failedExecutor: ExecutorAdapter;
-    failedResult: ExecutorResult;
-    executorInput: Omit<ExecutorInput, 'onProgress'>;
-    onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
-  }): Promise<ExecutorRaceResult | null> {
-    const codexExecutor = this.registry.resolve('codex-cli');
-    if (!codexExecutor) {
-      return null;
+      const message = result.error || `executor ${executor.name} failed without an error message`;
+      fallbackReason ??= `${executor.name} failed; trying configured fallback chain`;
+      fallbackLines.push(`${executor.name} failed: ${message}`);
     }
 
+    return {
+      executor: lastExecutor,
+      result: lastResult,
+      attemptedExecutors,
+      fallbackExecutors,
+      fallbackReason,
+      fallbackLines,
+    };
+  }
+
+  private async executeOnce(
+    executor: ExecutorAdapter,
+    input: Omit<ExecutorInput, 'onProgress'>,
+    onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void,
+  ): Promise<ExecutorResult> {
     try {
-      const result = await codexExecutor.execute({
-        ...input.executorInput,
-        onProgress: event => input.onProgress(event, codexExecutor),
+      return await executor.execute({
+        ...input,
+        onProgress: event => onProgress(event, executor),
       });
-      return { executor: codexExecutor, result, abortedExecutors: [] };
     } catch (error) {
       return {
-        executor: codexExecutor,
-        result: {
-          success: false,
-          output: '',
-          error: (error as Error).message,
-          exitCode: 1,
-          durationMs: 0,
-        },
-        abortedExecutors: [],
+        success: false,
+        output: '',
+        error: (error as Error).message,
+        exitCode: 1,
+        durationMs: 0,
       };
     }
   }

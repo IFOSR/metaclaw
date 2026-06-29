@@ -1,4 +1,8 @@
 import type { AcceptanceCriterion } from './execution-strategy-planner.js';
+import type {
+  ExecutionStrategy,
+  ExecutionWorkUnit,
+} from './execution-strategy-planner.js';
 import type { CapabilityClass } from './capability-class.js';
 
 export type ExecutionPolicyMode = 'single_executor' | 'multi_executor';
@@ -20,5 +24,6 @@ export interface ExecutionPolicy {
   acceptanceCriteria: AcceptanceCriterion[];
   capabilityClasses: CapabilityClass[];
   reason: string;
+  strategy: ExecutionStrategy;
+  workUnits: ExecutionWorkUnit[];
 }
-

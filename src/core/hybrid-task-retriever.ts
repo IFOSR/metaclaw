@@ -1,3 +1,4 @@
+// Task retrieval module that combines direct, FTS, relation, recent, semantic, and feedback signals.
 import { TaskRelevanceRanker } from './task-relevance-ranker.js';
 import type { EmbeddingProvider } from './embedding-provider.js';
 import type { Task, TaskMemoryCandidate } from './types.js';

@@ -59,6 +59,17 @@ function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+async function waitForFrame(app: ReturnType<typeof render>, expected: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const frame = app.lastFrame();
+    if (frame?.includes(expected)) {
+      return frame;
+    }
+    await flushUpdates();
+  }
+  return app.lastFrame();
+}
+
 function createDeferredResult() {
   let resolve!: (value: ExecutorResult) => void;
   const promise = new Promise<ExecutorResult>(res => {
@@ -197,10 +208,10 @@ describe('App execution indicator', () => {
       })
     );
 
-    await flushUpdates();
+    const frame = await waitForFrame(app, '当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
 
-    expect(app.lastFrame()).toContain('当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
-    expect(app.lastFrame()).toContain('最近事件 0');
+    expect(frame).toContain('当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
+    expect(frame).toContain('最近事件 0');
 
     app.unmount();
     app.cleanup();

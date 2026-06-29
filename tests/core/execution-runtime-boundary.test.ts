@@ -26,7 +26,7 @@ describe('Execution runtime architecture boundaries', () => {
     expect(sessionSource).not.toContain('createExecutorByName');
   });
 
-  it('centralizes executor registry and fallback behavior in ExecutionRuntime', () => {
+  it('centralizes executor registry and policy fallback behavior in ExecutionRuntime', () => {
     const runtimeSource = readSource('src/core/execution-runtime.ts');
 
     expect(runtimeSource).toContain('export class ExecutorAdapterRegistry');
@@ -34,8 +34,10 @@ describe('Execution runtime architecture boundaries', () => {
     expect(runtimeSource).toContain('new CustomCliExecutorAdapter');
     expect(runtimeSource).not.toContain('createExecutorByName');
     expect(runtimeSource).not.toContain('const adapterFactories');
-    expect(runtimeSource).toContain('executeWithOptionalRace');
-    expect(runtimeSource).toContain('executeCodexFallback');
+    expect(runtimeSource).not.toContain('executeWithOptionalRace');
+    expect(runtimeSource).not.toContain('executeCodexFallback');
+    expect(runtimeSource).toContain('executeWithFallbackChain');
+    expect(runtimeSource).toContain('input.policy.fallbackChain');
     expect(runtimeSource).not.toContain("plan.mode !== 'race_executors'");
   });
 
@@ -44,7 +46,7 @@ describe('Execution runtime architecture boundaries', () => {
 
     expect(runtimeSource).toContain('MultiExecutorOrchestrator');
     expect(runtimeSource).toContain('AgenticLoopController');
-    expect(runtimeSource).toContain("input.plan.mode === 'multi_executor'");
+    expect(runtimeSource).toContain("input.policy.mode === 'multi_executor'");
     expect(runtimeSource).toContain('agenticLoopController.run');
   });
 

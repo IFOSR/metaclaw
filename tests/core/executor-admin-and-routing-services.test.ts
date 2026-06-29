@@ -143,8 +143,8 @@ describe('executor admin and routing services', () => {
     });
 
     expect(routed.eventId).toMatch(/^route_/);
-    expect(coordinator.formatRoutingDecision(routed).join('\n')).toContain('路由决策：codex-cli');
-    expect(coordinator.formatRunLabel(routed.executionPlan)).toBe('codex-cli');
+    expect(coordinator.formatRoutingDecision(routed).join('\n')).toContain('route decision: codex-cli');
+    expect(coordinator.formatRunLabel(routed.executionPolicy)).toBe('codex-cli');
     expect(db.prepare('SELECT selected_executor FROM executor_route_events').get()).toEqual({
       selected_executor: 'codex-cli',
     });

@@ -1,3 +1,4 @@
+// CLI entrypoint that assembles storage, runtime modules, gateway processes, and the Ink TUI.
 import { resolve } from 'path';
 import { mkdirSync, existsSync } from 'fs';
 import { createDatabase } from './storage/database.js';

@@ -1,3 +1,4 @@
+// Legacy executor selection module that scores profiles from intent; being replaced by ExecutionPolicy routing.
 export type ExecutorRiskLevel = 'low' | 'medium' | 'high';
 export type ExecutorAvailability = 'available' | 'unavailable';
 export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'ask_clarification';

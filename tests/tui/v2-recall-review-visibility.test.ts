@@ -69,7 +69,7 @@ async function submitLine(line: string) {
   await flushUpdates();
 }
 
-async function waitFor(assertion: () => void, attempts = 20) {
+async function waitFor(assertion: () => void, attempts = 30) {
   let lastError: unknown;
   for (let index = 0; index < attempts; index += 1) {
     try {

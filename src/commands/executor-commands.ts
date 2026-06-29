@@ -1,5 +1,6 @@
 import type { ExecutorAvailability, ExecutorProfile, ExecutorRiskLevel, TaskRouteIntent } from '../core/executor-router.js';
 import { ExecutionPlanningService } from '../core/execution-planning-service.js';
+import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planner.js';
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
 import type { CapabilityClass } from '../core/capability-class.js';
 import type { Task } from '../core/types.js';
@@ -281,7 +282,7 @@ export const executorCommand: CommandHandler = {
             historicalSuccess: 0.5,
           }]),
       ];
-      const plan = new ExecutionPlanningService().plan({
+      const policy = new ExecutionPlanningService().plan({
         task: createPreviewTask(userInput),
         userPrompt: userInput,
         taskExecutionPlan: {
@@ -295,7 +296,7 @@ export const executorCommand: CommandHandler = {
         defaultExecutorName,
         resources: [],
       });
-      const decision = plan.routeDecision;
+      const decision = buildRouteDecisionFromPolicy(policy);
       new ExecutorRouteEventRepo(context.db).insert({
         id: `route_${generateInteractionId()}`,
         taskId: null,

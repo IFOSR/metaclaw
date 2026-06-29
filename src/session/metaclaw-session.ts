@@ -1,3 +1,4 @@
+// Session facade that wires MetaClaw's task OS modules and exposes the user-facing session snapshot.
 import type Database from 'better-sqlite3';
 import type {
   Config,

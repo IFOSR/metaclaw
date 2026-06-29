@@ -77,7 +77,7 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('single_executor');
-    expect(plan.selectedExecutor).toBe('codex-cli');
+    expect(plan.primaryExecutor).toBe('codex-cli');
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('repo_execution_verified');
   });
 
@@ -124,8 +124,8 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('single_executor');
-    expect(plan.selectedExecutor).toBe('codex-cli');
-    expect(plan.routeDecision.primaryIntent).toBe('repo_execution');
+    expect(plan.primaryExecutor).toBe('codex-cli');
+    expect(plan.capabilityClasses).toEqual(['code_edit']);
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('repo_execution_verified');
   });
 
