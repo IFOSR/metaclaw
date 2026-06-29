@@ -1,5 +1,5 @@
 import type { ExecutorInput } from './adapter.js';
-import { buildMaterialSummary, splitTaskResources } from '../core/material-utils.js';
+import { buildMaterialSummary, splitTaskResources } from '../intent/material-utils.js';
 
 function renderTurnOutput(output: string, maxLength = 300): string {
   const normalized = output.replace(/\s+/g, ' ').trim();

@@ -6,7 +6,7 @@ export {
   extractInlineResourceMatches,
   stripInlineResourceMatches,
   type InlineResourceMatch,
-} from '../core/inline-resource-normalizer.js';
+} from '../intent/inline-resource-normalizer.js';
 
 export type QueuedExecutionRequest = {
   userPrompt: string;

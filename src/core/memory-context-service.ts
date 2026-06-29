@@ -2,7 +2,7 @@
 import type { ConversationTurn } from '../executor/adapter.js';
 import type { MemoryEngine } from './memory-engine.js';
 import type { ContextRecaller } from './context-recaller.js';
-import { extractInlineResourceMatches, stripInlineResourceMatches } from './inline-resource-normalizer.js';
+import { extractInlineResourceMatches, stripInlineResourceMatches } from '../intent/inline-resource-normalizer.js';
 import type { ResumeContextBuilder } from './resume-context-builder.js';
 import { MemoryApplicabilityAction } from './types.js';
 import type {

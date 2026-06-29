@@ -4,7 +4,7 @@ import type { MemoryEngine } from './memory-engine.js';
 import type { TaskMemoryDocument } from './task-embedding-service.js';
 import type { TaskEngine } from './task-engine.js';
 import type { ExecutionContextBundle, ResolvedPreference, Task, TaskMemoryCandidate, TaskSnapshot, WorkspaceContext } from './types.js';
-import { buildMaterialSummary, extractMaterialTextSnippets } from './material-utils.js';
+import { buildMaterialSummary, extractMaterialTextSnippets } from '../intent/material-utils.js';
 import { resolve } from 'path';
 
 interface BuildContextInput {
