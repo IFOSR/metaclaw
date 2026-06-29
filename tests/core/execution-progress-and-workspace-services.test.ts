@@ -4,9 +4,9 @@ import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { ExecutionProgressService } from '../../src/core/execution-progress-service.js';
+import { ExecutionProgressService } from '../../src/execution/execution-progress-service.js';
 import { SkillUsageEventRepo } from '../../src/storage/skill-usage-event-repo.js';
-import { WorkspaceTargetService } from '../../src/core/workspace-target-service.js';
+import { WorkspaceTargetService } from '../../src/execution/workspace-target-service.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 
 function createDb() {

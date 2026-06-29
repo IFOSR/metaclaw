@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
-import type { ResolvedPreference, Task, TaskRecoveryTrigger, WorkspaceContext } from './types.js';
+import type { ResolvedPreference, Task, TaskRecoveryTrigger, WorkspaceContext } from '../core/types.js';
 import type { NotificationService } from '../notifications/types.js';
-import type { AcceptanceCriterion } from './execution-strategy-planner.js';
-import { ExecutionAggregator, type ExecutionAggregationInput } from './execution-aggregator.js';
+import type { AcceptanceCriterion } from '../core/execution-strategy-planner.js';
+import { ExecutionAggregator, type ExecutionAggregationInput } from '../execution/execution-aggregator.js';
 
 export interface VerificationInput {
   output: string;

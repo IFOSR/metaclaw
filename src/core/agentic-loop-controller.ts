@@ -1,4 +1,4 @@
-import { ExecutionAggregator, type ExecutionAggregationResult } from './execution-aggregator.js';
+import { ExecutionAggregator, type ExecutionAggregationResult } from '../execution/execution-aggregator.js';
 import type { ExecutionStrategy, ExecutionWorkUnit } from './execution-strategy-planner.js';
 import type { MultiExecutorOrchestrator, WorkUnitResult } from './multi-executor-orchestrator.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';

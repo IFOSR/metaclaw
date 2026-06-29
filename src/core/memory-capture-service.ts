@@ -3,7 +3,7 @@ import type { NotificationService } from '../notifications/types.js';
 import { MemoryAuditEventRepo } from '../storage/memory-audit-event-repo.js';
 import { generateInteractionId } from '../utils/id.js';
 import type Database from 'better-sqlite3';
-import { VerificationAndDeliveryService } from './verification-and-delivery-service.js';
+import { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
 import {
   extractHighConfidencePreferenceCandidates,
   extractPatterns,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExecutionAggregator } from '../../src/core/execution-aggregator.js';
+import { ExecutionAggregator } from '../../src/execution/execution-aggregator.js';
 import type { AggregationPlan, ExecutionWorkUnit } from '../../src/core/execution-strategy-planner.js';
 import type { WorkUnitResult } from '../../src/core/multi-executor-orchestrator.js';
 

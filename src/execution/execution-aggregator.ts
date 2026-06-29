@@ -1,5 +1,5 @@
-import type { AggregationPlan, ExecutionWorkUnit } from './execution-strategy-planner.js';
-import type { WorkUnitResult } from './multi-executor-orchestrator.js';
+import type { AggregationPlan, ExecutionWorkUnit } from '../core/execution-strategy-planner.js';
+import type { WorkUnitResult } from '../core/multi-executor-orchestrator.js';
 
 export interface ExecutionAggregationInput {
   workUnits: ExecutionWorkUnit[];

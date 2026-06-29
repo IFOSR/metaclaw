@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VerificationAndDeliveryService } from '../../src/core/verification-and-delivery-service.js';
+import { VerificationAndDeliveryService } from '../../src/delivery/verification-and-delivery-service.js';
 
 describe('task result summary delivery', () => {
   it('does not use an empty quoted file path as the task summary', () => {
