@@ -29,120 +29,78 @@ It is built for teams who need agents to do more than answer the current turn. M
 MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, verified, delivered, and audited.
 
 ```mermaid
-flowchart TB
-  User[User] --> Client{Client Surface}
-  Client --> TUI[Ink TUI<br/>composer, transcript, status, guidance]
-  Client --> CLI[Scripted CLI<br/>batch input]
-  Client --> Gateway[Local Gateway<br/>gateway.sock, reconnect, multi-terminal]
-  Client --> Feishu[Feishu App<br/>WebSocket or webhook events]
+flowchart LR
+  User[User] --> Surfaces[Client surfaces<br/>TUI, CLI, Gateway, Feishu]
+  Surfaces --> Session[MetaclawSession<br/>single runtime coordinator]
+  Session --> Intent[Intent layer<br/>understand the request]
+  Intent --> Choice{What is this?}
+  Choice -->|answer now| Conversation[Direct reply<br/>no durable task]
+  Choice -->|control task| Control[Task control<br/>status, resume, clear, recover]
+  Choice -->|do work| Durable[Durable task<br/>state, queue, artifacts]
 
-  TUI --> Input[InputController<br/>echo input, command or natural language]
-  CLI --> Input
-  Gateway --> Input
-  Feishu --> FeishuHandler[Feishu Message Handler<br/>typing reaction, progress cards, final reply settle]
-  FeishuHandler --> Input
+  Conversation --> Context[Context and memory<br/>recent session first]
+  Control --> TaskOS[Task OS<br/>TaskEngine and Scheduler]
+  Durable --> TaskOS
+  Context --> Executors[Executor runtime<br/>Codex, Pi, Hermes, custom CLI]
+  TaskOS --> Executors
+  Executors --> Verify[Verification<br/>tests, evidence, artifacts]
+  Verify --> Delivery[Delivery and UI<br/>TUI progress, Feishu, files, preview links]
+  Delivery --> User
 
-  Input --> Session[MetaclawSession<br/>runtime coordinator and snapshot publisher]
-  Session --> Commands[CommandRouter<br/>/tasks, /task, /memory, /executor, /gateway]
-  Session --> Intent[IntentOrchestrator<br/>top-level semantic arbitration]
-
-  Intent --> Semantic[SemanticIntentRouter<br/>direct_reply, task_control, durable_task, executor_dispatch, clarification]
-  Intent --> Hints[RuleHintsProvider<br/>parser and safety evidence, not final authority]
-  Intent --> LLM[LlmBridge<br/>Codex semantic routing, resume target ranking, task ownership]
-  Intent --> Focus[Focus Context<br/>conversation or task pointer]
-
-  Semantic --> Decision{IntentDecisionV2}
-  Decision -->|direct_reply| Direct[ConversationRuntimeService<br/>lightweight answer, no durable task]
-  Decision -->|task_control| Control[SessionIntentApplicationService<br/>status, clear, resume, recover blocked]
-  Decision -->|durable_task or executor_dispatch| Durable[SessionIntentApplicationService<br/>create or bind durable task]
-  Decision -->|clarification| Clarify[Clarification Output<br/>no task, no executor dispatch]
-
-  Direct --> DirectRecall[MemoryContextService.recallConversationContext]
-  DirectRecall --> ContextRecaller[ContextRecaller<br/>task turns, timeline, current session, LLM or keyword fallback]
-  ContextRecaller --> DirectExecutor[Default Executor<br/>answer with recent session context]
-  DirectExecutor --> Persistence[SessionPersistenceService<br/>record interaction and route events]
-
-  Control --> ResumePlanner[TaskResumePlanner<br/>last task, referenced task, natural language resume, blocked recovery]
-  ResumePlanner --> TaskRuntime[TaskRuntimeService<br/>current task, focus, execution plans]
-  ResumePlanner --> TaskSemantic[TaskSemanticService<br/>semantic resume target and priority]
-
-  Durable --> InlineResources[InlineResourceNormalizer<br/>local files and web links]
-  Durable --> TaskRuntime
-  TaskRuntime --> TaskEngine[TaskEngine<br/>created, ready, running, parked, blocked, done, archived, cancelled]
-  TaskRuntime --> TaskRepo[(TaskRepo<br/>SQLite tasks)]
-  TaskRuntime --> StateRepo[(SessionStateRepo<br/>last focused and completed task)]
-
-  TaskEngine --> Scheduler[SchedulerEngine<br/>queue, idle scheduling, priority, preemption, resume]
-  Scheduler --> TaskExecApp[SessionTaskExecutionApplicationService<br/>prepare, queue, dispatch]
-  TaskExecApp --> RecallReview[RecallReviewApplicationService<br/>auto-apply safe recall, skip uncertain recall]
-  TaskExecApp --> ExecCoordinator[SessionExecutionCoordinator<br/>context, routing, execution, verification, delivery]
-
-  ExecCoordinator --> MemoryContext[MemoryContextService.prepareExecutionContext]
-  MemoryContext --> MemoryEngine[MemoryEngine<br/>preferences and memory recall]
-  MemoryContext --> ResumeContext[ResumeContextBuilder<br/>resume context pack, recent task turns, related task ids]
-  MemoryContext --> ContextRecaller
-  MemoryEngine --> MemoryRepos[(Preference, Observation,<br/>memory audit and recall feedback repos)]
-
-  ExecCoordinator --> RouterCoord[ExecutorRoutingCoordinator<br/>route event recording, selected executor]
-  RouterCoord --> Profiles[ExecutorProfileService<br/>seed defaults, custom executor profiles, availability]
-  Profiles --> ProfileRepos[(Executor profile and route event repos)]
-  RouterCoord --> ExecutorRouter[ExecutorRouter<br/>capability, risk, intent, boundaries]
-
-  ExecCoordinator --> Runtime[ExecutionRuntime<br/>adapter registry and executor invocation]
-  Runtime --> Codex[Codex CLI Adapter]
-  Runtime --> Pi[Pi Agent Adapter]
-  Runtime --> Hermes[Hermes Agent Adapter]
-  Runtime --> Custom[Custom CLI Adapter]
-
-  ExecCoordinator --> Verification[VerificationAndDeliveryService<br/>acceptance, test evidence, artifacts, blocked feedback]
-  Verification --> Progress[ExecutionProgressService<br/>executor progress milestones]
-  Verification --> Artifacts[WorkspaceTargetService<br/>task output directory and artifact paths]
-  Verification --> Capture[MemoryCaptureService<br/>high-confidence preference capture]
-  Capture --> MemoryRepos
-
-  ExecCoordinator --> Presentation[SessionPresentationService<br/>task cards, guidance blocks, recovery hints]
-  Presentation --> Session
-  Progress --> Session
-
-  Session --> Snapshot[SessionSnapshot<br/>output, current task, runtime state, latest guidance]
-  Snapshot --> TUI
-  Snapshot --> Gateway
-  Snapshot --> FeishuProgress[Feishu Progress Formatter<br/>MetaClaw milestones vs Executor milestones]
-  FeishuProgress --> Feishu
-
-  Verification --> Delivery[Gateway Delivery Layer<br/>Feishu cards, rich-text fallback, file upload, Markdown preview links]
-  Delivery --> Audit[(gateway-audit.jsonl)]
-  Delivery --> Preview[Markdown Preview Server]
-  Delivery --> Feishu
-
-  subgraph Storage[Local SQLite Storage]
-    TaskRepo
-    StateRepo
-    MemoryRepos
-    ProfileRepos
-    Search[(TaskSearchIndexRepo<br/>SQLite FTS)]
-    Learning[(Learning, skill usage,<br/>reflection and promotion repos)]
-  end
-
-  subgraph Retrieval[Task And Memory Retrieval]
-    Search --> HybridTask[HybridTaskRetriever<br/>explicit reference, focus, FTS, relation, recent, feedback, semantic rerank]
-    MemoryRepos --> HybridMemory[HybridMemoryRecaller<br/>preference and task memory candidates]
-    HybridTask --> RecallReview
-    HybridMemory --> RecallReview
-  end
-
-  subgraph AgenticLoop[Agentic Loop Core]
-    Strategy[ExecutionStrategyPlanner<br/>single executor or multi-executor work units]
-    Multi[MultiExecutorOrchestrator<br/>parallel or sequential fan-out]
-    Aggregator[ExecutionAggregator<br/>merge, conflicts, artifact collection]
-    Loop[AgenticLoopController<br/>retry until pass or blocked]
-    Strategy --> Multi --> Aggregator --> Loop
-  end
-
-  TaskRuntime -. complex task planning .-> Strategy
-  Runtime -. executor results .-> Multi
-  Loop -. failed acceptance feedback .-> Verification
+  Session <--> Store[(Local SQLite<br/>tasks, memory, routes, feedback)]
+  Context <--> Store
+  TaskOS <--> Store
 ```
+
+The main idea is simple: every input enters one runtime, gets a semantic decision, then follows one of three paths. Short answers stay light. Task-control requests change existing state. Real work becomes a durable task with scheduling, recovery, verification, and delivery.
+
+### Direct Reply Path
+
+```mermaid
+flowchart LR
+  Input[User asks a question] --> Intent[IntentOrchestrator]
+  Intent --> Direct[direct_reply]
+  Direct --> Recall[ContextRecaller<br/>recent session context first]
+  Recall --> Executor[Default executor<br/>usually codex-cli]
+  Executor --> Answer[Final answer]
+  Answer --> Persist[Record interaction]
+  Answer --> UI[TUI or Feishu]
+```
+
+This path is still semantic. "Continue" or "you stopped halfway" is resolved from recent conversation context first, not from a hard keyword rule and not from unrelated old tasks.
+
+### Durable Task Path
+
+```mermaid
+flowchart LR
+  Input[User asks MetaClaw to do work] --> Intent[IntentOrchestrator]
+  Intent --> Task[TaskRuntimeService<br/>create or bind task]
+  Task --> Scheduler[SchedulerEngine<br/>queue, priority, preemption]
+  Scheduler --> Context[MemoryContextService<br/>resume pack, preferences, materials]
+  Context --> Route[ExecutorRoutingCoordinator<br/>pick executor]
+  Route --> Run[ExecutionRuntime<br/>run adapter]
+  Run --> Verify[VerificationAndDeliveryService]
+  Verify --> Done{Pass?}
+  Done -->|yes| Result[Done with artifacts]
+  Done -->|no| Blocked[Blocked with recovery hint]
+```
+
+This is the Task OS path. It is where task state, resume context, scheduling, artifact capture, and verification matter.
+
+### Feishu And Progress Path
+
+```mermaid
+flowchart LR
+  Feishu[Feishu event] --> Handler[Feishu message handler]
+  Handler --> Session[MetaclawSession]
+  Session --> Progress[Progress formatter<br/>MetaClaw milestones vs Executor milestones]
+  Progress --> Cards[Feishu progress cards]
+  Session --> Final[Final answer settle]
+  Final --> Reply[Final reply cards or post fallback]
+  Reply --> Files[Artifact upload and Markdown preview links]
+```
+
+Feishu progress is intentionally split into MetaClaw milestones and concrete executor milestones. Users can see when MetaClaw is routing, recalling context, scheduling, or waiting for the actual executor.
 
 The conversation/task boundary matters:
 
