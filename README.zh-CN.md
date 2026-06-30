@@ -52,9 +52,10 @@ Task Retrieval Layer
           │
           ▼
 Execution Strategy Layer
-    ├── ExecutorRouter: 按意图选择 executor
+    ├── IntentOrchestrator: conversation、task control、durable work、executor dispatch
+    ├── ExecutionPolicyPlanner: primary executor、candidates、risk、verification、fallback
     ├── ExecutionStrategyPlanner: 单 executor 或多 executor work units
-    └── Acceptance criteria: 用户需求、测试证据、来源、文件产物、review verdict
+    └── Legacy route event adapter: 为旧路由消费者保留的兼容性记录
           │
           ▼
 Agentic Verification Layer
@@ -86,7 +87,7 @@ conversation / task 的边界很重要：
 | Pi Agent | `pi` | 调研、报告生成、多步骤信息综合、agentic CLI 工作流 | 安装 `@earendil-works/pi-coding-agent` 并完成登录 |
 | Hermes Agent | `hermes` | 调研、多工具编排、记忆/网关/助手工作流 | 安装并登录 Hermes |
 
-默认执行器是 `codex`。默认路由会把仓库工作交给 `codex-cli`。调研任务可以同时派发给 Pi Agent 和 Hermes Agent，谁先返回就采用谁的结果，并终止另一个较慢的 executor。DeepSeek TUI adapter 仍保留为兼容/手动配置能力，但已经从默认 Executor 注册表和自动路由候选中 retire。
+默认运行时命令是 `codex`，内部表示为 `codex-cli` executor profile。当前路由路径基于 ExecutionPolicy：MetaClaw 将请求分类为 capability class，从显式意图和可用 profile 中选择 primary executor，记录 fallback 候选，然后通过执行 runtime 运行。Pi Agent 和 Hermes Agent 在已安装时可以作为调研类工作的候选或被选用。DeepSeek TUI、Claude Code 和 OpenClaw 仍然可用于显式本地配置，但除非被选为默认 executor，否则不会进入默认注册表。
 
 ## 前提条件
 
@@ -120,7 +121,8 @@ sudo apt-get install -y build-essential python3 make g++
 - 将 app secret 放入环境变量，例如 `FEISHU_APP_SECRET`。
 - 使用双向飞书对话时，订阅 `im.message.receive_v1`。
 - 如需回传文件，开启文件上传和发送消息能力。
-- 如果飞书需要访问本地事件接口或 Markdown 预览服务，需要公网反代或内网穿透。
+- 推荐使用 WebSocket 事件投递，因为它不需要公网回调 URL。
+- 公网反代或内网穿透仅在 webhook 模式或外部 Markdown 预览链接时需要。
 
 Markdown 在线预览前提：
 
@@ -362,6 +364,8 @@ executor:
 
 ### Pi Agent
 
+安装 Pi coding agent CLI 并完成登录：
+
 ```bash
 npm install -g @earendil-works/pi-coding-agent
 which pi
@@ -376,7 +380,16 @@ pi -p "<prompt>"
 
 Pi 调研类工作流通常比 CLI 编码任务执行更久。即使全局执行器配置更短，MetaClaw 也会自动给 `pi-agent` 至少 `timeout: 900` 秒的连续无输出等待时间。活跃的 Pi 进程不会再因为硬总时长上限被终止。
 
+如需将 Pi 设为默认执行器：
+
+```yaml
+executor:
+  command: pi
+```
+
 ### Hermes Agent
+
+安装并登录 Hermes，然后验证：
 
 ```bash
 which hermes
@@ -394,6 +407,12 @@ hermes --oneshot "<prompt>" --yolo --accept-hooks
 ### 已退役的兼容 Adapter
 
 `deepseek-tui`、`claude-code` 和 `openclaw` adapter 仍保留在代码里，用于兼容和显式本地配置；但除非把它们显式配置为默认 executor，否则不会进入默认注册表。
+
+```bash
+executor:
+  command: hermes        # 旧版/手动
+  # command: deepseek-tui # 旧版/手动
+```
 
 ## Executor 与 Skill 的差异
 
@@ -584,7 +603,7 @@ MetaClaw 将“文档生成”和“飞书交付”分开处理：
 
 执行器不应该直接调用飞书云文档 API。用户说“飞书云文档”或“在线预览”时，MetaClaw 会要求执行器产出本地 Markdown 产物，后端负责飞书同步和预览链接。
 
-飞书进度卡片会明确展示执行链路。MetaClaw 会先把请求发送给 `codex-cli` 做意图解析和执行准备，然后展示路由决策、路由原因，以及真正启动任务的执行器。调研工作流会展示 `pi-agent + hermes-agent` 竞速：先返回的结果被采用，较慢的 executor 被中止。这样飞书用户不会把意图解析器误认为最终执行器。
+飞书进度卡片会明确展示执行链路。MetaClaw 先进行意图解析和执行准备，然后展示 ExecutionPolicy 决策、路由原因，以及真正启动任务的执行器。这样飞书用户不会把意图解析器或策略规划器误认为最终执行器。
 
 最终飞书回复优先使用 Markdown message card。长回复会拆成多张卡片；如果某个卡片 chunk 失败，MetaClaw 会把该 chunk 重试为富文本 post；如果仍有 chunk 无法投递，会上传完整最终答案 Markdown 文件，避免用户只收到半截结果。
 
@@ -693,10 +712,12 @@ HybridTaskRetriever 会综合多种信号：
 
 隐式召回会排除当前任务，避免任务第一次执行时把自己召回成历史记忆。不确定记忆不会被盲目注入；飞书和无人值守 executor 流程不会因为等待记忆确认而卡住。
 
-## 调度和路由
+## 调度和优先级模型
 
-- 任务优先级由紧急度、准备度、连续性收益、下游影响和搁置时间组成。
-- 紧急度来自结构化语义判断，不靠关键词。
+MetaClaw 使用单一活跃 executor，前面有一个调度器。
+
+- 新任务按紧急度、准备度、连续性收益、下游影响和搁置时间评分。
+- 紧急度来自结构化语义判断，不靠关键词匹配。
 - 满足条件的 parked 任务会在系统空闲时自动恢复。
 - 语义紧急的 parked 任务会排在普通 parked 任务前面。
 - 任务池看护会周期性展示 blocked / parked 任务，以及缺失条件或下一步。
@@ -704,14 +725,13 @@ HybridTaskRetriever 会综合多种信号：
 - 材料、权限、授权和访问类阻塞不会自动解除，必须等用户补充输入或显式 unblock。
 - 未 ready 的任务不会自动执行。
 
-路由按意图优先：
+这样既防止排队任务浪费算力，又保证任务安全。
 
-- `repo_execution` 默认走 `codex-cli`。
-- `research_workflow` 可以同时派发给 `pi-agent` 和 `hermes-agent`；先返回者胜出，另一个 executor 会被中止。
-- `memory_agent_ops` 优先走 `pi-agent`，不可用时回退默认执行器。
-- 用户显式指定执行器时优先尊重。
+## Executor 路由
 
-路由记录会保存 selected executor、confidence、primary intent、matched boundary、rejected candidates 和 routing reason，方便复盘为什么任务被交给某个 executor。
+路由现在是策略优先。`IntentOrchestrator` 产出结构化决策，包含单一的 capability class，如 `code_edit`、`research`、`messaging`、`memory_ops`、`office_automation`、`conversation` 或 `general`。`ExecutionPolicyPlanner` 将其转化为 primary executor、候选 executor、fallback chain、风险等级、验证级别、验收标准和策略。
+
+旧版 `ExecutorRouter` 和 `repo_execution`、`research_workflow` 等遗留路由意图名称仍保留作为路由事件、预览和旧调用方的兼容边界。它们不再主导主执行路径，历史成功元数据也不影响当前策略评分。
 
 ## 复杂任务策略和 Agentic Loop
 
@@ -793,7 +813,18 @@ metaclaw --script /tmp/metaclaw-flow.txt
 
 `--script` 会逐行执行输入，空行和以 `#` 开头的行会被忽略。
 
-`npm run smoke:metaclaw` 是功能交付前必须优先跑的真实端到端烟测。它会构建 MetaClaw，用隔离的临时 `METACLAW_HOME` 和工作目录启动 `node dist/index.js --script`，提交一个真实任务，让配置的 executor 创建文件产物，并检查产物路径、文件内容以及已知回归。新的 runtime 功能应该通过这条烟测路径；如果不能跑，必须明确说明失败或跳过原因。
+`npm run smoke:metaclaw` 是功能交付前必须优先跑的真实端到端烟测。它会构建 MetaClaw，用隔离的临时 `METACLAW_HOME` 和工作目录启动 `node dist/index.js --script`，提交一个真实任务，让配置的 executor 创建文件产物，并检查产物路径和文件内容。新的 runtime 功能应该通过这条烟测路径；如果不能跑，必须明确说明失败或跳过原因。
+
+针对性测试：
+
+```bash
+npm test -- tests/core/executor-router.test.ts
+npm test -- tests/core/execution-planning-service.test.ts
+npm test -- tests/core/semantic-intent-router.test.ts
+npm test -- tests/core/scheduler.test.ts
+npm test -- tests/integrations/feishu-app.test.ts
+npm test -- tests/session/scripted-session.test.ts
+```
 
 ## 目录结构
 

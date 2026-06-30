@@ -52,9 +52,10 @@ Task Retrieval Layer
           │
           ▼
 Execution Strategy Layer
-    ├── ExecutorRouter: intent-aware executor selection
+    ├── IntentOrchestrator: conversation, task control, durable work, executor dispatch
+    ├── ExecutionPolicyPlanner: primary executor, candidates, risk, verification, fallback
     ├── ExecutionStrategyPlanner: single executor or multi-executor work units
-    └── Acceptance criteria: user request, tests, sources, artifacts, review verdicts
+    └── Legacy route event adapter: compatibility records for older route consumers
           │
           ▼
 Agentic Verification Layer
@@ -74,7 +75,7 @@ The conversation/task boundary matters:
 - Task control: inspect or change existing task state. Good for "what is running?", "resume that task", or "clear blocked tasks".
 - Durable task: create or continue work that needs execution, persistence, artifacts, recovery, scheduling, or later retrieval.
 
-The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is now reflected in the codebase: task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
+The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is now reflected in the codebase: task search indexing, hybrid task retrieval, ExecutionPolicy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
 
 Important runtime boundary: the Agentic Loop is implemented as a core architecture layer and tested directly. The current interactive/script session path still uses the existing session runtime unless a feature path explicitly calls the strategy/orchestration loop.
 
@@ -88,7 +89,7 @@ MetaClaw supports these executor adapters:
 | Pi Agent | `pi` | Research tasks, report generation, multi-step synthesis, agentic CLI workflows | Install `@earendil-works/pi-coding-agent` and authenticate Pi |
 | Hermes Agent | `hermes` | Research tasks, multi-tool orchestration, memory/gateway/assistant workflows | Install and authenticate Hermes |
 
-The default executor is `codex`. The default router can select `codex-cli` for repository work. For research work, MetaClaw can dispatch Pi Agent and Hermes Agent in parallel and keep whichever returns first, aborting the slower executor. DeepSeek TUI remains available as a legacy/manual adapter, but it is retired from the default executor registry and automatic route candidates.
+The default runtime command is `codex`, represented internally as the `codex-cli` executor profile. The active routing path is ExecutionPolicy-based: MetaClaw classifies the request into a capability class, chooses a primary executor from explicit intent and available profiles, records fallback candidates, and then runs through the execution runtime. Pi Agent and Hermes Agent can be selected or used as candidates for research-style work when installed. DeepSeek TUI, Claude Code, and OpenClaw remain available for explicit local configuration, but they are not seeded into the default registry unless selected as the default executor.
 
 ## Prerequisites
 
@@ -114,7 +115,7 @@ sudo apt-get install -y build-essential python3 make g++
 Executor prerequisites:
 
 - Install and log in to OpenAI Codex CLI if you want the default `codex-cli` executor.
-- Install and log in to Pi Agent and Hermes Agent if you want research routed through the parallel research race.
+- Install and log in to Pi Agent or Hermes Agent if you want research-style work routed away from the default executor when those profiles are available.
 
 Feishu prerequisites, only if you use Feishu Gateway integration:
 
@@ -266,7 +267,7 @@ MetaClaw does not vendor the downstream executor CLIs. Install the ones you want
 
 Installed executors are runtime workers that MetaClaw can route tasks to. A registered executor now has two parts:
 
-- The routing profile: domains, capabilities, risk level, success history, input/output types, and use-case hints.
+- The routing profile: domains, capabilities, risk level, input/output types, and use-case hints.
 - The runtime binding: local command, non-interactive arguments, install check command, and optional project URL.
 
 Use the guided registration flow when you are not sure what to fill in:
@@ -307,7 +308,7 @@ Recommended routing fields:
 - `primaryUseCases`: examples of tasks that should route to this executor.
 - `avoidUseCases`: examples of tasks that should not route to this executor.
 - `riskLevel`: `low`, `medium`, or `high`.
-- `historicalSuccess`: success score used by routing as more task outcomes are recorded.
+- `historicalSuccess`: legacy success metadata retained for profile compatibility and admin display; it is not part of current ExecutionPolicy scoring.
 - `projectUrl`: source repository or documentation URL.
 
 Required runtime binding:
@@ -567,7 +568,7 @@ MetaClaw separates document generation from Feishu delivery:
 
 Executors should not call Feishu Docs or cloud-document APIs directly. If a user asks for a "Feishu cloud document" or "online preview", MetaClaw instructs the executor to produce local Markdown artifacts; the Gateway handles Feishu synchronization and preview links.
 
-Feishu progress cards show the execution chain explicitly. MetaClaw first sends the request to `codex-cli` for intent parsing and execution preparation, then shows the router decision, routing reason, and the actual executor that starts the task. Research workflows can show a `pi-agent + hermes-agent` race, where the first returned result is kept and the slower executor is aborted. This prevents Feishu users from mistaking the intent parser for the final executor.
+Feishu progress cards show the execution chain explicitly. MetaClaw first performs intent parsing and execution preparation, then shows the ExecutionPolicy decision, routing reason, and the actual executor that starts the task. This prevents Feishu users from mistaking the intent parser or policy planner for the final executor.
 
 Final Feishu replies use Markdown message cards first. Long answers are split into multiple cards. If a card chunk fails, MetaClaw retries that chunk as a rich-text post; if any chunk still cannot be delivered, MetaClaw uploads the complete final answer as a Markdown file so the user does not receive a partial result.
 
@@ -693,14 +694,9 @@ This prevents queued work from wasting compute while preserving task safety.
 
 ## Executor Routing
 
-Routing is intent-first:
+Routing is now policy-first. `IntentOrchestrator` produces a structured decision, including a single capability class such as `code_edit`, `research`, `messaging`, `memory_ops`, `office_automation`, `conversation`, or `general`. `ExecutionPolicyPlanner` turns that into the primary executor, candidate executors, fallback chain, risk level, verification level, acceptance criteria, and strategy.
 
-- `repo_execution` goes to `codex-cli` by default.
-- `research_workflow` can race `pi-agent` and `hermes-agent`; the first returned result wins and the slower executor is aborted.
-- `memory_agent_ops` goes to `pi-agent` when available, otherwise falls back to the default executor.
-- Explicit executor names are respected when available.
-
-The router records selected executor, confidence, primary intent, matched boundary, rejected candidates, and routing reason.
+The older `ExecutorRouter` and legacy route intent names such as `repo_execution` and `research_workflow` are retained as compatibility boundaries for route events, previews, and older callers. They no longer own the main execution path, and historical success metadata does not affect current policy scoring.
 
 ## Complex Task Strategy And Agentic Loop
 
@@ -827,6 +823,8 @@ Targeted tests:
 
 ```bash
 npm test -- tests/core/executor-router.test.ts
+npm test -- tests/core/execution-planning-service.test.ts
+npm test -- tests/core/semantic-intent-router.test.ts
 npm test -- tests/core/scheduler.test.ts
 npm test -- tests/integrations/feishu-app.test.ts
 npm test -- tests/session/scripted-session.test.ts
@@ -849,7 +847,7 @@ src/
 ├── learning/       # Reflection, weekly review, skill governance, promotion gates, safety scanning
 ├── memory/         # Memory capture, recall, recall review, preferences, context bundles, vault export
 ├── notifications/  # Notification adapters such as Feishu notifications
-├── routing/        # ExecutionPolicy planner and emerging routing-policy layer
+├── routing/        # ExecutionPolicy planner and routing-policy layer
 ├── session/        # Interactive/script/gateway session coordination and persistence
 ├── storage/        # SQLite migrations and repositories
 ├── task/           # Task state machine, runtime, scheduler, resume planning, ranking, semantic/embedding retrieval
@@ -857,7 +855,7 @@ src/
 └── utils/          # Config, paths, logger, IDs
 ```
 
-Tests mirror these domains under `tests/<domain>/`. `src/core` is intentionally narrow: it keeps the routing/intent/policy seam (`IntentOrchestrator`, `ExecutorRouter`, `ExecutionPlanningService`, `ExecutionStrategyPlanner`, `ExecutionPolicy`, `CapabilityClass`, `RuleHintsProvider`, `SemanticIntentRouter`, `task-routing`, `llm-bridge`) and shared primitives (`types.ts`, `embedding-provider.ts`). Domain implementation should live in the domain folders above rather than returning to `core`.
+Tests mirror these domains under `tests/<domain>/`. `src/core` is intentionally narrow: it keeps the intent and compatibility seam (`IntentOrchestrator`, `ExecutionPlanningService`, `ExecutionStrategyPlanner`, `ExecutionPolicy`, `CapabilityClass`, `RuleHintsProvider`, `SemanticIntentRouter`, legacy `ExecutorRouter`, `task-routing`, `llm-bridge`) and shared primitives (`types.ts`, `embedding-provider.ts`). Domain implementation should live in the domain folders above rather than returning to `core`.
 
 ## License
 
