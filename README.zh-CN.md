@@ -26,57 +26,135 @@ MetaClaw 是一个本地优先的 AI Task OS。它把自然语言需求变成可
 
 ## 核心架构
 
-MetaClaw 是面向任务的系统，而不是纯 session agent。普通 agent session 主要回答当前这一轮。MetaClaw 会判断用户输入应该保持为轻量对话、控制已有任务，还是变成一个可以调度、阻塞、恢复、检索、验收和审计的持久任务。
+MetaClaw 是面向任务的系统，而不是纯 session agent。普通 agent session 主要回答当前这一轮。MetaClaw 会判断用户输入应该保持为轻量对话、控制已有任务，还是变成一个可以调度、阻塞、恢复、检索、验收、交付和审计的持久任务。
 
-```text
-User Input
-    │
-    ▼
-Input Boundary
-    ├── conversation
-    ├── task_control
-    └── durable_task
-          │
-          ▼
-Task Runtime
-    ├── TaskEngine: 任务状态机
-    ├── SchedulerEngine: 队列、优先级、抢占、恢复
-    ├── OrchestrationEngine: 盘面、建议、blocked/parked 巡检
-    ├── MemoryEngine: 偏好、任务记忆、召回审查
-    └── MetaclawSession: TUI/script/gateway runtime 协调层
-          │
-          ▼
-Task Retrieval Layer
-    ├── TaskSearchIndexRepo: SQLite FTS 任务检索索引
-    └── HybridTaskRetriever: 显式引用、当前焦点、全文检索、关系、最近任务、反馈、语义 rerank
-          │
-          ▼
-Execution Strategy Layer
-    ├── ExecutorRouter: 按意图选择 executor
-    ├── ExecutionStrategyPlanner: 单 executor 或多 executor work units
-    └── Acceptance criteria: 用户需求、测试证据、来源、文件产物、review verdict
-          │
-          ▼
-Agentic Verification Layer
-    ├── MultiExecutorOrchestrator: 串行/并行 work-unit fan-out
-    ├── ExecutionAggregator: 汇总、验收、冲突检查、产物收集
-    └── AgenticLoopController: 未达标部分反馈重试，直到通过或 blocked
-          │
-          ▼
-Executor And Delivery Layer
-    ├── Executor adapters: Codex、Pi、Hermes、自定义 CLI
-    └── Backend delivery: 飞书、文件产物、Markdown 预览
+```mermaid
+flowchart TB
+  User[用户] --> Client{客户端入口}
+  Client --> TUI[Ink TUI<br/>输入框、转录、状态、建议]
+  Client --> CLI[Scripted CLI<br/>批处理输入]
+  Client --> Gateway[本地 Gateway<br/>gateway.sock、重连、多终端]
+  Client --> Feishu[飞书应用<br/>WebSocket 或 webhook 事件]
+
+  TUI --> Input[InputController<br/>回显输入、命令或自然语言]
+  CLI --> Input
+  Gateway --> Input
+  Feishu --> FeishuHandler[Feishu Message Handler<br/>typing reaction、过程卡片、最终回复 settle]
+  FeishuHandler --> Input
+
+  Input --> Session[MetaclawSession<br/>runtime 协调器和 snapshot 发布者]
+  Session --> Commands[CommandRouter<br/>/tasks、/task、/memory、/executor、/gateway]
+  Session --> Intent[IntentOrchestrator<br/>顶层语义裁决]
+
+  Intent --> Semantic[SemanticIntentRouter<br/>direct_reply、task_control、durable_task、executor_dispatch、clarification]
+  Intent --> Hints[RuleHintsProvider<br/>parser 和安全证据，不做最终裁决]
+  Intent --> LLM[LlmBridge<br/>Codex 语义路由、恢复目标排序、任务归属判断]
+  Intent --> Focus[Focus Context<br/>conversation 或 task 指针]
+
+  Semantic --> Decision{IntentDecisionV2}
+  Decision -->|direct_reply| Direct[ConversationRuntimeService<br/>轻量回答，不创建持久任务]
+  Decision -->|task_control| Control[SessionIntentApplicationService<br/>状态、清理、恢复、解除阻塞]
+  Decision -->|durable_task 或 executor_dispatch| Durable[SessionIntentApplicationService<br/>创建或绑定持久任务]
+  Decision -->|clarification| Clarify[澄清输出<br/>不创建任务，不派发执行器]
+
+  Direct --> DirectRecall[MemoryContextService.recallConversationContext]
+  DirectRecall --> ContextRecaller[ContextRecaller<br/>任务历史、时间线、当前会话、LLM 或关键词 fallback]
+  ContextRecaller --> DirectExecutor[默认 Executor<br/>带最近会话上下文回答]
+  DirectExecutor --> Persistence[SessionPersistenceService<br/>记录交互和路由事件]
+
+  Control --> ResumePlanner[TaskResumePlanner<br/>上次任务、显式引用任务、自然语言恢复、阻塞恢复]
+  ResumePlanner --> TaskRuntime[TaskRuntimeService<br/>当前任务、焦点、执行计划]
+  ResumePlanner --> TaskSemantic[TaskSemanticService<br/>语义恢复目标和优先级]
+
+  Durable --> InlineResources[InlineResourceNormalizer<br/>本地文件和网页链接]
+  Durable --> TaskRuntime
+  TaskRuntime --> TaskEngine[TaskEngine<br/>created、ready、running、parked、blocked、done、archived、cancelled]
+  TaskRuntime --> TaskRepo[(TaskRepo<br/>SQLite tasks)]
+  TaskRuntime --> StateRepo[(SessionStateRepo<br/>last focused 和 completed task)]
+
+  TaskEngine --> Scheduler[SchedulerEngine<br/>队列、空闲调度、优先级、抢占、恢复]
+  Scheduler --> TaskExecApp[SessionTaskExecutionApplicationService<br/>准备、排队、派发]
+  TaskExecApp --> RecallReview[RecallReviewApplicationService<br/>安全召回自动应用，不确定召回跳过]
+  TaskExecApp --> ExecCoordinator[SessionExecutionCoordinator<br/>上下文、路由、执行、验收、交付]
+
+  ExecCoordinator --> MemoryContext[MemoryContextService.prepareExecutionContext]
+  MemoryContext --> MemoryEngine[MemoryEngine<br/>偏好和记忆召回]
+  MemoryContext --> ResumeContext[ResumeContextBuilder<br/>恢复上下文包、最近任务 turns、相关任务 ids]
+  MemoryContext --> ContextRecaller
+  MemoryEngine --> MemoryRepos[(Preference、Observation、<br/>memory audit 和 recall feedback repos)]
+
+  ExecCoordinator --> RouterCoord[ExecutorRoutingCoordinator<br/>路由事件记录、选择 executor]
+  RouterCoord --> Profiles[ExecutorProfileService<br/>默认 profile、自定义 executor、可用性]
+  Profiles --> ProfileRepos[(Executor profile 和 route event repos)]
+  RouterCoord --> ExecutorRouter[ExecutorRouter<br/>能力、风险、意图、边界]
+
+  ExecCoordinator --> Runtime[ExecutionRuntime<br/>adapter registry 和 executor 调用]
+  Runtime --> Codex[Codex CLI Adapter]
+  Runtime --> Pi[Pi Agent Adapter]
+  Runtime --> Hermes[Hermes Agent Adapter]
+  Runtime --> Custom[Custom CLI Adapter]
+
+  ExecCoordinator --> Verification[VerificationAndDeliveryService<br/>验收、测试证据、产物、blocked 反馈]
+  Verification --> Progress[ExecutionProgressService<br/>executor 进度里程碑]
+  Verification --> Artifacts[WorkspaceTargetService<br/>任务输出目录和 artifact paths]
+  Verification --> Capture[MemoryCaptureService<br/>高置信偏好捕获]
+  Capture --> MemoryRepos
+
+  ExecCoordinator --> Presentation[SessionPresentationService<br/>任务卡片、建议块、恢复提示]
+  Presentation --> Session
+  Progress --> Session
+
+  Session --> Snapshot[SessionSnapshot<br/>output、current task、runtime state、latest guidance]
+  Snapshot --> TUI
+  Snapshot --> Gateway
+  Snapshot --> FeishuProgress[Feishu Progress Formatter<br/>MetaClaw 里程碑 vs Executor 里程碑]
+  FeishuProgress --> Feishu
+
+  Verification --> Delivery[Gateway Delivery Layer<br/>飞书卡片、富文本 fallback、文件上传、Markdown 预览链接]
+  Delivery --> Audit[(gateway-audit.jsonl)]
+  Delivery --> Preview[Markdown Preview Server]
+  Delivery --> Feishu
+
+  subgraph Storage[本地 SQLite Storage]
+    TaskRepo
+    StateRepo
+    MemoryRepos
+    ProfileRepos
+    Search[(TaskSearchIndexRepo<br/>SQLite FTS)]
+    Learning[(Learning、skill usage、<br/>reflection 和 promotion repos)]
+  end
+
+  subgraph Retrieval[任务与记忆召回]
+    Search --> HybridTask[HybridTaskRetriever<br/>显式引用、当前焦点、FTS、关系、最近任务、反馈、语义 rerank]
+    MemoryRepos --> HybridMemory[HybridMemoryRecaller<br/>偏好和任务记忆候选]
+    HybridTask --> RecallReview
+    HybridMemory --> RecallReview
+  end
+
+  subgraph AgenticLoop[Agentic Loop 核心]
+    Strategy[ExecutionStrategyPlanner<br/>单 executor 或多 executor work units]
+    Multi[MultiExecutorOrchestrator<br/>并行或串行 fan-out]
+    Aggregator[ExecutionAggregator<br/>汇总、冲突、产物收集]
+    Loop[AgenticLoopController<br/>重试直到通过或 blocked]
+    Strategy --> Multi --> Aggregator --> Loop
+  end
+
+  TaskRuntime -. 复杂任务规划 .-> Strategy
+  Runtime -. executor 结果 .-> Multi
+  Loop -. 未通过验收反馈 .-> Verification
 ```
 
 conversation / task 的边界很重要：
 
-- Conversation：即时回答，不创建持久任务。适合解释、澄清、状态问答。
+- Conversation：即时回答，不创建持久任务。普通问答仍会走语义上下文召回。用户说“继续”或“刚才回答了一半”时，MetaClaw 会把最近会话上下文作为最强证据，再考虑更旧的相似历史。
 - Task control：查看或改变已有任务状态。适合“当前在跑什么”“继续那个任务”“清空阻塞任务”。
 - Durable task：创建或继续需要执行、持久化、产物、恢复、调度或后续检索的工作。
 
+当前 direct reply 路径是显式的：MetaClaw 先展示意图理解，再召回最近对话上下文，然后把回答交给选中的 executor。飞书和 TUI 会区分 `MetaClaw` 里程碑和具体 `Executor: <name>` 里程碑，让用户知道当前是路由器、调度器还是执行器在工作。飞书最终回复会等待 direct reply 输出 settle 后再发送，避免只有过程卡片而没有最终答案。
+
 [MetaClaw Task OS 架构与策略升级方案](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) 中的本轮主线已经进入代码：任务检索索引、混合任务召回、执行策略规划、多执行器 work units、汇总验收和 Agentic Loop 核心层都已实现并有针对性测试覆盖。Executor Discovery、远程 Registry 和大规模多客户端 Gateway 扩展仍然不是本轮重点。
 
-重要边界：Agentic Loop 已作为核心架构层实现并测试；当前交互式/script session 默认执行路径仍沿用已有 runtime，只有明确接入策略/编排循环的功能路径才会调用它。这样可以在增强复杂任务验收能力的同时，保持现有用户路径稳定。
+重要边界：Agentic Loop 已作为核心架构层实现并测试；当前交互式/script session 默认执行路径仍沿用 session runtime，只有明确接入策略/编排循环的功能路径才会调用它。这样可以在增强复杂任务验收能力的同时，保持现有用户路径稳定。
 
 ## 当前执行器
 
