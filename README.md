@@ -838,16 +838,26 @@ npm test -- tests/session/scripted-session.test.ts
 src/
 ├── cli/            # CLI args: --script, --gateway, --connect
 ├── commands/       # Slash command router and handlers
-├── core/           # Task, memory, recall, scheduler, routing engines
-├── executor/       # Executor adapters, prompt builders, skill packages
-├── gateway/        # Local Gateway server/client
-├── integrations/   # Feishu app integration and Markdown preview
-├── notifications/  # Feishu notifications
-├── session/        # Interactive and scripted session runtime
+├── core/           # Routing/intent/execution-policy seam plus shared primitives
+├── delivery/       # Verification, artifact extraction, aggregation checks, and final delivery preparation
+├── execution/      # Execution runtime, fallback chain, multi-executor orchestration, aggregation, progress, workspace, conversation runtime
+├── executor/       # Executor adapters plus profile/admin/seeder services, prompt builders, skill packages
+├── gateway/        # Local Gateway server/client and Feishu gateway runtime
+├── guidance/       # Proactive guidance, task signals, guidance policy, dashboard orchestration
+├── integrations/   # External integration helpers such as Markdown preview
+├── intent/         # Inline resource normalization and non-routing intent/material helpers
+├── learning/       # Reflection, weekly review, skill governance, promotion gates, safety scanning
+├── memory/         # Memory capture, recall, recall review, preferences, context bundles, vault export
+├── notifications/  # Notification adapters such as Feishu notifications
+├── routing/        # ExecutionPolicy planner and emerging routing-policy layer
+├── session/        # Interactive/script/gateway session coordination and persistence
 ├── storage/        # SQLite migrations and repositories
+├── task/           # Task state machine, runtime, scheduler, resume planning, ranking, semantic/embedding retrieval
 ├── tui/            # Ink terminal UI
 └── utils/          # Config, paths, logger, IDs
 ```
+
+Tests mirror these domains under `tests/<domain>/`. `src/core` is intentionally narrow: it keeps the routing/intent/policy seam (`IntentOrchestrator`, `ExecutorRouter`, `ExecutionPlanningService`, `ExecutionStrategyPlanner`, `ExecutionPolicy`, `CapabilityClass`, `RuleHintsProvider`, `SemanticIntentRouter`, `task-routing`, `llm-bridge`) and shared primitives (`types.ts`, `embedding-provider.ts`). Domain implementation should live in the domain folders above rather than returning to `core`.
 
 ## License
 

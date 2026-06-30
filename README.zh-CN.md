@@ -799,18 +799,28 @@ metaclaw --script /tmp/metaclaw-flow.txt
 
 ```text
 src/
-├── cli/
-├── commands/
-├── core/
-├── executor/
-├── gateway/
-├── integrations/
-├── notifications/
-├── session/
-├── storage/
-├── tui/
-└── utils/
+├── cli/            # CLI 参数解析：--script、--gateway、--connect
+├── commands/       # Slash command 路由和命令处理
+├── core/           # 路由/意图/执行策略 seam，以及共享基础类型
+├── delivery/       # 验收、产物抽取、聚合检查和最终交付准备
+├── execution/      # 执行 runtime、fallback chain、多 executor 编排、聚合、进度、workspace、对话 runtime
+├── executor/       # Executor adapter，以及 profile/admin/seeder、prompt、skill package
+├── gateway/        # 本地 Gateway server/client 和飞书 Gateway runtime
+├── guidance/       # 主动引导、任务信号、引导策略和仪表盘编排
+├── integrations/   # 外部集成辅助能力，例如 Markdown preview
+├── intent/         # 内联资源归一化和非路由意图/材料辅助函数
+├── learning/       # 反思、周报、技能治理、晋升门禁和安全扫描
+├── memory/         # 记忆捕获、召回、召回审查、偏好、上下文 bundle 和 vault 导出
+├── notifications/  # 通知适配器，例如飞书通知
+├── routing/        # ExecutionPolicy planner 和正在演进的 routing policy 层
+├── session/        # 交互/script/gateway session 协调和持久化
+├── storage/        # SQLite migrations 和 repositories
+├── task/           # 任务状态机、runtime、调度、恢复规划、排序、语义/embedding 检索
+├── tui/            # Ink 终端 UI
+└── utils/          # 配置、路径、日志、ID 等通用工具
 ```
+
+测试按同样分区放在 `tests/<domain>/`。`src/core` 现在刻意保持很窄：只保留 routing / intent / policy seam（如 `IntentOrchestrator`、`ExecutorRouter`、`ExecutionPlanningService`、`ExecutionStrategyPlanner`、`ExecutionPolicy`、`CapabilityClass`、`RuleHintsProvider`、`SemanticIntentRouter`、`task-routing`、`llm-bridge`）以及共享基础类型（`types.ts`、`embedding-provider.ts`）。业务实现应放回对应领域目录，不再回流到 `core`。
 
 ## License
 
