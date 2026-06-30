@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { memoryCommand } from '../../src/commands/memory-commands.js';
 import { RecallReviewPolicyRepo } from '../../src/storage/recall-review-policy-repo.js';
 

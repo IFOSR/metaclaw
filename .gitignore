@@ -8,3 +8,5 @@ projects/
 .tmp-*/
 .deepseek/
 metaclaw-tasks/
+docker/*.env
+!docker/*.env.example

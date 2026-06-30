@@ -4,10 +4,10 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
 import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
@@ -232,7 +232,7 @@ describe('executor router command acceptance', () => {
     expect(executor.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('races Pi Agent and Hermes Agent for research tasks and keeps the first result', async () => {
+  it('dispatches research tasks to the primary executor without racing peers', async () => {
     const db = createDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests-executor-route-pi');
@@ -268,23 +268,14 @@ describe('executor router command acceptance', () => {
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
-    let resolveHermes!: (value: {
-      success: true;
-      output: string;
-      exitCode: number;
-      durationMs: number;
-    }) => void;
-    const hermesResult = new Promise<{
-      success: true;
-      output: string;
-      exitCode: number;
-      durationMs: number;
-    }>(resolve => {
-      resolveHermes = resolve;
-    });
     const hermesExecutor: ExecutorAdapter = {
       name: 'hermes-agent',
-      execute: vi.fn().mockImplementation(() => hermesResult),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'Hermes Agent 不应执行',
+        exitCode: 0,
+        durationMs: 500,
+      }),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -315,7 +306,7 @@ describe('executor router command acceptance', () => {
     session.initialize();
     const submitPromise = session.submit('请调研这个方案并进行自动化分析，输出报告', { awaitAsyncWork: true });
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(session.getSnapshot().runtimeState.runningExecutorName).toBe('pi-agent+hermes-agent');
+    expect(session.getSnapshot().runtimeState.runningExecutorName).toBe('pi-agent');
 
     resolvePi({
       success: true,
@@ -324,19 +315,12 @@ describe('executor router command acceptance', () => {
       durationMs: 50,
     });
     await submitPromise;
-    resolveHermes({
-      success: true,
-      output: 'Hermes Agent 慢返回结果',
-      exitCode: 0,
-      durationMs: 500,
-    });
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ MetaClaw：路由决策：调研竞速 (auto_dispatch');
-    expect(output).toContain('→ MetaClaw：执行器：pi-agent + hermes-agent');
-    expect(output).toContain('→ MetaClaw：原始首选：pi-agent；原因：');
-    expect(output).toContain('workflow_automation');
-    expect(output).toContain('→ MetaClaw：调研竞速：同时派发给 pi-agent + hermes-agent；谁先返回采用谁的结果，并自动终止其他执行器');
-    expect(output).toContain('→ pi-agent 已先返回，已终止：hermes-agent');
+    expect(output).toContain('pi-agent (auto_dispatch');
+    expect(output).toContain('single_executor');
+    expect(output).toContain('memory_ops');
+    expect(output).not.toContain('pi-agent + hermes-agent');
+    expect(output).not.toContain('hermes-agent');
 
     const route = db.prepare('SELECT selected_executor, action, result FROM executor_route_events ORDER BY created_at DESC LIMIT 1').get() as {
       selected_executor: string;
@@ -350,8 +334,8 @@ describe('executor router command acceptance', () => {
     }));
     expect(defaultExecutor.execute).not.toHaveBeenCalled();
     expect(piExecutor.execute).toHaveBeenCalledTimes(1);
-    expect(hermesExecutor.execute).toHaveBeenCalledTimes(1);
-    expect(hermesExecutor.abort).toHaveBeenCalledTimes(1);
+    expect(hermesExecutor.execute).not.toHaveBeenCalled();
+    expect(hermesExecutor.abort).not.toHaveBeenCalled();
 
     const interaction = db.prepare('SELECT executor_used, system_output FROM interactions ORDER BY created_at DESC LIMIT 1').get() as {
       executor_used: string;
@@ -417,8 +401,7 @@ describe('executor router command acceptance', () => {
     await session.submit('请调研 pi agent 并输出 Markdown 报告', { awaitAsyncWork: true });
 
     const output = session.getSnapshot().output.join('\n');
-    expect(output).toContain('→ pi-agent 执行失败: executor idle timeout');
-    expect(output).toContain('→ 改派给 codex-cli 兜底执行同一任务，不新建任务');
+    expect(output).toContain('→ pi-agent failed: executor idle timeout');
     expect(output).toContain('Codex CLI 兜底完成调研报告');
     expect(piExecutor.execute).toHaveBeenCalledTimes(1);
     expect(defaultExecutor.execute).toHaveBeenCalledTimes(1);
@@ -431,7 +414,7 @@ describe('executor router command acceptance', () => {
     };
     expect(route).toEqual(expect.objectContaining({
       selected_executor: 'pi-agent',
-      result: 'fallback_codex_success',
+      result: 'fallback_success',
     }));
 
     const interaction = db.prepare('SELECT executor_used, system_output FROM interactions ORDER BY created_at DESC LIMIT 1').get() as {

@@ -1,8 +1,10 @@
 import type { ExecutorAvailability, ExecutorProfile, ExecutorRiskLevel, TaskRouteIntent } from '../core/executor-router.js';
+import { capabilityClassFromTaskRouteIntent } from '../core/executor-router.js';
 import { ExecutionPlanningService } from '../core/execution-planning-service.js';
+import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planner.js';
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
 import type { Task } from '../core/types.js';
-import { seedDefaultExecutorProfiles } from '../core/executor-registry-seeder.js';
+import { seedDefaultExecutorProfiles } from '../executor/executor-registry-seeder.js';
 import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
 import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
 import { generateInteractionId } from '../utils/id.js';
@@ -114,9 +116,7 @@ function inferPreviewPrimaryIntent(userInput: string): TaskRouteIntent {
 function inferPreviewExecutionMode(userInput: string): IntentExecutionMode {
   return /多个 agent|多执行器|并行|分别做|多视角|subagent/i.test(userInput)
     ? 'multi_executor'
-    : /竞速|race/i.test(userInput)
-      ? 'race_executors'
-      : 'single_executor';
+    : 'single_executor';
 }
 
 function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile[], defaultExecutorName: string): IntentDecisionV2 {
@@ -164,6 +164,7 @@ function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile
       requiresVerification: primaryIntent === 'repo_execution',
       canModifyFiles: primaryIntent === 'repo_execution',
       requiresExternalGateway: primaryIntent === 'memory_agent_ops',
+      capabilityClass: capabilityClassFromTaskRouteIntent(primaryIntent) ?? 'general',
       primaryIntent,
       matchedBoundary: primaryIntent === 'general' ? [] : [primaryIntent],
     },
@@ -273,7 +274,7 @@ export const executorCommand: CommandHandler = {
             historicalSuccess: 0.5,
           }]),
       ];
-      const plan = new ExecutionPlanningService().plan({
+      const policy = new ExecutionPlanningService().plan({
         task: createPreviewTask(userInput),
         userPrompt: userInput,
         taskExecutionPlan: {
@@ -287,7 +288,7 @@ export const executorCommand: CommandHandler = {
         defaultExecutorName,
         resources: [],
       });
-      const decision = plan.routeDecision;
+      const decision = buildRouteDecisionFromPolicy(policy);
       new ExecutorRouteEventRepo(context.db).insert({
         id: `route_${generateInteractionId()}`,
         taskId: null,

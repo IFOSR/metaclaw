@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+projects
+metaclaw-tasks
+.tmp
+.tmp-*
+.deepseek
+.git
+*.db
+*.log
+docker/*.env

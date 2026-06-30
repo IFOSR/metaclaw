@@ -3,19 +3,19 @@ import Database from 'better-sqlite3';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
-import { MemoryCaptureService } from '../../src/core/memory-capture-service.js';
-import { TaskResumePlanner } from '../../src/core/task-resume-planner.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
+import { SessionPersistenceService } from '../../src/session/session-persistence-service.js';
+import { MemoryCaptureService } from '../../src/memory/memory-capture-service.js';
+import { TaskResumePlanner } from '../../src/task/task-resume-planner.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
 import { MemoryAuditEventRepo } from '../../src/storage/memory-audit-event-repo.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { TaskRuntimeService } from '../../src/core/task-runtime-service.js';
-import { TaskSemanticService } from '../../src/core/task-semantic-service.js';
-import { ConversationRuntimeService } from '../../src/core/conversation-runtime-service.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { TaskRuntimeService } from '../../src/task/task-runtime-service.js';
+import { TaskSemanticService } from '../../src/task/task-semantic-service.js';
+import { ConversationRuntimeService } from '../../src/execution/conversation-runtime-service.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { ExecutorRouteDecision } from '../../src/core/executor-router.js';
 
@@ -163,6 +163,7 @@ describe('session extraction services', () => {
           requiresVerification: false,
           canModifyFiles: false,
           requiresExternalGateway: false,
+          capabilityClass: 'conversation',
         },
         hints: [],
       },
@@ -194,6 +195,7 @@ describe('session extraction services', () => {
           requiresVerification: false,
           canModifyFiles: false,
           requiresExternalGateway: false,
+          capabilityClass: 'conversation',
         },
         hints: [],
       },

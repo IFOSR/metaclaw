@@ -1,6 +1,9 @@
+// Legacy executor selection module that scores profiles from intent; being replaced by ExecutionPolicy routing.
+import { isCapabilityClass, type CapabilityClass } from './capability-class.js';
+
 export type ExecutorRiskLevel = 'low' | 'medium' | 'high';
 export type ExecutorAvailability = 'available' | 'unavailable';
-export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'race_executors' | 'ask_clarification';
+export type ExecutorRouteAction = 'auto_dispatch' | 'ask_review' | 'fallback_default' | 'ask_clarification';
 export type IntentDecisionKind =
   | 'direct_reply'
   | 'task_control'
@@ -15,6 +18,23 @@ export type TaskRouteIntent =
   | 'memory_agent_ops'
   | 'conversation_or_control'
   | 'general';
+
+// Single source of truth for the TaskRouteIntent union, mirroring the
+// CAPABILITY_CLASSES pattern in capability-class.ts. Adding a new intent means
+// extending the union above and this array together; nothing else should
+// re-enumerate the members.
+export const TASK_ROUTE_INTENTS: readonly TaskRouteIntent[] = [
+  'repo_execution',
+  'technical_reasoning',
+  'research_workflow',
+  'memory_agent_ops',
+  'conversation_or_control',
+  'general',
+] as const;
+
+export function isTaskRouteIntent(value: unknown): value is TaskRouteIntent {
+  return typeof value === 'string' && (TASK_ROUTE_INTENTS as readonly string[]).includes(value);
+}
 
 export interface ExecutorProfile {
   name: string;
@@ -53,7 +73,11 @@ export interface IntentDecision {
     target: string;
     action: IntentRouteAction;
     primaryIntent: TaskRouteIntent;
-    capabilityClass: TaskRouteIntent;
+    // This field is a TaskRouteIntent (the legacy "route intent"), NOT a
+    // CapabilityClass despite the historical name drift. It carries the intent
+    // the router scored against; derive a CapabilityClass via
+    // capabilityClassFromTaskRouteIntent when one is genuinely needed.
+    routeIntent: TaskRouteIntent;
     requiredCapabilities: string[];
     matchedBoundary: string[];
     riskLevel: ExecutorRiskLevel;
@@ -133,6 +157,61 @@ const DEFAULT_INTENT_AFFINITY: Record<string, Partial<Record<TaskRouteIntent, nu
   },
 };
 
+export function taskRouteIntentFromCapabilityClass(capabilityClass: CapabilityClass): TaskRouteIntent {
+  if (capabilityClass === 'code_edit') return 'repo_execution';
+  if (capabilityClass === 'research') return 'research_workflow';
+  if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
+    return 'memory_agent_ops';
+  }
+  if (capabilityClass === 'conversation') return 'conversation_or_control';
+  return 'general';
+}
+
+export function capabilityClassFromTaskRouteIntent(value: unknown): CapabilityClass | null {
+  // technical_reasoning is a read-only analysis intent, not a capability boundary
+  // — reasoning is orthogonal to tool/side-effect class, and forcing it to code_edit
+  // would wrongly impose repo-mutation isolation + test verification on read-only
+  // analysis (see buildLegacyIntentDecision's "不改文件" branch). It has no
+  // CapabilityClass, so callers fall back to their interaction-type default.
+  if (value === 'repo_execution') return 'code_edit';
+  if (value === 'research_workflow') return 'research';
+  if (value === 'memory_agent_ops') return 'memory_ops';
+  if (value === 'conversation_or_control') return 'conversation';
+  if (value === 'general') return 'general';
+  return null;
+}
+
+export function normalizeTaskRouteIntent(value: unknown): TaskRouteIntent {
+  if (isTaskRouteIntent(value)) {
+    return value;
+  }
+
+  return isCapabilityClass(value)
+    ? taskRouteIntentFromCapabilityClass(value)
+    : 'general';
+}
+
+// Derives capability flags from a TaskRouteIntent, so the intent->flag mapping
+// lives in one place rather than as scattered === checks at each decision
+// builder. Keep in sync with taskRouteIntentFromCapabilityClass.
+interface IntentCapabilityFlags {
+  requiresLocalRepo: boolean;
+  requiresResearch: boolean;
+  requiresMultiTool: boolean;
+  requiresLongTermMemory: boolean;
+  canModifyFiles: boolean;
+}
+
+export function intentCapabilityFlags(intent: TaskRouteIntent): IntentCapabilityFlags {
+  return {
+    requiresLocalRepo: intent === 'repo_execution',
+    requiresResearch: intent === 'research_workflow',
+    requiresMultiTool: intent === 'memory_agent_ops',
+    requiresLongTermMemory: intent === 'memory_agent_ops',
+    canModifyFiles: intent === 'repo_execution',
+  };
+}
+
 function clampScore(score: number): number {
   return Math.max(0, Math.min(1, score));
 }
@@ -162,7 +241,6 @@ function normalizeDecision(decision: IntentDecision): IntentDecision {
 function routeActionToExecutorAction(action: IntentRouteAction): ExecutorRouteAction {
   if (action === 'ask_review') return 'ask_review';
   if (action === 'fallback_default') return 'fallback_default';
-  if (action === 'race_executors') return 'race_executors';
   if (action === 'ask_clarification' || action === 'none') return 'ask_clarification';
   return 'auto_dispatch';
 }
@@ -204,7 +282,7 @@ export function buildFallbackIntentDecision(input: {
   target: string;
   action?: IntentRouteAction;
   primaryIntent?: TaskRouteIntent;
-  capabilityClass?: TaskRouteIntent;
+  routeIntent?: TaskRouteIntent;
   requiredCapabilities?: string[];
   matchedBoundary?: string[];
   confidence?: number;
@@ -219,27 +297,28 @@ export function buildFallbackIntentDecision(input: {
   canModifyFiles?: boolean;
   shouldCreateDurableTask?: boolean;
 }): IntentDecision {
-  const primaryIntent = input.primaryIntent ?? input.capabilityClass ?? 'general';
-  const capabilityClass = input.capabilityClass ?? primaryIntent;
+  const primaryIntent = input.primaryIntent ?? input.routeIntent ?? 'general';
+  const routeIntent = input.routeIntent ?? primaryIntent;
   const action = input.action ?? 'auto_dispatch';
+  const flags = intentCapabilityFlags(routeIntent);
   return {
     intent: action === 'ask_clarification' ? 'clarification' : 'executor_dispatch',
     confidence: input.confidence ?? 0.45,
     needsClarification: action === 'ask_clarification',
     needsLongRunningTask: input.needsLongRunningTask ?? false,
-    requiresLocalRepo: input.requiresLocalRepo ?? capabilityClass === 'repo_execution',
-    requiresResearch: input.requiresResearch ?? capabilityClass === 'research_workflow',
-    requiresMultiTool: input.requiresMultiTool ?? capabilityClass === 'memory_agent_ops',
-    requiresLongTermMemory: input.requiresLongTermMemory ?? capabilityClass === 'memory_agent_ops',
+    requiresLocalRepo: input.requiresLocalRepo ?? flags.requiresLocalRepo,
+    requiresResearch: input.requiresResearch ?? flags.requiresResearch,
+    requiresMultiTool: input.requiresMultiTool ?? flags.requiresMultiTool,
+    requiresLongTermMemory: input.requiresLongTermMemory ?? flags.requiresLongTermMemory,
     requiresExternalGateway: input.requiresExternalGateway ?? false,
-    canModifyFiles: input.canModifyFiles ?? capabilityClass === 'repo_execution',
+    canModifyFiles: input.canModifyFiles ?? flags.canModifyFiles,
     shouldCreateDurableTask: input.shouldCreateDurableTask ?? false,
     reason: input.reason,
     route: {
       target: input.target,
       action,
       primaryIntent,
-      capabilityClass,
+      routeIntent,
       requiredCapabilities: input.requiredCapabilities ?? [],
       matchedBoundary: input.matchedBoundary ?? [],
       riskLevel: input.riskLevel ?? 'medium',
@@ -322,7 +401,7 @@ export class ExecutorRouter {
         target: legalProfile.name,
         action: 'auto_dispatch',
         primaryIntent: 'general',
-        capabilityClass: 'general',
+        routeIntent: 'general',
         requiredCapabilities: legalProfile.capabilities,
         matchedBoundary: ['legal', 'contract_review'],
         confidence: 0.78,
@@ -337,7 +416,7 @@ export class ExecutorRouter {
         target: defaultExecutorName,
         action: 'ask_clarification',
         primaryIntent: 'memory_agent_ops',
-        capabilityClass: 'memory_agent_ops',
+        routeIntent: 'memory_agent_ops',
         requiredCapabilities: ['messaging_gateway'],
         matchedBoundary: ['messaging_gateway', 'external_action'],
         confidence: 0.62,
@@ -360,7 +439,7 @@ export class ExecutorRouter {
         target,
         action: 'auto_dispatch',
         primaryIntent: 'technical_reasoning',
-        capabilityClass: 'technical_reasoning',
+        routeIntent: 'technical_reasoning',
         requiredCapabilities: ['architecture_review', 'long_context_analysis'],
         matchedBoundary: ['architecture', 'long_context'],
         confidence: 0.76,
@@ -374,7 +453,7 @@ export class ExecutorRouter {
         target,
         action: 'auto_dispatch',
         primaryIntent: 'technical_reasoning',
-        capabilityClass: 'technical_reasoning',
+        routeIntent: 'technical_reasoning',
         requiredCapabilities: ['deepseek_reasoning', 'algorithm', 'code_review'],
         matchedBoundary: ['reasoning', 'algorithm', 'chinese_analysis'],
         confidence: 0.78,
@@ -391,7 +470,7 @@ export class ExecutorRouter {
         target,
         action: 'auto_dispatch',
         primaryIntent: 'memory_agent_ops',
-        capabilityClass: 'memory_agent_ops',
+        routeIntent: 'memory_agent_ops',
         requiredCapabilities: ['persistent_memory', 'multi_tool', 'workflow_automation'],
         matchedBoundary: ['memory', 'multi_tool', 'workflow_automation'],
         confidence: 0.74,
@@ -405,7 +484,7 @@ export class ExecutorRouter {
         target,
         action: 'auto_dispatch',
         primaryIntent: 'research_workflow',
-        capabilityClass: 'research_workflow',
+        routeIntent: 'research_workflow',
         requiredCapabilities: ['research', 'report_generation'],
         matchedBoundary: ['research', 'report_generation'],
         confidence: 0.72,
@@ -418,7 +497,7 @@ export class ExecutorRouter {
         target: defaultExecutorName,
         action: 'auto_dispatch',
         primaryIntent: 'repo_execution',
-        capabilityClass: 'repo_execution',
+        routeIntent: 'repo_execution',
         requiredCapabilities: ['coding', 'tests', 'code_review'],
         matchedBoundary: ['repo_mutation'],
         confidence: 0.76,
@@ -431,7 +510,7 @@ export class ExecutorRouter {
       target: defaultExecutorName,
       action: 'fallback_default',
       primaryIntent: 'general',
-      capabilityClass: 'general',
+      routeIntent: 'general',
       confidence: 0.45,
       reason: 'legacy route preview found no strong executor-specific signal',
     });
@@ -553,13 +632,13 @@ export class ExecutorRouter {
   ): ExecutorRouteCandidate {
     let score = 0;
     const reasons: string[] = [];
-    const capabilityClass = decision.route.capabilityClass;
-    const fallbackRank = FALLBACK_EXECUTORS_BY_INTENT[capabilityClass].indexOf(profile.name);
-    const affinity = intentAffinity(profile, capabilityClass);
+    const routeIntent = decision.route.routeIntent;
+    const fallbackRank = FALLBACK_EXECUTORS_BY_INTENT[routeIntent].indexOf(profile.name);
+    const affinity = intentAffinity(profile, routeIntent);
     const capabilityOverlap = hasCapabilityOverlap(profile, decision.route.requiredCapabilities);
 
     score += affinity * 0.4;
-    reasons.push(`intent=${capabilityClass}`);
+    reasons.push(`intent=${routeIntent}`);
     reasons.push(`intent_affinity=${affinity.toFixed(2)}`);
 
     if (fallbackRank >= 0) {
@@ -590,9 +669,6 @@ export class ExecutorRouter {
       score -= 0.2;
       reasons.push('repo mutation ownership mismatch');
     }
-
-    score += Math.max(0, Math.min(1, profile.historicalSuccess)) * 0.07;
-    reasons.push(`historical=${profile.historicalSuccess.toFixed(2)}`);
 
     return {
       executorName: profile.name,

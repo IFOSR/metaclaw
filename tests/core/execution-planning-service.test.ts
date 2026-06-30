@@ -66,7 +66,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'repo_execution',
-        capabilityClass: 'repo_execution',
+        routeIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation'],
         requiredCapabilities: ['coding'],
         reason: 'repo work',
@@ -77,7 +77,7 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('single_executor');
-    expect(plan.selectedExecutor).toBe('codex-cli');
+    expect(plan.primaryExecutor).toBe('codex-cli');
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('repo_execution_verified');
   });
 
@@ -106,6 +106,7 @@ describe('ExecutionPlanningService', () => {
         requiresVerification: true,
         canModifyFiles: true,
         requiresExternalGateway: false,
+        capabilityClass: 'code_edit',
         primaryIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation'],
       },
@@ -123,12 +124,12 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('single_executor');
-    expect(plan.selectedExecutor).toBe('codex-cli');
-    expect(plan.routeDecision.primaryIntent).toBe('repo_execution');
+    expect(plan.primaryExecutor).toBe('codex-cli');
+    expect(plan.capabilityClasses).toEqual(['code_edit']);
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('repo_execution_verified');
   });
 
-  it('creates a race plan for research workflows with multiple research executors', () => {
+  it('keeps research workflows on a single executor even with multiple research candidates', () => {
     const plan = new ExecutionPlanningService().plan({
       task: task(),
       userPrompt: '调研 pi agent 和 hermes agent 并输出报告',
@@ -136,7 +137,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'pi-agent',
         primaryIntent: 'research_workflow',
-        capabilityClass: 'research_workflow',
+        routeIntent: 'research_workflow',
         matchedBoundary: ['research'],
         requiredCapabilities: ['research'],
         reason: 'research work',
@@ -150,7 +151,7 @@ describe('ExecutionPlanningService', () => {
       resources: [],
     });
 
-    expect(plan.mode).toBe('race_executors');
+    expect(plan.mode).toBe('single_executor');
     expect(plan.candidateExecutors).toContain('pi-agent');
     expect(plan.candidateExecutors).toContain('hermes-agent');
   });
@@ -163,7 +164,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'repo_execution',
-        capabilityClass: 'repo_execution',
+        routeIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation', 'research', 'review'],
         requiredCapabilities: ['coding', 'research', 'review'],
         reason: 'complex work',
@@ -190,7 +191,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'general',
-        capabilityClass: 'general',
+        routeIntent: 'general',
         matchedBoundary: ['general'],
         reason: 'ordinary email drafting',
       }),

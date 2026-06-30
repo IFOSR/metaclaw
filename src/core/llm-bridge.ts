@@ -1,7 +1,9 @@
+// Process-based LLM adapter plus legacy semantic prompt schemas used by older routing paths.
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
 import type { NaturalLanguageRoute, NaturalLanguageRouteAction, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
+import { normalizeTaskRouteIntent } from './executor-router.js';
 import type { ExecutorProfile, IntentDecision, IntentDecisionKind, IntentRouteAction, TaskRouteIntent } from './executor-router.js';
 import { buildCodexNonInteractiveArgs } from '../executor/codex-args.js';
 
@@ -82,23 +84,38 @@ export interface PreferenceRecallDecision {
 }
 
 const LLM_TIMEOUT = 30_000;
+type SpawnFn = typeof spawn;
+
+interface LlmBridgeDeps {
+  spawn?: SpawnFn;
+  cwd?: () => string;
+}
 
 export class LlmBridge {
-  constructor(private command: string) {}
+  constructor(
+    private command: string,
+    private readonly deps: LlmBridgeDeps = {},
+  ) {}
 
   async query(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.command, this.buildCommandArgs(prompt), {
-        cwd: tmpdir(),
+      const cwd = this.deps.cwd?.() ?? tmpdir();
+      const proc = (this.deps.spawn ?? spawn)(this.command, this.buildCommandArgs(prompt), {
+        cwd,
         timeout: LLM_TIMEOUT,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
+      let stderr = '';
       proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       proc.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`LLM exited with code ${code}`));
+        else reject(new Error(
+          `LLM command "${this.command}" exited with code ${code ?? 'unknown'} in ${cwd}. `
+          + `stderr: ${summarizeProcessText(stderr) || '(empty)'}`,
+        ));
       });
       proc.on('error', reject);
     });
@@ -107,6 +124,21 @@ export class LlmBridge {
   private buildCommandArgs(prompt: string): string[] {
     if (this.command === 'codex') {
       return buildCodexNonInteractiveArgs(prompt);
+    }
+
+    if (this.command === 'pi') {
+      // Pi rejects Claude-only flags such as --dangerously-skip-permissions.
+      // Reasoning calls only need plain text output: no tools, no session, no
+      // extension/context-file discovery. The provider/model resolve from
+      // pi's settings.json (see docker/pi-config).
+      return [
+        '--no-tools',
+        '--no-session',
+        '--no-extensions',
+        '--no-context-files',
+        '-p',
+        prompt,
+      ];
     }
 
     return [
@@ -414,6 +446,8 @@ export class LlmBridge {
       '如果是任务状态/任务控制，route.target 必须是 metaclaw。',
       '如果需要本地 repo 修改或测试，通常选择 repo_execution 能力 executor；如果用户不允许改文件，canModifyFiles=false。',
       '如果需要调研、多工具、长期记忆或外部消息网关，选择对应 profile，不要默认给 repo executor。',
+      'route.capabilityClass 必须使用新的 CapabilityClass 单类输出：code_edit / research / messaging / memory_ops / office_automation / conversation / general。',
+      'CapabilityClass 按工具/副作用边界判断，不按模型推理能力判断；不要产出 reasoning 类。',
       '',
       `用户原话：${input.userInput}`,
       `当前会话焦点：${input.currentFocus}`,
@@ -448,7 +482,7 @@ export class LlmBridge {
           target: 'metaclaw|executor profile name',
           action: 'none|auto_dispatch|ask_review|fallback_default|ask_clarification',
           primaryIntent: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
-          capabilityClass: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
+          capabilityClass: 'code_edit|research|messaging|memory_ops|office_automation|conversation|general',
           requiredCapabilities: ['capability names'],
           matchedBoundary: ['semantic boundary labels'],
           riskLevel: 'low|medium|high',
@@ -711,7 +745,7 @@ export class LlmBridge {
           target: typeof route.target === 'string' ? route.target : 'metaclaw',
           action: this.parseIntentRouteAction(route.action),
           primaryIntent: this.parseTaskRouteIntent(route.primaryIntent),
-          capabilityClass: this.parseTaskRouteIntent(route.capabilityClass),
+          routeIntent: this.parseTaskRouteIntent(route.capabilityClass),
           requiredCapabilities: Array.isArray(route.requiredCapabilities)
             ? route.requiredCapabilities.filter((item: unknown): item is string => typeof item === 'string')
             : [],
@@ -747,7 +781,7 @@ export class LlmBridge {
         target: defaultExecutorName === 'metaclaw' ? 'metaclaw' : defaultExecutorName,
         action: 'ask_clarification',
         primaryIntent: 'conversation_or_control',
-        capabilityClass: 'conversation_or_control',
+        routeIntent: 'conversation_or_control',
         requiredCapabilities: [],
         matchedBoundary: [],
         riskLevel: 'low',
@@ -772,20 +806,12 @@ export class LlmBridge {
       || value === 'ask_review'
       || value === 'fallback_default'
       || value === 'ask_clarification'
-      || value === 'race_executors'
       ? value
       : 'ask_clarification';
   }
 
   private parseTaskRouteIntent(value: unknown): TaskRouteIntent {
-    return value === 'repo_execution'
-      || value === 'technical_reasoning'
-      || value === 'research_workflow'
-      || value === 'memory_agent_ops'
-      || value === 'conversation_or_control'
-      || value === 'general'
-      ? value
-      : 'general';
+    return normalizeTaskRouteIntent(value);
   }
 
   private parseExecutorRiskLevel(value: unknown): 'low' | 'medium' | 'high' {
@@ -914,4 +940,11 @@ export class LlmBridge {
   private isExplicitParkedResumeRequest(userInput: string): boolean {
     return /挂起|恢复|继续之前|继续.*挂起|继续.*任务/.test(userInput);
   }
+}
+
+function summarizeProcessText(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
 }

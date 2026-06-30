@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RecallReviewBuilder } from '../../src/core/recall-review-builder.js';
+import { RecallReviewBuilder } from '../../src/memory/recall-review-builder.js';
 import type { TaskMemoryCandidate } from '../../src/core/types.js';
 
 function createTaskCandidate(overrides: Partial<TaskMemoryCandidate> = {}): TaskMemoryCandidate {

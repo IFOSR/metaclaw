@@ -7,10 +7,10 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
@@ -57,6 +57,21 @@ function createConfig(): Config {
 
 function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+async function waitFor(assertion: () => void, attempts = 30) {
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await flushUpdates();
+    }
+  }
+
+  throw lastError;
 }
 
 afterEach(() => {
@@ -124,9 +139,13 @@ describe('App resume bundle integration', () => {
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();
 
-    expect(executor.execute).toHaveBeenCalled();
-    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0].executionContextBundle.mode).toBe('resume-parked');
-    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls[0][0].executionContextBundle.resumeContext.lastProgress).toContain('报告 A 已完成');
+    await waitFor(() => {
+      expect(executor.execute).toHaveBeenCalled();
+      const executionCall = (executor.execute as ReturnType<typeof vi.fn>).mock.calls
+        .find(call => call[0].executionContextBundle?.mode === 'resume-parked');
+      expect(executionCall?.[0].executionContextBundle.mode).toBe('resume-parked');
+      expect(executionCall?.[0].executionContextBundle.resumeContext.lastProgress).toContain('报告 A 已完成');
+    });
 
     app.unmount();
     app.cleanup();

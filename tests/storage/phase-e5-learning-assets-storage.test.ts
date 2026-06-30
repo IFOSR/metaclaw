@@ -23,7 +23,7 @@ describe('Phase E5 learning asset storage', () => {
       goal: '完成 skill_patch updateSkill 闭环',
       summary: '实现了从 skill_suggested_patch 到 executor.updateSkill 的闭环。',
       keyDecisions: ['approve 与 promote 分离', 'Executor 自己选择 skill'],
-      changedFiles: ['src/core/reflection-engine.ts', 'src/commands/learning-commands.ts'],
+      changedFiles: ['src/learning/reflection-engine.ts', 'src/commands/learning-commands.ts'],
       verificationCommands: ['npm test -- tests/integration/phase-e4-skill-patch-promotion.integration.test.ts', 'npm run lint'],
       pitfalls: ['approve update 时必须保留 promotedAssetId'],
       artifacts: ['docs/metaclaw-phase-e-unified-learning-and-executor-skill-evolution.md'],

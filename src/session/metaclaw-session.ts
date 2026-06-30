@@ -1,3 +1,4 @@
+// Session facade that wires MetaClaw's task OS modules and exposes the user-facing session snapshot.
 import type Database from 'better-sqlite3';
 import type {
   Config,
@@ -7,27 +8,27 @@ import type {
   Task,
   TaskRecoveryTrigger,
 } from '../core/types.js';
-import type { TaskEngine } from '../core/task-engine.js';
-import type { MemoryEngine } from '../core/memory-engine.js';
-import type { OrchestrationEngine } from '../core/orchestration.js';
+import type { TaskEngine } from '../task/task-engine.js';
+import type { MemoryEngine } from '../memory/memory-engine.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
 import type { ExecutorAdapter } from '../executor/adapter.js';
 import { NoopNotificationService, type NotificationService } from '../notifications/types.js';
-import type { ContextRecaller } from '../core/context-recaller.js';
+import type { ContextRecaller } from '../memory/context-recaller.js';
 import type { LlmBridge, TaskSummary } from '../core/llm-bridge.js';
-import { SchedulerEngine } from '../core/scheduler.js';
-import type { DispatchContext } from '../core/scheduler.js';
+import { SchedulerEngine } from '../task/scheduler.js';
+import type { DispatchContext } from '../task/scheduler.js';
 import {
   filterDurableTasks,
 } from '../core/task-routing.js';
 import { RuleHintsProvider } from '../core/rule-hints-provider.js';
 import { IntentOrchestrator, type IntentDecisionV2, type IntentOrchestratorInput } from '../core/intent-orchestrator.js';
-import { ResumeContextBuilder } from '../core/resume-context-builder.js';
-import { MemoryContextService } from '../core/memory-context-service.js';
-import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../core/recall-review-application-service.js';
-import { SessionPersistenceService } from '../core/session-persistence-service.js';
-import { MemoryCaptureService } from '../core/memory-capture-service.js';
-import { ConversationRuntimeService } from '../core/conversation-runtime-service.js';
-import { TaskResumePlanner } from '../core/task-resume-planner.js';
+import { ResumeContextBuilder } from '../memory/resume-context-builder.js';
+import { MemoryContextService } from '../memory/memory-context-service.js';
+import { RecallReviewApplicationService, createDefaultRecallReviewApplicationService } from '../memory/recall-review-application-service.js';
+import { SessionPersistenceService } from './session-persistence-service.js';
+import { MemoryCaptureService } from '../memory/memory-capture-service.js';
+import { ConversationRuntimeService } from '../execution/conversation-runtime-service.js';
+import { TaskResumePlanner } from '../task/task-resume-planner.js';
 import { CommandRouter } from '../commands/router.js';
 import { tasksCommand, taskCommand } from '../commands/task-commands.js';
 import { memoryCommand } from '../commands/memory-commands.js';
@@ -38,15 +39,15 @@ import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCom
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
 import type { IntentDecision } from '../core/executor-router.js';
-import { TaskRuntimeService } from '../core/task-runtime-service.js';
-import { TaskSemanticService } from '../core/task-semantic-service.js';
-import { ExecutionRuntime, ExecutorRegistry } from '../core/execution-runtime.js';
-import { VerificationAndDeliveryService } from '../core/verification-and-delivery-service.js';
-import { ExecutorProfileService } from '../core/executor-profile-service.js';
-import { ExecutorAdminService } from '../core/executor-admin-service.js';
+import { TaskRuntimeService } from '../task/task-runtime-service.js';
+import { TaskSemanticService } from '../task/task-semantic-service.js';
+import { ExecutionRuntime, ExecutorRegistry } from '../execution/execution-runtime.js';
+import { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
+import { ExecutorProfileService } from '../executor/executor-profile-service.js';
+import { ExecutorAdminService } from '../executor/executor-admin-service.js';
 import { ExecutorRoutingCoordinator } from '../core/executor-routing-coordinator.js';
-import { ExecutionProgressService } from '../core/execution-progress-service.js';
-import { WorkspaceTargetService } from '../core/workspace-target-service.js';
+import { ExecutionProgressService } from '../execution/execution-progress-service.js';
+import { WorkspaceTargetService } from '../execution/workspace-target-service.js';
 import { InputController } from './input-controller.js';
 import { SessionPresentationService, type GuidanceState } from './session-presentation-service.js';
 import { SessionExecutionCoordinator } from './session-execution-coordinator.js';
@@ -963,6 +964,7 @@ export class MetaclawSession {
         requiresVerification: false,
         canModifyFiles: false,
         requiresExternalGateway: false,
+        capabilityClass: 'general',
         matchedBoundary: [],
       },
       hints: [],

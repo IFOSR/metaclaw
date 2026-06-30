@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
-import { ExecutorAdminService } from '../../src/core/executor-admin-service.js';
-import { ExecutorProfileService } from '../../src/core/executor-profile-service.js';
+import { ExecutorAdminService } from '../../src/executor/executor-admin-service.js';
+import { ExecutorProfileService } from '../../src/executor/executor-profile-service.js';
 import { SessionPresentationService } from '../../src/session/session-presentation-service.js';
-import { SessionPersistenceService } from '../../src/core/session-persistence-service.js';
+import { SessionPersistenceService } from '../../src/session/session-persistence-service.js';
 import { ExecutorRoutingCoordinator } from '../../src/core/executor-routing-coordinator.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { TaskRuntimeService } from '../../src/core/task-runtime-service.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { TaskRuntimeService } from '../../src/task/task-runtime-service.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 
 function createDb() {
@@ -134,6 +134,7 @@ describe('executor admin and routing services', () => {
           requiresVerification: true,
           canModifyFiles: true,
           requiresExternalGateway: false,
+          capabilityClass: 'code_edit',
           primaryIntent: 'repo_execution',
           matchedBoundary: ['repo_execution'],
         },
@@ -142,8 +143,8 @@ describe('executor admin and routing services', () => {
     });
 
     expect(routed.eventId).toMatch(/^route_/);
-    expect(coordinator.formatRoutingDecision(routed).join('\n')).toContain('路由决策：codex-cli');
-    expect(coordinator.formatRunLabel(routed.executionPlan)).toBe('codex-cli');
+    expect(coordinator.formatRoutingDecision(routed).join('\n')).toContain('route decision: codex-cli');
+    expect(coordinator.formatRunLabel(routed.executionPolicy)).toBe('codex-cli');
     expect(db.prepare('SELECT selected_executor FROM executor_route_events').get()).toEqual({
       selected_executor: 'codex-cli',
     });

@@ -1,6 +1,6 @@
 import type { CommandHandler, CommandContext, CommandResult } from './router.js';
 import { filterDurableTasks, MANAGEABLE_TASK_STATUSES, type TaskClearScope } from '../core/task-routing.js';
-import { buildMaterialSummary, extractMaterialTextSnippets, isWebLink, splitTaskResources } from '../core/material-utils.js';
+import { buildMaterialSummary, extractMaterialTextSnippets, isWebLink, splitTaskResources } from '../intent/material-utils.js';
 import type { Task, TaskStatus } from '../core/types.js';
 import { TaskSearchIndexRepo } from '../storage/task-search-index-repo.js';
 

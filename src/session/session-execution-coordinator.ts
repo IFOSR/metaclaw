@@ -1,15 +1,16 @@
-import type { MemoryEngine } from '../core/memory-engine.js';
-import type { OrchestrationEngine } from '../core/orchestration.js';
-import type { MemoryContextService, ExecutionRecallSelection } from '../core/memory-context-service.js';
-import type { TaskRuntimeService } from '../core/task-runtime-service.js';
-import type { SchedulerEngine } from '../core/scheduler.js';
+// Application coordinator for one task execution attempt, from context recall through delivery.
+import type { MemoryEngine } from '../memory/memory-engine.js';
+import type { OrchestrationEngine } from '../guidance/orchestration.js';
+import type { MemoryContextService, ExecutionRecallSelection } from '../memory/memory-context-service.js';
+import type { TaskRuntimeService } from '../task/task-runtime-service.js';
+import type { SchedulerEngine } from '../task/scheduler.js';
 import type { ExecutorRoutingCoordinator } from '../core/executor-routing-coordinator.js';
-import type { ExecutionRuntime } from '../core/execution-runtime.js';
-import type { ExecutionProgressService, ExecutionProgressTracker } from '../core/execution-progress-service.js';
-import type { WorkspaceTargetService } from '../core/workspace-target-service.js';
-import type { VerificationAndDeliveryService } from '../core/verification-and-delivery-service.js';
-import type { SessionPersistenceService } from '../core/session-persistence-service.js';
-import type { MemoryCaptureService } from '../core/memory-capture-service.js';
+import type { ExecutionRuntime } from '../execution/execution-runtime.js';
+import type { ExecutionProgressService, ExecutionProgressTracker } from '../execution/execution-progress-service.js';
+import type { WorkspaceTargetService } from '../execution/workspace-target-service.js';
+import type { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
+import type { SessionPersistenceService } from './session-persistence-service.js';
+import type { MemoryCaptureService } from '../memory/memory-capture-service.js';
 import type { GuidanceProposal, Suggestion, Task } from '../core/types.js';
 import type { NotificationService } from '../notifications/types.js';
 import { generateInteractionId } from '../utils/id.js';
@@ -128,17 +129,13 @@ export class SessionExecutionCoordinator {
     });
     this.deps.callbacks.setRunningExecutorName(
       taskId,
-      this.deps.executorRoutingCoordinator.formatRunLabel(routedExecutor.executionPlan),
+      this.deps.executorRoutingCoordinator.formatRunLabel(routedExecutor.executionPolicy),
     );
     this.deps.callbacks.appendOutput(...this.deps.executorRoutingCoordinator.formatRoutingDecision(routedExecutor));
-    if (routedExecutor.executionPlan.mode === 'race_executors') {
-      this.deps.callbacks.appendOutput(this.deps.executorRoutingCoordinator.formatRaceDispatchLine(routedExecutor.executionPlan));
-    }
-
     this.deps.callbacks.refreshRuntimeState();
     this.deps.callbacks.appendOutput(
-      `【Executor: ${routedExecutor.executionPlan.selectedExecutor}｜执行】`,
-      `→ Executor: ${routedExecutor.executionPlan.selectedExecutor} 开始执行任务 #${taskId}`,
+      `【Executor: ${routedExecutor.executionPolicy.primaryExecutor}｜执行】`,
+      `→ Executor: ${routedExecutor.executionPolicy.primaryExecutor} 开始执行任务 #${taskId}`,
     );
 
     let progressTracker: ExecutionProgressTracker | null = null;
@@ -176,13 +173,10 @@ export class SessionExecutionCoordinator {
       const execution = await this.deps.executionRuntime.run({
         taskId,
         executionId,
-        plan: routedExecutor.executionPlan,
+        policy: routedExecutor.executionPolicy,
         executorInput,
         onProgress: progressTracker.onProgress,
       });
-      if (execution.runtime.abortedExecutors.length > 0) {
-        this.deps.callbacks.appendOutput(`→ ${execution.executorName} 已先返回，已终止：${execution.runtime.abortedExecutors.join('、')}`);
-      }
       if (execution.runtime.fallbackLines.length > 0) {
         this.deps.callbacks.appendOutput(...execution.runtime.fallbackLines.map(line => `→ ${line}`));
       }
@@ -220,7 +214,7 @@ export class SessionExecutionCoordinator {
           execution,
           routedEventId: routedExecutor.eventId,
           routedSelectedExecutor: routedExecutor.decision.selectedExecutor,
-          acceptanceCriteria: routedExecutor.executionPlan.acceptanceCriteria,
+          acceptanceCriteria: routedExecutor.executionPolicy.acceptanceCriteria,
           progressTracker,
           finishExecution,
         });
@@ -312,8 +306,8 @@ export class SessionExecutionCoordinator {
 
     this.deps.persistenceService.markRouteEventResult(
       input.routedEventId,
-      input.execution.executorName === 'codex-cli' && input.routedSelectedExecutor !== 'codex-cli'
-        ? 'fallback_codex_success'
+      input.execution.runtime.fallbackExecutors.length > 0
+        ? 'fallback_success'
         : 'success',
     );
     const artifactPaths = delivery.artifactPaths;

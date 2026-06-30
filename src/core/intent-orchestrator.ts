@@ -1,7 +1,9 @@
+// Single natural-language decision module that normalizes semantic routing into IntentDecisionV2.
 import type { ExecutorProfile, TaskRouteIntent } from './executor-router.js';
 import type { LlmBridge, TaskSummary } from './llm-bridge.js';
 import { SemanticIntentRouter, type SemanticIntentDecision } from './semantic-intent-router.js';
 import type { RuleHint } from './rule-hints-provider.js';
+import type { CapabilityClass } from './capability-class.js';
 
 export type IntentInteractionType =
   | 'direct_reply'
@@ -19,7 +21,7 @@ export type IntentTaskControl =
   | 'recover_blocked'
   | 'last_task_continuation'
   | 'none';
-export type IntentExecutionMode = 'none' | 'single_executor' | 'race_executors' | 'multi_executor';
+export type IntentExecutionMode = 'none' | 'single_executor' | 'multi_executor';
 export type IntentExecutionComplexity = 'simple' | 'moderate' | 'complex';
 
 export interface IntentOrchestratorInput {
@@ -61,6 +63,7 @@ export interface IntentDecisionV2 {
     requiresVerification: boolean;
     canModifyFiles: boolean;
     requiresExternalGateway: boolean;
+    capabilityClass: CapabilityClass;
     primaryIntent?: TaskRouteIntent;
     matchedBoundary?: string[];
   };
@@ -151,9 +154,7 @@ export class IntentOrchestrator {
       : semantic.taskBinding.taskId;
     const complexity = executionMode === 'multi_executor'
       ? 'complex'
-      : executionMode === 'race_executors'
-        ? 'moderate'
-        : this.inferComplexity(semantic);
+      : this.inferComplexity(semantic);
 
     return {
       interactionType,
@@ -190,6 +191,7 @@ export class IntentOrchestrator {
         requiresVerification: executionMode !== 'none' && interactionType !== 'clarification',
         canModifyFiles: executorDecision?.primaryIntent === 'repo_execution' && input.allowFileModification,
         requiresExternalGateway: executorDecision?.matchedBoundary.includes('messaging_gateway') ?? false,
+        capabilityClass: semantic.capabilityClass,
         primaryIntent: executorDecision?.primaryIntent,
         matchedBoundary: executorDecision?.matchedBoundary ?? [],
       },
@@ -222,6 +224,7 @@ export class IntentOrchestrator {
         requiresVerification: false,
         canModifyFiles: false,
         requiresExternalGateway: false,
+        capabilityClass: 'general',
         matchedBoundary: [],
       },
       hints: input.hints,
@@ -234,9 +237,6 @@ export class IntentOrchestrator {
   ): IntentExecutionMode {
     if (interactionType === 'clarification' || interactionType === 'direct_reply' || interactionType === 'task_control') {
       return 'none';
-    }
-    if (action === 'race_executors') {
-      return 'race_executors';
     }
     if (interactionType === 'durable_task' || interactionType === 'executor_dispatch') {
       return 'single_executor';

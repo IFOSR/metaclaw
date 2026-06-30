@@ -1,8 +1,14 @@
+// LLM-backed semantic classifier for one work unit; currently bridges CapabilityClass to legacy routing.
 import type { LlmBridge, TaskSummary } from './llm-bridge.js';
 import type { RuleHint } from './rule-hints-provider.js';
+import type { CapabilityClass } from './capability-class.js';
+import { isCapabilityClass } from './capability-class.js';
 import {
   ExecutorRouter,
   buildFallbackIntentDecision,
+  capabilityClassFromTaskRouteIntent,
+  isTaskRouteIntent,
+  taskRouteIntentFromCapabilityClass,
   type IntentDecision,
   type ExecutorProfile,
   type ExecutorRouteAction,
@@ -52,6 +58,7 @@ export interface SemanticIntentDecision {
   taskBinding: SemanticTaskBinding;
   taskControl: SemanticTaskControl | null;
   executorDecision: ExecutorRouteDecision | null;
+  capabilityClass: CapabilityClass;
   fallback: boolean;
 }
 
@@ -77,7 +84,6 @@ const ROUTE_ACTIONS = new Set<ExecutorRouteAction>([
   'auto_dispatch',
   'ask_review',
   'fallback_default',
-  'race_executors',
 ]);
 
 function clampConfidence(value: unknown): number {
@@ -127,6 +133,7 @@ function conservativeFallback(reason: string): SemanticIntentDecision {
     },
     taskControl: null,
     executorDecision: null,
+    capabilityClass: 'conversation',
     fallback: true,
   };
 }
@@ -182,6 +189,7 @@ export class SemanticIntentRouter {
             reason: ownership.reason,
           },
           executorDecision: null,
+          capabilityClass: 'conversation',
           fallback: false,
         });
       }
@@ -224,6 +232,9 @@ export class SemanticIntentRouter {
           ? this.buildLegacySemanticTaskControl(hints, intent.taskId, routeDecision.reason)
           : null,
         executorDecision,
+        capabilityClass: executorDecision
+          ? capabilityClassFromTaskRouteIntent(executorDecision.primaryIntent) ?? 'general'
+          : routeDecision.route === 'task_control' ? 'conversation' : 'general',
         fallback: false,
       });
     } catch {
@@ -311,6 +322,7 @@ export class SemanticIntentRouter {
           reason: asString(rawTaskControl.reason, ''),
         }
       : null;
+    const capabilityClass = this.normalizeCapabilityClass(this.extractCapabilityClass(raw), interactionType);
 
     const normalized: SemanticIntentDecision = {
       interactionType,
@@ -322,7 +334,8 @@ export class SemanticIntentRouter {
       clarificationQuestion: asString(raw.clarificationQuestion, '') || null,
       taskBinding,
       taskControl,
-      executorDecision: this.normalizeExecutorDecision(raw.executorDecision, interactionType),
+      executorDecision: this.normalizeExecutorDecision(raw.executorDecision, interactionType, capabilityClass),
+      capabilityClass,
       fallback: false,
     };
     if (
@@ -352,7 +365,30 @@ export class SemanticIntentRouter {
     return 'unknown';
   }
 
-  private normalizeExecutorDecision(raw: unknown, interactionType: SemanticInteractionType): ExecutorRouteDecision | null {
+  private extractCapabilityClass(raw: Record<string, unknown>): unknown {
+    if (raw.capabilityClass !== undefined) {
+      return raw.capabilityClass;
+    }
+    const intentDecision = raw.intentDecision && typeof raw.intentDecision === 'object'
+      ? raw.intentDecision as Record<string, unknown>
+      : null;
+    const route = intentDecision?.route && typeof intentDecision.route === 'object'
+      ? intentDecision.route as Record<string, unknown>
+      : null;
+    if (route?.capabilityClass !== undefined) {
+      return route.capabilityClass;
+    }
+    const executorDecision = raw.executorDecision && typeof raw.executorDecision === 'object'
+      ? raw.executorDecision as Record<string, unknown>
+      : null;
+    return executorDecision?.capabilityClass ?? executorDecision?.primaryIntent;
+  }
+
+  private normalizeExecutorDecision(
+    raw: unknown,
+    interactionType: SemanticInteractionType,
+    capabilityClass: CapabilityClass,
+  ): ExecutorRouteDecision | null {
     if (!raw || typeof raw !== 'object') {
       return null;
     }
@@ -362,13 +398,13 @@ export class SemanticIntentRouter {
       ? value.action as ExecutorRouteAction
       : 'fallback_default';
     const selectedExecutor = asString(value.selectedExecutor, this.options.defaultExecutorName);
-    const primaryIntent = this.normalizePrimaryIntent(value.primaryIntent);
+    const primaryIntent = this.normalizePrimaryIntent(value.primaryIntent, capabilityClass);
     const candidates = this.normalizeCandidates(value.candidates, primaryIntent);
     const rejected = this.normalizeRejected(value.rejected);
 
     return {
       selectedExecutor,
-      action: interactionType === 'executor_dispatch' ? action : action === 'race_executors' ? 'race_executors' : action,
+      action,
       confidence: clampConfidence(value.confidence),
       candidates,
       reason: asString(value.reason, ''),
@@ -383,8 +419,8 @@ export class SemanticIntentRouter {
       return buildFallbackIntentDecision({
         target: decision.executorDecision?.selectedExecutor ?? this.options.defaultExecutorName,
         action: decision.executorDecision?.action ?? 'auto_dispatch',
-        primaryIntent: decision.executorDecision?.primaryIntent ?? 'general',
-        capabilityClass: decision.executorDecision?.primaryIntent ?? 'general',
+        primaryIntent: decision.executorDecision?.primaryIntent ?? taskRouteIntentFromCapabilityClass(decision.capabilityClass),
+        routeIntent: taskRouteIntentFromCapabilityClass(decision.capabilityClass),
         matchedBoundary: decision.executorDecision?.matchedBoundary ?? [],
         confidence: decision.confidence,
         riskLevel: decision.risk === 'high' ? 'high' : decision.risk === 'medium' ? 'medium' : 'low',
@@ -403,8 +439,8 @@ export class SemanticIntentRouter {
       action: ROUTE_ACTIONS.has(route.action as ExecutorRouteAction)
         ? route.action as ExecutorRouteAction
         : decision.executorDecision?.action ?? 'auto_dispatch',
-      primaryIntent: this.normalizePrimaryIntent(route.primaryIntent),
-      capabilityClass: this.normalizePrimaryIntent(route.capabilityClass),
+      primaryIntent: this.normalizePrimaryIntent(route.primaryIntent, this.normalizeCapabilityClass(route.capabilityClass, decision.interactionType)),
+      routeIntent: taskRouteIntentFromCapabilityClass(this.normalizeCapabilityClass(route.capabilityClass, decision.interactionType)),
       requiredCapabilities: asStringArray(route.requiredCapabilities),
       matchedBoundary: asStringArray(route.matchedBoundary),
       confidence: clampConfidence(value.confidence || decision.confidence),
@@ -421,18 +457,30 @@ export class SemanticIntentRouter {
     });
   }
 
-  private normalizePrimaryIntent(value: unknown): TaskRouteIntent {
-    if (
-      value === 'repo_execution'
-      || value === 'technical_reasoning'
-      || value === 'research_workflow'
-      || value === 'memory_agent_ops'
-      || value === 'conversation_or_control'
-      || value === 'general'
-    ) {
+  private normalizeCapabilityClass(value: unknown, interactionType: SemanticInteractionType): CapabilityClass {
+    if (isCapabilityClass(value)) {
       return value;
     }
+    const legacy = capabilityClassFromTaskRouteIntent(value);
+    if (legacy) {
+      return legacy;
+    }
+    if (interactionType === 'direct_reply' || interactionType === 'task_control' || interactionType === 'clarification') {
+      return 'conversation';
+    }
     return 'general';
+  }
+
+  private normalizePrimaryIntent(value: unknown, capabilityClass: CapabilityClass = 'general'): TaskRouteIntent {
+    // Only honor `value` when it is already a valid TaskRouteIntent. A raw
+    // CapabilityClass string (e.g. 'code_edit') the LLM may have placed in the
+    // primaryIntent field must NOT be trusted here — it would silently override
+    // the separately-derived capabilityClass param and re-route to a different
+    // executor. Fall back to the capabilityClass param, matching legacy behavior.
+    if (isTaskRouteIntent(value)) {
+      return value;
+    }
+    return taskRouteIntentFromCapabilityClass(capabilityClass);
   }
 
   private normalizeCandidates(raw: unknown, primaryIntent: TaskRouteIntent): ExecutorRouteCandidate[] {
@@ -527,17 +575,21 @@ export class SemanticIntentRouter {
       '- direct_reply：普通对话、解释、闲聊、无需创建/恢复任务。',
       '- task_control：查询/清理/恢复/解除阻塞/继续已有任务等 MetaClaw 任务控制。',
       '- durable_task：需要创建或绑定长期任务，再进入任务执行准备。',
-      '- executor_dispatch：语义上已经能明确选择 executor 或竞速 executor 的可执行任务。',
+      '- executor_dispatch：语义上已经能明确选择 executor 的可执行任务。',
       '- clarification：低置信度、歧义、风险高、或继续旧任务/改文件/发消息等需要确认。',
+      '',
+      'CapabilityClass 只能取单个值：code_edit / research / messaging / memory_ops / office_automation / conversation / general。',
+      'CapabilityClass 按工具/副作用边界判断，不按模型推理能力判断；不要产出 reasoning 类。',
+      '当前没有分解-DAG，所以一个输入只产出一个 capabilityClass；多阶段/多能力请求按主工作单元的直接需求分类。',
       '',
       '置信度策略：confidence >= 0.78 可自动执行；0.55 <= confidence < 0.78 时低风险可默认，高风险或会改文件/发消息/恢复旧任务必须问；confidence < 0.55 必须问。',
       '如果 ambiguity 非空且 shouldAskBeforeActing 为 true，必须 interactionType=clarification。',
       'Codex CLI 是顶层语义裁决来源。失败时上层会保守降级为普通对话，不能用关键词规则直接创建任务。',
       '',
-      'executorDecision.action 只能是 auto_dispatch / ask_review / fallback_default / race_executors。',
-      '如果 action=race_executors，表示应启动竞速。只有在多个 executor profile 都语义匹配且风险不是 high 时使用。',
+      'executorDecision.action 只能是 auto_dispatch / ask_review / fallback_default。',
+      '不要产出 race_executors；多个同类 executor 只能作为候选与 fallback 记录，不能并行竞速。',
       'rejected candidates 的 reason 必须来自语义裁决或 profile 不匹配，不得说 token/关键词命中。',
-      '如果 executor profile riskLevel=high，改成 clarification 或 fallback_default，不要 auto_dispatch/race_executors。',
+      '如果 executor profile riskLevel=high，改成 clarification 或 fallback_default，不要 auto_dispatch。',
       '',
       `用户输入：${userInput}`,
       '',
@@ -557,6 +609,7 @@ export class SemanticIntentRouter {
         shouldAskBeforeActing: false,
         ambiguity: ['歧义点，可为空'],
         risk: 'low|medium|high',
+        capabilityClass: 'code_edit|research|messaging|memory_ops|office_automation|conversation|general',
         reason: '简短语义原因',
         clarificationQuestion: '需要追问时的问题，否则 null',
         taskBinding: {
@@ -572,9 +625,8 @@ export class SemanticIntentRouter {
         },
         executorDecision: {
           selectedExecutor: 'executor name',
-          action: 'auto_dispatch|ask_review|fallback_default|race_executors',
+          action: 'auto_dispatch|ask_review|fallback_default',
           confidence: 0.0,
-          primaryIntent: 'repo_execution|technical_reasoning|research_workflow|memory_agent_ops|conversation_or_control|general',
           matchedBoundary: ['语义边界'],
           reason: '选择原因',
           candidates: [{ executorName: 'name', score: 0.0, reason: '语义匹配原因', matchedBoundary: ['语义边界'] }],

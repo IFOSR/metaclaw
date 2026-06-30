@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionStrategyPlanner } from '../../src/core/execution-strategy-planner.js';
 import type { Task } from '../../src/core/types.js';
+import type { CapabilityClass } from '../../src/core/capability-class.js';
 import type { ExecutionPlan } from '../../src/session/session-helpers.js';
-import type { ExecutorRouteDecision } from '../../src/core/executor-router.js';
-import type { RetrievedTaskCandidate } from '../../src/core/hybrid-task-retriever.js';
+import type { RetrievedTaskCandidate } from '../../src/task/hybrid-task-retriever.js';
 
 function createTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -36,16 +36,19 @@ function createExecutionPlan(): ExecutionPlan {
   };
 }
 
-function createRouteDecision(overrides: Partial<ExecutorRouteDecision> = {}): ExecutorRouteDecision {
+function createStrategyPolicyInput(overrides: Partial<{
+  primaryExecutor: string;
+  candidateExecutors: string[];
+  capabilityClass: CapabilityClass;
+  matchedBoundary: string[];
+  riskLevel: 'low' | 'medium' | 'high';
+}> = {}) {
   return {
-    selectedExecutor: 'codex-cli',
-    action: 'auto_dispatch',
-    confidence: 0.8,
-    candidates: [],
-    reason: 'test route',
-    primaryIntent: 'repo_execution',
+    primaryExecutor: 'codex-cli',
+    candidateExecutors: ['codex-cli'],
+    capabilityClass: 'code_edit' as CapabilityClass,
     matchedBoundary: ['repo_mutation'],
-    rejected: [],
+    riskLevel: 'low' as const,
     ...overrides,
   };
 }
@@ -68,7 +71,7 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '修复这个 TypeScript bug 并跑测试',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision(),
+      ...createStrategyPolicyInput(),
       retrievedTasks: [],
       resources: [],
     });
@@ -85,9 +88,9 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '解释一下 SQLite FTS5 的原理',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision({
-        selectedExecutor: 'deepseek-tui',
-        primaryIntent: 'technical_reasoning',
+      ...createStrategyPolicyInput({
+        primaryExecutor: 'deepseek-tui',
+        capabilityClass: 'general',
         matchedBoundary: ['reasoning'],
       }),
       retrievedTasks: [],
@@ -105,9 +108,9 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '先调研竞品，再实现 README 修改，最后 review 验证',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision({
-        selectedExecutor: 'codex-cli',
-        primaryIntent: 'repo_execution',
+      ...createStrategyPolicyInput({
+        primaryExecutor: 'codex-cli',
+        capabilityClass: 'code_edit',
         matchedBoundary: ['repo_mutation', 'research', 'code_review'],
       }),
       retrievedTasks: [createRetrievedTask('task_old_research')],
@@ -132,9 +135,9 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '大规模重构任务系统代码，完成后做独立评审和测试验收',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision({
-        selectedExecutor: 'codex-cli',
-        primaryIntent: 'repo_execution',
+      ...createStrategyPolicyInput({
+        primaryExecutor: 'codex-cli',
+        capabilityClass: 'code_edit',
         matchedBoundary: ['repo_mutation', 'refactor', 'code_review'],
       }),
       retrievedTasks: [],
@@ -155,9 +158,9 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '让不同 agent 分别给我两个方案再综合',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision({
-        selectedExecutor: 'deepseek-tui',
-        primaryIntent: 'technical_reasoning',
+      ...createStrategyPolicyInput({
+        primaryExecutor: 'deepseek-tui',
+        capabilityClass: 'general',
         matchedBoundary: ['reasoning'],
       }),
       retrievedTasks: [],
@@ -176,9 +179,9 @@ describe('ExecutionStrategyPlanner', () => {
       task: createTask(),
       userPrompt: '整理历史任务里的 Phoenix 结论',
       executionPlan: createExecutionPlan(),
-      routeDecision: createRouteDecision({
-        selectedExecutor: 'codex-cli',
-        primaryIntent: 'general',
+      ...createStrategyPolicyInput({
+        primaryExecutor: 'codex-cli',
+        capabilityClass: 'general',
         matchedBoundary: [],
       }),
       retrievedTasks: [createRetrievedTask('task_a'), createRetrievedTask('task_b')],

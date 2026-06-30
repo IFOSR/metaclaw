@@ -57,6 +57,7 @@ function baseSemantic(overrides: Partial<SemanticIntentDecision>): SemanticInten
     },
     taskControl: null,
     executorDecision: null,
+    capabilityClass: 'conversation',
     fallback: false,
     ...overrides,
   };
@@ -65,7 +66,7 @@ function baseSemantic(overrides: Partial<SemanticIntentDecision>): SemanticInten
 function executorDecision(mode: 'single' | 'race' = 'single', primaryIntent: 'repo_execution' | 'research_workflow' | 'general' = 'general') {
   return {
     selectedExecutor: primaryIntent === 'research_workflow' ? 'pi-agent' : 'codex-cli',
-    action: mode === 'race' ? 'race_executors' as const : 'auto_dispatch' as const,
+    action: 'auto_dispatch' as const,
     confidence: 0.84,
     candidates: primaryIntent === 'research_workflow'
       ? [
@@ -170,23 +171,23 @@ function cases(): Case[] {
     })),
     ...durableInputs.map(input => ({
       input,
-      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'new task' }, executorDecision: executorDecision() },
+      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'new task' }, executorDecision: executorDecision(), capabilityClass: 'general' as const },
       expected: expected('durable_task', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...executorInputs.map(input => ({
       input,
-      semantic: { interactionType: 'executor_dispatch' as const, taskBinding: { type: 'new', taskId: null, reason: 'repo' }, executorDecision: executorDecision('single', 'repo_execution') },
+      semantic: { interactionType: 'executor_dispatch' as const, taskBinding: { type: 'new', taskId: null, reason: 'repo' }, executorDecision: executorDecision('single', 'repo_execution'), capabilityClass: 'code_edit' as const },
       expected: expected('executor_dispatch', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...researchInputs.map(input => ({
       input,
-      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'research' }, executorDecision: executorDecision('single', 'research_workflow') },
+      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'research' }, executorDecision: executorDecision('single', 'research_workflow'), capabilityClass: 'research' as const },
       expected: expected('durable_task', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...raceInputs.map(input => ({
       input,
-      semantic: { interactionType: 'executor_dispatch' as const, taskBinding: { type: 'new', taskId: null, reason: 'race' }, executorDecision: executorDecision('race', 'research_workflow') },
-      expected: expected('executor_dispatch', 'new', 'none', 'race_executors', 'low', false),
+      semantic: { interactionType: 'executor_dispatch' as const, taskBinding: { type: 'new', taskId: null, reason: 'race' }, executorDecision: executorDecision('race', 'research_workflow'), capabilityClass: 'research' as const },
+      expected: expected('executor_dispatch', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...resumeInputs.map(input => ({
       input,
@@ -195,12 +196,12 @@ function cases(): Case[] {
     })),
     ...followUpInputs.map(input => ({
       input,
-      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'follow up' }, executorDecision: executorDecision() },
+      semantic: { interactionType: 'durable_task' as const, taskBinding: { type: 'new', taskId: null, reason: 'follow up' }, executorDecision: executorDecision(), capabilityClass: 'general' as const },
       expected: expected('durable_task', 'new', 'none', 'single_executor', 'low', false),
     })),
     ...riskInputs.map(input => ({
       input,
-      semantic: { interactionType: 'executor_dispatch' as const, risk: 'medium' as const, taskBinding: { type: 'new', taskId: null, reason: 'external' }, executorDecision: executorDecision() },
+      semantic: { interactionType: 'executor_dispatch' as const, risk: 'medium' as const, taskBinding: { type: 'new', taskId: null, reason: 'external' }, executorDecision: executorDecision(), capabilityClass: 'messaging' as const },
       hints: [riskHint()],
       expected: expected('clarification', 'new', 'none', 'none', 'medium', true),
     })),

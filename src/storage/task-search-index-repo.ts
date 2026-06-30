@@ -1,3 +1,4 @@
+// SQLite FTS adapter for indexing and searching task, snapshot, artifact, and memory-card text.
 import type Database from 'better-sqlite3';
 import type { Task, TaskSnapshot } from '../core/types.js';
 import type { TaskMemoryCardRecord } from './task-memory-card-repo.js';

@@ -1,3 +1,4 @@
+// Ink TUI module for rendering session output, task status, guidance, and the command composer.
 import React, { useEffect, useRef, useState } from 'react';
 import { render, Box, Static, Text, useInput } from 'ink';
 import type { MetaclawSessionDeps, SessionSnapshot } from '../session/metaclaw-session.js';

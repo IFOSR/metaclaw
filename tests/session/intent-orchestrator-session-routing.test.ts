@@ -4,10 +4,10 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import { MetaclawSession } from '../../src/session/metaclaw-session.js';
 import type { Config } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
@@ -62,6 +62,7 @@ function decision(overrides: Partial<IntentDecisionV2> = {}): IntentDecisionV2 {
       requiresVerification: false,
       canModifyFiles: true,
       requiresExternalGateway: false,
+      capabilityClass: 'code_edit',
     },
     hints: [],
     ...overrides,
@@ -159,6 +160,7 @@ describe('MetaclawSession IntentOrchestrator integration', () => {
           requiresVerification: false,
           canModifyFiles: false,
           requiresExternalGateway: false,
+          capabilityClass: 'conversation',
         },
       })),
     };
@@ -218,6 +220,7 @@ describe('MetaclawSession IntentOrchestrator integration', () => {
           requiresVerification: true,
           canModifyFiles: true,
           requiresExternalGateway: false,
+          capabilityClass: 'code_edit',
           primaryIntent: 'repo_execution',
           matchedBoundary: ['repo_execution'],
         },

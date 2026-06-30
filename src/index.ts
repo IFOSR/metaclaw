@@ -1,3 +1,4 @@
+// CLI entrypoint that assembles storage, runtime modules, gateway processes, and the Ink TUI.
 import { resolve } from 'path';
 import { mkdirSync, existsSync } from 'fs';
 import { createDatabase } from './storage/database.js';
@@ -9,13 +10,13 @@ import { TaskSearchIndexRepo } from './storage/task-search-index-repo.js';
 import { TaskRelationRepo } from './storage/task-relation-repo.js';
 import { TaskMemoryEmbeddingRepo } from './storage/task-memory-embedding-repo.js';
 import { RecallFeedbackRepo } from './storage/recall-feedback-repo.js';
-import { HybridMemoryRecaller } from './core/hybrid-memory-recaller.js';
-import { HybridTaskRetriever } from './core/hybrid-task-retriever.js';
-import { TaskEngine } from './core/task-engine.js';
-import { MemoryEngine } from './core/memory-engine.js';
-import { OrchestrationEngine } from './core/orchestration.js';
-import { createDefaultExecutor } from './core/execution-runtime.js';
-import { ContextRecaller } from './core/context-recaller.js';
+import { HybridMemoryRecaller } from './memory/hybrid-memory-recaller.js';
+import { HybridTaskRetriever } from './task/hybrid-task-retriever.js';
+import { TaskEngine } from './task/task-engine.js';
+import { MemoryEngine } from './memory/memory-engine.js';
+import { OrchestrationEngine } from './guidance/orchestration.js';
+import { createDefaultExecutor } from './execution/execution-runtime.js';
+import { ContextRecaller } from './memory/context-recaller.js';
 import { LlmBridge } from './core/llm-bridge.js';
 import { loadConfig, migrateLegacyFeishuConfigFileToGateway } from './utils/config.js';
 import { resolveMetaclawDir } from './utils/paths.js';

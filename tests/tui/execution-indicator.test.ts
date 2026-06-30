@@ -7,10 +7,10 @@ import { runMigrations } from '../../src/storage/migrations.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { PreferenceRepo } from '../../src/storage/preference-repo.js';
 import { ObservationRepo } from '../../src/storage/observation-repo.js';
-import { TaskEngine } from '../../src/core/task-engine.js';
-import { MemoryEngine } from '../../src/core/memory-engine.js';
-import { OrchestrationEngine } from '../../src/core/orchestration.js';
-import { ContextRecaller } from '../../src/core/context-recaller.js';
+import { TaskEngine } from '../../src/task/task-engine.js';
+import { MemoryEngine } from '../../src/memory/memory-engine.js';
+import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
+import { ContextRecaller } from '../../src/memory/context-recaller.js';
 import type { Config, ExecutorResult } from '../../src/core/types.js';
 import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 import type { LlmBridge } from '../../src/core/llm-bridge.js';
@@ -57,6 +57,17 @@ function createConfig(): Config {
 
 function flushUpdates() {
   return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+async function waitForFrame(app: ReturnType<typeof render>, expected: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const frame = app.lastFrame();
+    if (frame?.includes(expected)) {
+      return frame;
+    }
+    await flushUpdates();
+  }
+  return app.lastFrame();
 }
 
 function createDeferredResult() {
@@ -197,10 +208,10 @@ describe('App execution indicator', () => {
       })
     );
 
-    await flushUpdates();
+    const frame = await waitForFrame(app, '当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
 
-    expect(app.lastFrame()).toContain('当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
-    expect(app.lastFrame()).toContain('最近事件 0');
+    expect(frame).toContain('当前执行 0 | 待执行 0 | 已挂起 1 | 阻塞 0');
+    expect(frame).toContain('最近事件 0');
 
     app.unmount();
     app.cleanup();

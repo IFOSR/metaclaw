@@ -79,6 +79,7 @@ function semanticDecision(overrides: Partial<SemanticIntentDecision> = {}): Sema
       matchedBoundary: ['research'],
       rejected: [],
     },
+    capabilityClass: 'research',
     fallback: false,
     ...overrides,
   };
@@ -277,19 +278,19 @@ describe('IntentOrchestrator', () => {
     expect(decision.clarificationQuestion).toContain('确认');
   });
 
-  it('maps race executor action to race execution mode', async () => {
+  it('records candidate executors from semantic decision in execution.candidateExecutors', async () => {
     const orchestrator = new IntentOrchestrator({
       semanticRouter: {
         decide: vi.fn().mockResolvedValue(semanticDecision({
           executorDecision: {
             selectedExecutor: 'pi-agent',
-            action: 'race_executors',
+            action: 'auto_dispatch',
             confidence: 0.8,
             candidates: [
               { executorName: 'pi-agent', score: 0.8, reason: 'research', primaryIntent: 'research_workflow', matchedBoundary: ['research'] },
               { executorName: 'codex-cli', score: 0.62, reason: 'fallback', primaryIntent: 'research_workflow', matchedBoundary: ['research'] },
             ],
-            reason: '需要竞速',
+            reason: '需要研究执行器',
             primaryIntent: 'research_workflow',
             matchedBoundary: ['research'],
             rejected: [],
@@ -301,7 +302,7 @@ describe('IntentOrchestrator', () => {
     const decision = await orchestrator.decide(input());
 
     expect(decision.execution).toMatchObject({
-      mode: 'race_executors',
+      mode: 'single_executor',
       complexity: 'moderate',
       selectedExecutor: 'pi-agent',
       candidateExecutors: ['pi-agent', 'codex-cli'],
