@@ -82,7 +82,9 @@ afterEach(() => {
 });
 
 describe('App auto-resume after preemption', () => {
-  it('resumes the preempted parked task before a later normal queued task', async () => {
+  // 暂时跳过：单活跃任务门禁（ADR-0011）当前禁用多任务抢占/排队/自动恢复。
+  // 待多任务调度重新启用后取消 skip 并按需修正。
+  it.skip('resumes the preempted parked task before a later normal queued task', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');

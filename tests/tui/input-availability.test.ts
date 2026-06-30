@@ -526,7 +526,7 @@ describe('App input availability', () => {
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('single active task gate');
+    expect(app.lastFrame()).toContain('单活跃任务限制');
     expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(0);
 
     firstDeferred.resolve({
@@ -677,7 +677,7 @@ describe('App input availability', () => {
 
     await typeAndSubmit('紧急优先处理这个任务');
 
-    expect(app.lastFrame()).toContain('single active task gate');
+    expect(app.lastFrame()).toContain('单活跃任务限制');
     expect(app.lastFrame()).toContain(`#${runningTaskId}`);
     expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(0);
 

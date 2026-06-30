@@ -155,7 +155,9 @@ describe('App guidance blocks', () => {
     app.cleanup();
   });
 
-  it('shows a completion guidance block that points to the next queued task', async () => {
+  // 暂时跳过：单活跃任务门禁（ADR-0011）当前禁用多任务排队，无法构造"下一个排队任务"。
+  // 待多任务调度重新启用后取消 skip 并按需修正。
+  it.skip('shows a completion guidance block that points to the next queued task', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');

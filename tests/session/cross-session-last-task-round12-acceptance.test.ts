@@ -175,7 +175,9 @@ describe('cross-session last-task continuation', () => {
     expect(followUpInput.executionContextBundle.mode).toBe('follow-up');
   });
 
-  it('allows the user to choose resuming the most recent unfinished task instead of the last completed task', async () => {
+  // 暂时跳过：单活跃任务门禁（ADR-0011）当前禁用多任务并存，无法构造"在已完成任务之外另有未完成任务可选择恢复"的场景。
+  // 待多任务调度重新启用后取消 skip 并按需修正。
+  it.skip('allows the user to choose resuming the most recent unfinished task instead of the last completed task', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');

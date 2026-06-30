@@ -47,14 +47,16 @@ now. This is a scope decision, not a discovery of a bug.
   disabled.** The single active task may still contain multiple work units on
   different executors (see CONTEXT.md "Single Active Task") — the restriction is
   on *top-level* task intake, not on intra-task parallelism.
-- The following pre-existing acceptance tests encode the *old* multi-task
-  behavior and are now **obsolete**; they must be rewritten or removed to match
-  this decision (tracked in `ISSUES.md`):
-  - `tests/tui/auto-resume-preempted.test.ts`
-  - `tests/tui/guidance-blocks.test.ts`
-  - `tests/tui/guidance-panel.test.ts`
-  - `tests/tui/memory-resume-acceptance.test.ts`
-  - `tests/session/cross-session-last-task-round12-acceptance.test.ts`
+- The following pre-existing acceptance cases encode the *old* multi-task
+  behavior (queue / preempt / multi-task resume). They are **kept but
+  `it.skip`-ped**, not deleted, because multi-task scheduling is expected to
+  return — at which point the gate is relaxed and these cases are un-skipped and
+  fixed as needed (tracked in `ISSUES.md`):
+  - `tests/tui/auto-resume-preempted.test.ts` — "resumes the preempted parked task before a later normal queued task"
+  - `tests/tui/guidance-blocks.test.ts` — "shows a completion guidance block that points to the next queued task"
+  - `tests/tui/guidance-panel.test.ts` — "updates the guidance panel after task completion points to the next queued task"
+  - `tests/tui/memory-resume-acceptance.test.ts` — "keeps task-local memory ahead of global memory when a parked task resumes after preemption"
+  - `tests/session/cross-session-last-task-round12-acceptance.test.ts` — "allows the user to choose resuming the most recent unfinished task..."
 - This decision is **reversible**: when multi-task scheduling is reprioritized,
   relax the gate (e.g. allow scheduler-internal resume/preempt paths to bypass
   it) rather than deleting it.

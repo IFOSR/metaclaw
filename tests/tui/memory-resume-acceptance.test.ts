@@ -87,7 +87,9 @@ afterEach(() => {
 });
 
 describe('Round 1 memory resume acceptance', () => {
-  it('keeps task-local memory ahead of global memory when a parked task resumes after preemption', async () => {
+  // 暂时跳过：单活跃任务门禁（ADR-0011）当前禁用多任务抢占/恢复，无法构造抢占场景。
+  // 待多任务调度重新启用后取消 skip 并按需修正。
+  it.skip('keeps task-local memory ahead of global memory when a parked task resumes after preemption', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
