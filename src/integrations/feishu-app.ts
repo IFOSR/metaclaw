@@ -2146,7 +2146,7 @@ async function waitForFeishuReplyOutputLines(
         submitSettled = true;
         inspect(session.getSnapshot().output.slice(before));
         if (!resolved && !targetTaskId) {
-          finish(session.getSnapshot().output.slice(before));
+          finishAfterTerminalSettle();
         }
       })
       .catch(() => {

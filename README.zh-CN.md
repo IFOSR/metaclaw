@@ -26,58 +26,93 @@ MetaClaw 是一个本地优先的 AI Task OS。它把自然语言需求变成可
 
 ## 核心架构
 
-MetaClaw 是面向任务的系统，而不是纯 session agent。普通 agent session 主要回答当前这一轮。MetaClaw 会判断用户输入应该保持为轻量对话、控制已有任务，还是变成一个可以调度、阻塞、恢复、检索、验收和审计的持久任务。
+MetaClaw 是面向任务的系统，而不是纯 session agent。普通 agent session 主要回答当前这一轮。MetaClaw 会判断用户输入应该保持为轻量对话、控制已有任务，还是变成一个可以调度、阻塞、恢复、检索、验收、交付和审计的持久任务。
 
-```text
-User Input
-    │
-    ▼
-Input Boundary
-    ├── conversation
-    ├── task_control
-    └── durable_task
-          │
-          ▼
-Task Runtime
-    ├── TaskEngine: 任务状态机
-    ├── SchedulerEngine: 队列、优先级、抢占、恢复
-    ├── OrchestrationEngine: 盘面、建议、blocked/parked 巡检
-    ├── MemoryEngine: 偏好、任务记忆、召回审查
-    └── MetaclawSession: TUI/script/gateway runtime 协调层
-          │
-          ▼
-Task Retrieval Layer
-    ├── TaskSearchIndexRepo: SQLite FTS 任务检索索引
-    └── HybridTaskRetriever: 显式引用、当前焦点、全文检索、关系、最近任务、反馈、语义 rerank
-          │
-          ▼
-Execution Strategy Layer
-    ├── IntentOrchestrator: conversation、task control、durable work、executor dispatch
-    ├── ExecutionPolicyPlanner: primary executor、candidates、risk、verification、fallback
-    ├── ExecutionStrategyPlanner: 单 executor 或多 executor work units
-    └── Legacy route event adapter: 为旧路由消费者保留的兼容性记录
-          │
-          ▼
-Agentic Verification Layer
-    ├── MultiExecutorOrchestrator: 串行/并行 work-unit fan-out
-    ├── ExecutionAggregator: 汇总、验收、冲突检查、产物收集
-    └── AgenticLoopController: 未达标部分反馈重试，直到通过或 blocked
-          │
-          ▼
-Executor And Delivery Layer
-    ├── Executor adapters: Codex、Pi、Hermes、自定义 CLI
-    └── Backend delivery: 飞书、文件产物、Markdown 预览
+```mermaid
+flowchart LR
+  User[用户] --> Surfaces[客户端入口<br/>TUI、CLI、Gateway、飞书]
+  Surfaces --> Session[MetaclawSession<br/>统一 runtime 协调层]
+  Session --> Intent[意图层<br/>理解用户请求]
+  Intent --> Choice{这是什么请求？}
+  Choice -->|现在回答| Conversation[Direct reply<br/>不创建持久任务]
+  Choice -->|控制任务| Control[Task control<br/>状态、恢复、清理、解除阻塞]
+  Choice -->|执行工作| Durable[Durable task<br/>状态、队列、产物]
+
+  Conversation --> Context[上下文和记忆<br/>最近会话优先]
+  Control --> TaskOS[Task OS<br/>TaskEngine 和 Scheduler]
+  Durable --> TaskOS
+  Context --> Executors[Executor runtime<br/>Codex、Pi、Hermes、自定义 CLI]
+  TaskOS --> Executors
+  Executors --> Verify[验收<br/>测试、证据、产物]
+  Verify --> Delivery[交付和 UI<br/>TUI 进度、飞书、文件、预览链接]
+  Delivery --> User
+
+  Session <--> Store[(本地 SQLite<br/>任务、记忆、路由、反馈)]
+  Context <--> Store
+  TaskOS <--> Store
 ```
+
+主干逻辑很简单：所有输入进入同一个 runtime，先做语义裁决，然后走三条路径之一。短回答保持轻量；任务控制只改变已有任务状态；真正要执行的工作变成持久任务，进入调度、恢复、验收和交付链路。
+
+### 普通问答路径
+
+```mermaid
+flowchart LR
+  Input[用户提问] --> Intent[IntentOrchestrator]
+  Intent --> Direct[direct_reply]
+  Direct --> Recall[ContextRecaller<br/>最近会话上下文优先]
+  Recall --> Executor[默认 executor<br/>通常是 codex-cli]
+  Executor --> Answer[最终回答]
+  Answer --> Persist[记录交互]
+  Answer --> UI[TUI 或飞书]
+```
+
+这条路径仍然是语义驱动。用户说“继续”或“你刚才回答了一半”，MetaClaw 会优先从最近会话上下文理解主题，而不是靠硬编码关键词，也不会让无关旧任务覆盖当前问题。
+
+### 持久任务路径
+
+```mermaid
+flowchart LR
+  Input[用户要求执行工作] --> Intent[IntentOrchestrator]
+  Intent --> Task[TaskRuntimeService<br/>创建或绑定任务]
+  Task --> Scheduler[SchedulerEngine<br/>队列、优先级、抢占]
+  Scheduler --> Context[MemoryContextService<br/>恢复包、偏好、材料]
+  Context --> Route[ExecutorRoutingCoordinator<br/>选择 executor]
+  Route --> Run[ExecutionRuntime<br/>运行 adapter]
+  Run --> Verify[VerificationAndDeliveryService]
+  Verify --> Done{是否通过？}
+  Done -->|是| Result[完成并记录产物]
+  Done -->|否| Blocked[阻塞并给出恢复提示]
+```
+
+这就是 Task OS 路径。任务状态、恢复上下文、调度、产物捕获和验收都在这里发生。
+
+### 飞书和进度展示路径
+
+```mermaid
+flowchart LR
+  Feishu[飞书事件] --> Handler[飞书消息处理器]
+  Handler --> Session[MetaclawSession]
+  Session --> Progress[进度格式化<br/>MetaClaw 里程碑 vs Executor 里程碑]
+  Progress --> Cards[飞书过程卡片]
+  Session --> Final[最终答案 settle]
+  Final --> Reply[最终回复卡片或富文本 fallback]
+  Reply --> Files[产物上传和 Markdown 预览链接]
+```
+
+飞书进度会刻意区分 MetaClaw 里程碑和具体 executor 里程碑。用户能看到当前是 MetaClaw 在路由、召回上下文、调度，还是具体 executor 正在执行。
 
 conversation / task 的边界很重要：
 
-- Conversation：即时回答，不创建持久任务。适合解释、澄清、状态问答。
+- Conversation：即时回答，不创建持久任务。普通问答仍会走语义上下文召回。用户说“继续”或“刚才回答了一半”时，MetaClaw 会把最近会话上下文作为最强证据，再考虑更旧的相似历史。
 - Task control：查看或改变已有任务状态。适合“当前在跑什么”“继续那个任务”“清空阻塞任务”。
 - Durable task：创建或继续需要执行、持久化、产物、恢复、调度或后续检索的工作。
 
+当前 direct reply 路径是显式的：MetaClaw 先展示意图理解，再召回最近对话上下文，然后把回答交给选中的 executor。飞书和 TUI 会区分 `MetaClaw` 里程碑和具体 `Executor: <name>` 里程碑，让用户知道当前是路由器、调度器还是执行器在工作。飞书最终回复会等待 direct reply 输出 settle 后再发送，避免只有过程卡片而没有最终答案。
+
 [MetaClaw Task OS 架构与策略升级方案](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) 中的本轮主线已经进入代码：任务检索索引、混合任务召回、执行策略规划、多执行器 work units、汇总验收和 Agentic Loop 核心层都已实现并有针对性测试覆盖。Executor Discovery、远程 Registry 和大规模多客户端 Gateway 扩展仍然不是本轮重点。
 
-重要边界：Agentic Loop 已作为核心架构层实现并测试；当前交互式/script session 默认执行路径仍沿用已有 runtime，只有明确接入策略/编排循环的功能路径才会调用它。这样可以在增强复杂任务验收能力的同时，保持现有用户路径稳定。
+重要边界：Agentic Loop 已作为核心架构层实现并测试；当前交互式/script session 默认执行路径仍沿用 session runtime，只有明确接入策略/编排循环的功能路径才会调用它。这样可以在增强复杂任务验收能力的同时，保持现有用户路径稳定。
 
 ## 当前执行器
 

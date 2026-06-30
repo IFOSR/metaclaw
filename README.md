@@ -26,58 +26,93 @@ It is built for teams who need agents to do more than answer the current turn. M
 
 ## Core Architecture
 
-MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, verified, and audited.
+MetaClaw is task-oriented rather than session-only. A normal agent session answers the current turn. MetaClaw decides whether an input should stay as a lightweight conversation, control an existing task, or become durable work that can be scheduled, blocked, resumed, searched, verified, delivered, and audited.
 
-```text
-User Input
-    │
-    ▼
-Input Boundary
-    ├── conversation
-    ├── task_control
-    └── durable_task
-          │
-          ▼
-Task Runtime
-    ├── TaskEngine: task state machine
-    ├── SchedulerEngine: queue, priority, preemption, resume
-    ├── OrchestrationEngine: dashboard, guidance, blocked/parked review
-    ├── MemoryEngine: preferences, task memory, recall review
-    └── MetaclawSession: interactive/script/gateway runtime coordinator
-          │
-          ▼
-Task Retrieval Layer
-    ├── TaskSearchIndexRepo: SQLite FTS task index
-    └── HybridTaskRetriever: explicit, focus, FTS, relation, recent, feedback, semantic rerank
-          │
-          ▼
-Execution Strategy Layer
-    ├── IntentOrchestrator: conversation, task control, durable work, executor dispatch
-    ├── ExecutionPolicyPlanner: primary executor, candidates, risk, verification, fallback
-    ├── ExecutionStrategyPlanner: single executor or multi-executor work units
-    └── Legacy route event adapter: compatibility records for older route consumers
-          │
-          ▼
-Agentic Verification Layer
-    ├── MultiExecutorOrchestrator: sequential/parallel work-unit fan-out
-    ├── ExecutionAggregator: merge, verify, flag conflicts, collect artifacts
-    └── AgenticLoopController: retry failed units until pass or blocked
-          │
-          ▼
-Executor And Delivery Layer
-    ├── Executor adapters: Codex, Pi, Hermes, custom CLI
-    └── Backend delivery: Feishu, artifacts, Markdown preview
+```mermaid
+flowchart LR
+  User[User] --> Surfaces[Client surfaces<br/>TUI, CLI, Gateway, Feishu]
+  Surfaces --> Session[MetaclawSession<br/>single runtime coordinator]
+  Session --> Intent[Intent layer<br/>understand the request]
+  Intent --> Choice{What is this?}
+  Choice -->|answer now| Conversation[Direct reply<br/>no durable task]
+  Choice -->|control task| Control[Task control<br/>status, resume, clear, recover]
+  Choice -->|do work| Durable[Durable task<br/>state, queue, artifacts]
+
+  Conversation --> Context[Context and memory<br/>recent session first]
+  Control --> TaskOS[Task OS<br/>TaskEngine and Scheduler]
+  Durable --> TaskOS
+  Context --> Executors[Executor runtime<br/>Codex, Pi, Hermes, custom CLI]
+  TaskOS --> Executors
+  Executors --> Verify[Verification<br/>tests, evidence, artifacts]
+  Verify --> Delivery[Delivery and UI<br/>TUI progress, Feishu, files, preview links]
+  Delivery --> User
+
+  Session <--> Store[(Local SQLite<br/>tasks, memory, routes, feedback)]
+  Context <--> Store
+  TaskOS <--> Store
 ```
+
+The main idea is simple: every input enters one runtime, gets a semantic decision, then follows one of three paths. Short answers stay light. Task-control requests change existing state. Real work becomes a durable task with scheduling, recovery, verification, and delivery.
+
+### Direct Reply Path
+
+```mermaid
+flowchart LR
+  Input[User asks a question] --> Intent[IntentOrchestrator]
+  Intent --> Direct[direct_reply]
+  Direct --> Recall[ContextRecaller<br/>recent session context first]
+  Recall --> Executor[Default executor<br/>usually codex-cli]
+  Executor --> Answer[Final answer]
+  Answer --> Persist[Record interaction]
+  Answer --> UI[TUI or Feishu]
+```
+
+This path is still semantic. "Continue" or "you stopped halfway" is resolved from recent conversation context first, not from a hard keyword rule and not from unrelated old tasks.
+
+### Durable Task Path
+
+```mermaid
+flowchart LR
+  Input[User asks MetaClaw to do work] --> Intent[IntentOrchestrator]
+  Intent --> Task[TaskRuntimeService<br/>create or bind task]
+  Task --> Scheduler[SchedulerEngine<br/>queue, priority, preemption]
+  Scheduler --> Context[MemoryContextService<br/>resume pack, preferences, materials]
+  Context --> Route[ExecutorRoutingCoordinator<br/>pick executor]
+  Route --> Run[ExecutionRuntime<br/>run adapter]
+  Run --> Verify[VerificationAndDeliveryService]
+  Verify --> Done{Pass?}
+  Done -->|yes| Result[Done with artifacts]
+  Done -->|no| Blocked[Blocked with recovery hint]
+```
+
+This is the Task OS path. It is where task state, resume context, scheduling, artifact capture, and verification matter.
+
+### Feishu And Progress Path
+
+```mermaid
+flowchart LR
+  Feishu[Feishu event] --> Handler[Feishu message handler]
+  Handler --> Session[MetaclawSession]
+  Session --> Progress[Progress formatter<br/>MetaClaw milestones vs Executor milestones]
+  Progress --> Cards[Feishu progress cards]
+  Session --> Final[Final answer settle]
+  Final --> Reply[Final reply cards or post fallback]
+  Reply --> Files[Artifact upload and Markdown preview links]
+```
+
+Feishu progress is intentionally split into MetaClaw milestones and concrete executor milestones. Users can see when MetaClaw is routing, recalling context, scheduling, or waiting for the actual executor.
 
 The conversation/task boundary matters:
 
-- Conversation: answer now, do not create durable state. Good for explanations, clarification, and status questions.
+- Conversation: answer now, do not create durable state. Conversation turns still use semantic context recall. When a user says "continue" or "you stopped halfway", MetaClaw treats the recent session context as the strongest evidence before considering older similar history.
 - Task control: inspect or change existing task state. Good for "what is running?", "resume that task", or "clear blocked tasks".
 - Durable task: create or continue work that needs execution, persistence, artifacts, recovery, scheduling, or later retrieval.
 
-The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is now reflected in the codebase: task search indexing, hybrid task retrieval, ExecutionPolicy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
+The current direct-reply path is explicit: MetaClaw first shows intent understanding, then recalls recent conversation context, then sends the answer to the selected executor. Feishu and TUI output separate `MetaClaw` milestones from concrete `Executor: <name>` milestones so users can see whether the router, the scheduler, or the executor is doing the work. Feishu final replies wait for direct-reply output to settle before sending the answer, so a progress card does not replace the final result.
 
-Important runtime boundary: the Agentic Loop is implemented as a core architecture layer and tested directly. The current interactive/script session path still uses the existing session runtime unless a feature path explicitly calls the strategy/orchestration loop.
+The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is reflected in the codebase: task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
+
+Important runtime boundary: the Agentic Loop is implemented as a core architecture layer and tested directly. The current interactive/script session path uses the session runtime unless a feature path explicitly calls the strategy/orchestration loop.
 
 ## Current Executors
 

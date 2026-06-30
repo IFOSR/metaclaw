@@ -365,4 +365,58 @@ describe('session extraction services', () => {
       '→ Executor: codex-cli 正在基于当前问题生成回答',
     );
   });
+
+  it('injects recent context for half-answer continuation replies so the executor can resolve the semantic topic', async () => {
+    const recentContext = [{
+      taskId: null,
+      sessionId: 'session_1',
+      userInput: 'MetaClaw 调度任务时为什么要明确展示 Executor？',
+      systemOutput: '刚才解释到：第一，用户需要知道当前由哪个 Executor 处理；第二，里程碑要区分 MetaClaw 和 Executor。',
+      createdAt: '2026-06-24T00:00:00.000Z',
+      source: 'session' as const,
+    }];
+    const memoryContextService = {
+      recallConversationContext: vi.fn().mockResolvedValue(recentContext),
+    };
+    const persistenceService = {
+      recordInteraction: vi.fn(),
+    };
+    const appendOutput = vi.fn();
+    const executor: ExecutorAdapter = {
+      name: 'codex-cli',
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        output: '继续刚才的问题：第三，展示上下文召回依据可以降低用户困惑。',
+        exitCode: 0,
+        durationMs: 10,
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      abort: vi.fn(),
+    };
+    const service = new ConversationRuntimeService({
+      executor,
+      memoryContextService,
+      persistenceService,
+      appendOutput,
+    });
+
+    await service.run({
+      sessionId: 'session_1',
+      userInput: '这个问题你怎么回答了一半？继续完成。',
+    });
+
+    expect(memoryContextService.recallConversationContext).toHaveBeenCalledWith({
+      sessionId: 'session_1',
+      userInput: '这个问题你怎么回答了一半？继续完成。',
+    });
+    expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({
+      conversationHistory: recentContext,
+    }));
+    expect(appendOutput).toHaveBeenCalledWith(
+      '→ MetaClaw：已召回 1 条相关会话上下文',
+      '→ MetaClaw：会把召回上下文注入给 Executor，保持连续问答衔接',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题和会话上下文生成回答',
+    );
+  });
 });
