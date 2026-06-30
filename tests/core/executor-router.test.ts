@@ -348,7 +348,7 @@ describe('ExecutorRouter', () => {
     }
   });
 
-  it('does not let historical success override a clear ownership mismatch', () => {
+  it('does not include historical success in fallback candidate scoring', () => {
     const profiles = boundaryProfiles().map(profile => profile.name === 'pi-agent'
       ? { ...profile, historicalSuccess: 1 }
       : profile);
@@ -358,7 +358,28 @@ describe('ExecutorRouter', () => {
     });
 
     expect(decision.selectedExecutor).toBe('codex-cli');
+    expect(decision.candidates.map(candidate => candidate.reason).join('\n')).not.toContain('historical=');
     expect(decision.rejected.find(candidate => candidate.executorName === 'pi-agent')?.reason)
       .toContain('repo mutation');
+  });
+
+  it('keeps fallback scores stable when only historical success changes', () => {
+    const lowHistoryProfiles = boundaryProfiles().map(profile => profile.name === 'pi-agent'
+      ? { ...profile, historicalSuccess: 0 }
+      : profile);
+    const highHistoryProfiles = boundaryProfiles().map(profile => profile.name === 'pi-agent'
+      ? { ...profile, historicalSuccess: 1 }
+      : profile);
+    const lowHistoryDecision = new ExecutorRouter(lowHistoryProfiles).route({
+      userInput: 'fix this TypeScript bug and run tests',
+      defaultExecutorName: 'codex-cli',
+    });
+    const highHistoryDecision = new ExecutorRouter(highHistoryProfiles).route({
+      userInput: 'fix this TypeScript bug and run tests',
+      defaultExecutorName: 'codex-cli',
+    });
+
+    expect(highHistoryDecision.candidates.find(candidate => candidate.executorName === 'pi-agent')?.score)
+      .toBe(lowHistoryDecision.candidates.find(candidate => candidate.executorName === 'pi-agent')?.score);
   });
 });

@@ -99,6 +99,65 @@ describe('SemanticIntentRouter rule hint arbitration', () => {
     expect(decision.taskBinding.type).toBe('new');
   });
 
+  it('derives primary intent from capability class when the model emits a CapabilityClass in primaryIntent', async () => {
+    const { router } = queryRouter({
+      interactionType: 'executor_dispatch',
+      confidence: 0.9,
+      shouldAskBeforeActing: false,
+      ambiguity: [],
+      risk: 'low',
+      capabilityClass: 'research',
+      reason: 'semantic model chose research work',
+      clarificationQuestion: null,
+      taskBinding: { type: 'new', taskId: null, reason: 'new research work' },
+      taskControl: null,
+      executorDecision: {
+        selectedExecutor: 'codex-cli',
+        action: 'auto_dispatch',
+        confidence: 0.9,
+        primaryIntent: 'code_edit',
+        matchedBoundary: ['research'],
+        reason: 'model used CapabilityClass vocabulary in primaryIntent',
+        candidates: [],
+        rejected: [],
+      },
+    });
+
+    const decision = await router.decide('research this topic', [], []);
+
+    expect(decision.capabilityClass).toBe('research');
+    expect(decision.executorDecision?.primaryIntent).toBe('research_workflow');
+  });
+
+  it('does not map legacy technical_reasoning to code_edit capability', async () => {
+    const { router } = queryRouter({
+      interactionType: 'executor_dispatch',
+      confidence: 0.9,
+      shouldAskBeforeActing: false,
+      ambiguity: [],
+      risk: 'low',
+      reason: 'read-only code reasoning',
+      clarificationQuestion: null,
+      taskBinding: { type: 'new', taskId: null, reason: 'analysis work' },
+      taskControl: null,
+      executorDecision: {
+        selectedExecutor: 'codex-cli',
+        action: 'auto_dispatch',
+        confidence: 0.9,
+        primaryIntent: 'technical_reasoning',
+        matchedBoundary: ['reasoning'],
+        reason: 'read-only analysis',
+        candidates: [],
+        rejected: [],
+      },
+    });
+
+    const decision = await router.decide('analyze this code without editing files', [], []);
+
+    expect(decision.capabilityClass).toBe('general');
+    expect(decision.executorDecision?.primaryIntent).toBe('technical_reasoning');
+  });
+
   it('preserves explicit parser hints as evidence when the semantic model chooses task control', async () => {
     const { router } = queryRouter({
       interactionType: 'task_control',

@@ -10,6 +10,10 @@ import type {
   IntentDecision,
   TaskRouteIntent,
 } from '../core/executor-router.js';
+import {
+  capabilityClassFromTaskRouteIntent,
+  taskRouteIntentFromCapabilityClass,
+} from '../core/executor-router.js';
 import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
 import { ExecutionStrategyPlanner, type AcceptanceCriterion } from '../core/execution-strategy-planner.js';
 import type { Task } from '../core/types.js';
@@ -40,24 +44,6 @@ function searchableProfileText(profile: ExecutorProfile): string {
     ...profile.strengths,
     ...(profile.primaryUseCases ?? []),
   ].join('\n').toLowerCase();
-}
-
-function capabilityClassToLegacyIntent(capabilityClass: CapabilityClass): TaskRouteIntent {
-  if (capabilityClass === 'code_edit') return 'repo_execution';
-  if (capabilityClass === 'research') return 'research_workflow';
-  if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
-    return 'memory_agent_ops';
-  }
-  if (capabilityClass === 'conversation') return 'conversation_or_control';
-  return 'general';
-}
-
-function capabilityClassFromLegacyIntent(value: TaskRouteIntent | undefined): CapabilityClass {
-  if (value === 'repo_execution' || value === 'technical_reasoning') return 'code_edit';
-  if (value === 'research_workflow') return 'research';
-  if (value === 'memory_agent_ops') return 'memory_ops';
-  if (value === 'conversation_or_control') return 'conversation';
-  return 'general';
 }
 
 function profileMatchesCapability(profile: ExecutorProfile, capabilityClass: CapabilityClass): boolean {
@@ -122,7 +108,7 @@ function selectPrimary(input: ExecutionPolicyPlanningInput, candidates: string[]
 
 function getCapabilityClass(input: ExecutionPolicyPlanningInput): CapabilityClass {
   return input.intentDecision?.execution.capabilityClass
-    ?? capabilityClassFromLegacyIntent(input.semanticDecision?.route.capabilityClass)
+    ?? capabilityClassFromTaskRouteIntent(input.semanticDecision?.route.routeIntent)
     ?? 'general';
 }
 
@@ -200,7 +186,7 @@ function buildRouteDecision(input: {
 }
 
 export function buildRouteDecisionFromPolicy(policy: ExecutionPolicy): ExecutorRouteDecision {
-  const primaryIntent = capabilityClassToLegacyIntent(policy.capabilityClasses[0] ?? 'general');
+  const primaryIntent = taskRouteIntentFromCapabilityClass(policy.capabilityClasses[0] ?? 'general');
   return buildRouteDecision({
     primaryExecutor: policy.primaryExecutor,
     candidates: policy.candidateExecutors,

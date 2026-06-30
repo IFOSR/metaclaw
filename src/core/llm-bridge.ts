@@ -3,9 +3,8 @@ import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import type { MemoryApplicabilityAction, TaskStatus } from './types.js';
 import type { NaturalLanguageRoute, NaturalLanguageRouteAction, TaskStateOwnershipResult, TaskStatusQueryScope } from './task-routing.js';
+import { normalizeTaskRouteIntent } from './executor-router.js';
 import type { ExecutorProfile, IntentDecision, IntentDecisionKind, IntentRouteAction, TaskRouteIntent } from './executor-router.js';
-import type { CapabilityClass } from './capability-class.js';
-import { isCapabilityClass } from './capability-class.js';
 import { buildCodexNonInteractiveArgs } from '../executor/codex-args.js';
 
 export interface TaskSummary {
@@ -716,7 +715,7 @@ export class LlmBridge {
           target: typeof route.target === 'string' ? route.target : 'metaclaw',
           action: this.parseIntentRouteAction(route.action),
           primaryIntent: this.parseTaskRouteIntent(route.primaryIntent),
-          capabilityClass: this.capabilityClassToLegacyIntent(this.parseCapabilityClass(route.capabilityClass)),
+          routeIntent: this.parseTaskRouteIntent(route.capabilityClass),
           requiredCapabilities: Array.isArray(route.requiredCapabilities)
             ? route.requiredCapabilities.filter((item: unknown): item is string => typeof item === 'string')
             : [],
@@ -752,7 +751,7 @@ export class LlmBridge {
         target: defaultExecutorName === 'metaclaw' ? 'metaclaw' : defaultExecutorName,
         action: 'ask_clarification',
         primaryIntent: 'conversation_or_control',
-        capabilityClass: 'conversation_or_control',
+        routeIntent: 'conversation_or_control',
         requiredCapabilities: [],
         matchedBoundary: [],
         riskLevel: 'low',
@@ -782,35 +781,7 @@ export class LlmBridge {
   }
 
   private parseTaskRouteIntent(value: unknown): TaskRouteIntent {
-    return value === 'repo_execution'
-      || value === 'technical_reasoning'
-      || value === 'research_workflow'
-      || value === 'memory_agent_ops'
-      || value === 'conversation_or_control'
-      || value === 'general'
-      ? value
-      : 'general';
-  }
-
-  private parseCapabilityClass(value: unknown): CapabilityClass {
-    if (isCapabilityClass(value)) {
-      return value;
-    }
-    if (value === 'repo_execution') return 'code_edit';
-    if (value === 'research_workflow') return 'research';
-    if (value === 'memory_agent_ops') return 'memory_ops';
-    if (value === 'conversation_or_control') return 'conversation';
-    return 'general';
-  }
-
-  private capabilityClassToLegacyIntent(capabilityClass: CapabilityClass): TaskRouteIntent {
-    if (capabilityClass === 'code_edit') return 'repo_execution';
-    if (capabilityClass === 'research') return 'research_workflow';
-    if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
-      return 'memory_agent_ops';
-    }
-    if (capabilityClass === 'conversation') return 'conversation_or_control';
-    return 'general';
+    return normalizeTaskRouteIntent(value);
   }
 
   private parseExecutorRiskLevel(value: unknown): 'low' | 'medium' | 'high' {

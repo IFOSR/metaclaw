@@ -6,6 +6,9 @@ import { isCapabilityClass } from './capability-class.js';
 import {
   ExecutorRouter,
   buildFallbackIntentDecision,
+  capabilityClassFromTaskRouteIntent,
+  isTaskRouteIntent,
+  taskRouteIntentFromCapabilityClass,
   type IntentDecision,
   type ExecutorProfile,
   type ExecutorRouteAction,
@@ -135,25 +138,6 @@ function conservativeFallback(reason: string): SemanticIntentDecision {
   };
 }
 
-function capabilityClassToLegacyIntent(capabilityClass: CapabilityClass): TaskRouteIntent {
-  if (capabilityClass === 'code_edit') return 'repo_execution';
-  if (capabilityClass === 'research') return 'research_workflow';
-  if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
-    return 'memory_agent_ops';
-  }
-  if (capabilityClass === 'conversation') return 'conversation_or_control';
-  return 'general';
-}
-
-function capabilityClassFromLegacyIntent(value: unknown): CapabilityClass | null {
-  if (value === 'repo_execution') return 'code_edit';
-  if (value === 'research_workflow') return 'research';
-  if (value === 'memory_agent_ops') return 'memory_ops';
-  if (value === 'conversation_or_control') return 'conversation';
-  if (value === 'general') return 'general';
-  return null;
-}
-
 export class SemanticIntentRouter {
   constructor(
     private llmBridge: LlmBridge,
@@ -249,7 +233,7 @@ export class SemanticIntentRouter {
           : null,
         executorDecision,
         capabilityClass: executorDecision
-          ? capabilityClassFromLegacyIntent(executorDecision.primaryIntent) ?? 'general'
+          ? capabilityClassFromTaskRouteIntent(executorDecision.primaryIntent) ?? 'general'
           : routeDecision.route === 'task_control' ? 'conversation' : 'general',
         fallback: false,
       });
@@ -435,8 +419,8 @@ export class SemanticIntentRouter {
       return buildFallbackIntentDecision({
         target: decision.executorDecision?.selectedExecutor ?? this.options.defaultExecutorName,
         action: decision.executorDecision?.action ?? 'auto_dispatch',
-        primaryIntent: decision.executorDecision?.primaryIntent ?? capabilityClassToLegacyIntent(decision.capabilityClass),
-        capabilityClass: capabilityClassToLegacyIntent(decision.capabilityClass),
+        primaryIntent: decision.executorDecision?.primaryIntent ?? taskRouteIntentFromCapabilityClass(decision.capabilityClass),
+        routeIntent: taskRouteIntentFromCapabilityClass(decision.capabilityClass),
         matchedBoundary: decision.executorDecision?.matchedBoundary ?? [],
         confidence: decision.confidence,
         riskLevel: decision.risk === 'high' ? 'high' : decision.risk === 'medium' ? 'medium' : 'low',
@@ -456,7 +440,7 @@ export class SemanticIntentRouter {
         ? route.action as ExecutorRouteAction
         : decision.executorDecision?.action ?? 'auto_dispatch',
       primaryIntent: this.normalizePrimaryIntent(route.primaryIntent, this.normalizeCapabilityClass(route.capabilityClass, decision.interactionType)),
-      capabilityClass: capabilityClassToLegacyIntent(this.normalizeCapabilityClass(route.capabilityClass, decision.interactionType)),
+      routeIntent: taskRouteIntentFromCapabilityClass(this.normalizeCapabilityClass(route.capabilityClass, decision.interactionType)),
       requiredCapabilities: asStringArray(route.requiredCapabilities),
       matchedBoundary: asStringArray(route.matchedBoundary),
       confidence: clampConfidence(value.confidence || decision.confidence),
@@ -477,7 +461,7 @@ export class SemanticIntentRouter {
     if (isCapabilityClass(value)) {
       return value;
     }
-    const legacy = capabilityClassFromLegacyIntent(value);
+    const legacy = capabilityClassFromTaskRouteIntent(value);
     if (legacy) {
       return legacy;
     }
@@ -488,17 +472,15 @@ export class SemanticIntentRouter {
   }
 
   private normalizePrimaryIntent(value: unknown, capabilityClass: CapabilityClass = 'general'): TaskRouteIntent {
-    if (
-      value === 'repo_execution'
-      || value === 'technical_reasoning'
-      || value === 'research_workflow'
-      || value === 'memory_agent_ops'
-      || value === 'conversation_or_control'
-      || value === 'general'
-    ) {
+    // Only honor `value` when it is already a valid TaskRouteIntent. A raw
+    // CapabilityClass string (e.g. 'code_edit') the LLM may have placed in the
+    // primaryIntent field must NOT be trusted here — it would silently override
+    // the separately-derived capabilityClass param and re-route to a different
+    // executor. Fall back to the capabilityClass param, matching legacy behavior.
+    if (isTaskRouteIntent(value)) {
       return value;
     }
-    return capabilityClassToLegacyIntent(capabilityClass);
+    return taskRouteIntentFromCapabilityClass(capabilityClass);
   }
 
   private normalizeCandidates(raw: unknown, primaryIntent: TaskRouteIntent): ExecutorRouteCandidate[] {

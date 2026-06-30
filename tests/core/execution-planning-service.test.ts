@@ -66,7 +66,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'repo_execution',
-        capabilityClass: 'repo_execution',
+        routeIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation'],
         requiredCapabilities: ['coding'],
         reason: 'repo work',
@@ -137,7 +137,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'pi-agent',
         primaryIntent: 'research_workflow',
-        capabilityClass: 'research_workflow',
+        routeIntent: 'research_workflow',
         matchedBoundary: ['research'],
         requiredCapabilities: ['research'],
         reason: 'research work',
@@ -164,7 +164,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'repo_execution',
-        capabilityClass: 'repo_execution',
+        routeIntent: 'repo_execution',
         matchedBoundary: ['repo_mutation', 'research', 'review'],
         requiredCapabilities: ['coding', 'research', 'review'],
         reason: 'complex work',
@@ -191,7 +191,7 @@ describe('ExecutionPlanningService', () => {
       semanticDecision: buildFallbackIntentDecision({
         target: 'codex-cli',
         primaryIntent: 'general',
-        capabilityClass: 'general',
+        routeIntent: 'general',
         matchedBoundary: ['general'],
         reason: 'ordinary email drafting',
       }),
