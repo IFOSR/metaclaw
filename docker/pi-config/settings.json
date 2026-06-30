@@ -1,0 +1,6 @@
+{
+  "defaultProvider": "anyint",
+  "defaultModel": "gpt-5.4",
+  "quietStartup": true,
+  "defaultProjectTrust": "always"
+}

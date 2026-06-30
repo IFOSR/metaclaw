@@ -459,7 +459,7 @@ describe('App input availability', () => {
     app.cleanup();
   });
 
-  it('keeps the prompt usable and queues a new task while another task is running', async () => {
+  it('keeps the prompt usable and rejects a new top-level task while another task is running', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -526,7 +526,8 @@ describe('App input availability', () => {
     await (inputCapture.handler?.('', { return: true }) ?? Promise.resolve());
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('已进入待执行队列');
+    expect(app.lastFrame()).toContain('single active task gate');
+    expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(0);
 
     firstDeferred.resolve({
       success: true,
@@ -618,7 +619,7 @@ describe('App input availability', () => {
     app.cleanup();
   });
 
-  it('shows which running task was preempted and why when an urgent task arrives', async () => {
+  it('rejects urgent top-level task intake instead of preempting through the user entrypoint', async () => {
     const db = createTestDb();
     const taskRepo = new TaskRepo(db);
     const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-os-tests');
@@ -676,8 +677,9 @@ describe('App input availability', () => {
 
     await typeAndSubmit('紧急优先处理这个任务');
 
-    expect(app.lastFrame()).toContain(`抢占当前任务 #${runningTaskId}`);
-    expect(app.lastFrame()).toContain('原因：用户显式要求优先处理');
+    expect(app.lastFrame()).toContain('single active task gate');
+    expect(app.lastFrame()).toContain(`#${runningTaskId}`);
+    expect(taskEngine['taskRepo'].findByStatus('ready')).toHaveLength(0);
 
     firstDeferred.resolve({
       success: true,

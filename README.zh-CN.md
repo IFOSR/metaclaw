@@ -813,7 +813,7 @@ metaclaw --script /tmp/metaclaw-flow.txt
 
 `--script` 会逐行执行输入，空行和以 `#` 开头的行会被忽略。
 
-`npm run smoke:metaclaw` 是功能交付前必须优先跑的真实端到端烟测。它会构建 MetaClaw，用隔离的临时 `METACLAW_HOME` 和工作目录启动 `node dist/index.js --script`，提交一个真实任务，让配置的 executor 创建文件产物，并检查产物路径和文件内容。新的 runtime 功能应该通过这条烟测路径；如果不能跑，必须明确说明失败或跳过原因。
+`npm run smoke:metaclaw` 是功能交付前必须优先跑的真实端到端烟测。它会构建 MetaClaw，用隔离的临时 `METACLAW_HOME` 和工作目录启动 `node dist/index.js --script`，提交一个真实任务，让配置的 executor 创建文件产物，并检查产物路径和文件内容。默认 smoke 配置使用 `codex`；要切换执行器和场景，可以运行 `npm run smoke:metaclaw -- --executor pi --scenario python-hello`，或设置 `METACLAW_SMOKE_EXECUTOR=pi METACLAW_SMOKE_SCENARIO=python-hello npm run smoke:metaclaw`。新的 runtime 功能应该通过这条烟测路径；如果不能跑，必须明确说明失败或跳过原因。
 
 针对性测试：
 

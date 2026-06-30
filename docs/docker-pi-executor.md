@@ -27,7 +27,7 @@ cp docker/pi.env.example docker/pi.env
 For the Pi quick-start path, set:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
 ```
 
 `docker/pi.env` is ignored by Git through `.dockerignore`; keep it local and do not commit it.
@@ -39,6 +39,12 @@ docker run --rm --env-file docker/pi.env metaclaw-test bash -lc "pi --help"
 ```
 
 ## Run MetaClaw With Pi
+
+Run the real end-to-end smoke with Pi as the configured executor:
+
+```bash
+docker run --rm --env-file docker/pi.env metaclaw-test bash -lc "npm run smoke:metaclaw -- --executor pi --scenario python-hello"
+```
 
 The quickest interactive path:
 

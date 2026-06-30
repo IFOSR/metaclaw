@@ -84,23 +84,38 @@ export interface PreferenceRecallDecision {
 }
 
 const LLM_TIMEOUT = 30_000;
+type SpawnFn = typeof spawn;
+
+interface LlmBridgeDeps {
+  spawn?: SpawnFn;
+  cwd?: () => string;
+}
 
 export class LlmBridge {
-  constructor(private command: string) {}
+  constructor(
+    private command: string,
+    private readonly deps: LlmBridgeDeps = {},
+  ) {}
 
   async query(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.command, this.buildCommandArgs(prompt), {
-        cwd: tmpdir(),
+      const cwd = this.deps.cwd?.() ?? tmpdir();
+      const proc = (this.deps.spawn ?? spawn)(this.command, this.buildCommandArgs(prompt), {
+        cwd,
         timeout: LLM_TIMEOUT,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
+      let stderr = '';
       proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       proc.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`LLM exited with code ${code}`));
+        else reject(new Error(
+          `LLM command "${this.command}" exited with code ${code ?? 'unknown'} in ${cwd}. `
+          + `stderr: ${summarizeProcessText(stderr) || '(empty)'}`,
+        ));
       });
       proc.on('error', reject);
     });
@@ -109,6 +124,21 @@ export class LlmBridge {
   private buildCommandArgs(prompt: string): string[] {
     if (this.command === 'codex') {
       return buildCodexNonInteractiveArgs(prompt);
+    }
+
+    if (this.command === 'pi') {
+      // Pi rejects Claude-only flags such as --dangerously-skip-permissions.
+      // Reasoning calls only need plain text output: no tools, no session, no
+      // extension/context-file discovery. The provider/model resolve from
+      // pi's settings.json (see docker/pi-config).
+      return [
+        '--no-tools',
+        '--no-session',
+        '--no-extensions',
+        '--no-context-files',
+        '-p',
+        prompt,
+      ];
     }
 
     return [
@@ -910,4 +940,11 @@ export class LlmBridge {
   private isExplicitParkedResumeRequest(userInput: string): boolean {
     return /挂起|恢复|继续之前|继续.*挂起|继续.*任务/.test(userInput);
   }
+}
+
+function summarizeProcessText(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
 }

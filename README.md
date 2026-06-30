@@ -817,7 +817,7 @@ npm run lint
 npm run smoke:metaclaw
 ```
 
-`npm run smoke:metaclaw` is the required real end-to-end smoke gate for feature work. It builds MetaClaw, starts `node dist/index.js --script` with an isolated temporary `METACLAW_HOME` and workspace, submits a real task, lets the configured executor create an artifact, and verifies the artifact path and file content. New runtime features should pass this smoke path, or the failure/skip reason must be called out explicitly.
+`npm run smoke:metaclaw` is the required real end-to-end smoke gate for feature work. It builds MetaClaw, starts `node dist/index.js --script` with an isolated temporary `METACLAW_HOME` and workspace, submits a real task, lets the configured executor create an artifact, and verifies the artifact path and file content. By default the smoke config uses `codex`; pass another executor/scenario with `npm run smoke:metaclaw -- --executor pi --scenario python-hello` or `METACLAW_SMOKE_EXECUTOR=pi METACLAW_SMOKE_SCENARIO=python-hello npm run smoke:metaclaw`. New runtime features should pass this smoke path, or the failure/skip reason must be called out explicitly.
 
 Targeted tests:
 

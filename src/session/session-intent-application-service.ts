@@ -10,6 +10,7 @@ import { filterDurableTasks, type TaskClearScope, type TaskStatusQueryScope } fr
 import type { ExecutorAdapter } from '../executor/adapter.js';
 import { buildSchedulingReason, parsePriorityHint, type QueuedExecutionRequest } from './session-helpers.js';
 import type { SessionPresentationService } from './session-presentation-service.js';
+import { TaskAdmissionGate } from './task-admission-gate.js';
 
 interface FocusContext {
   kind: 'conversation' | 'task';
@@ -50,6 +51,8 @@ export interface SessionIntentApplicationDeps {
 }
 
 export class SessionIntentApplicationService {
+  private readonly taskAdmissionGate = new TaskAdmissionGate();
+
   constructor(private readonly deps: SessionIntentApplicationDeps) {}
 
   async apply(input: {
@@ -58,6 +61,16 @@ export class SessionIntentApplicationService {
     recentTasks: TaskSummary[];
   }): Promise<boolean> {
     const { userInput, decision, recentTasks } = input;
+    const admission = this.taskAdmissionGate.evaluateIntent({
+      decision,
+      runningTask: this.deps.taskRuntimeService.getCurrentRunningTask(),
+    });
+    if (!admission.allowed) {
+      this.deps.callbacks.appendOutput(...admission.lines);
+      this.deps.callbacks.refreshRuntimeState();
+      return true;
+    }
+
     this.deps.callbacks.appendOutput(...this.formatIntentDecisionProgress(decision));
 
     if (decision.interactionType === 'clarification') {
@@ -251,6 +264,16 @@ export class SessionIntentApplicationService {
       return true;
     }
     if (result.action === 'fork_follow_up') {
+      const admission = this.taskAdmissionGate.evaluateNewTopLevelTask(
+        this.deps.taskRuntimeService.getCurrentRunningTask(),
+        'follow-up would create another top-level task',
+      );
+      if (!admission.allowed) {
+        this.deps.callbacks.appendOutput(...admission.lines);
+        this.deps.callbacks.refreshRuntimeState();
+        return true;
+      }
+
       const followUpTask = this.deps.taskRuntimeService.createTask(result.plan.newTaskInput);
       await this.applySemanticPriority(followUpTask.id, userInput);
       this.deps.callbacks.setCurrentTaskId(followUpTask.id);
@@ -266,6 +289,16 @@ export class SessionIntentApplicationService {
       return true;
     }
     if (result.action === 'unblock_and_execute') {
+      const admission = this.taskAdmissionGate.evaluateExecution({
+        taskId: result.task.id,
+        runningTask: this.deps.taskRuntimeService.getCurrentRunningTask(),
+      });
+      if (!admission.allowed) {
+        this.deps.callbacks.appendOutput(...admission.lines);
+        this.deps.callbacks.refreshRuntimeState();
+        return true;
+      }
+
       for (const resourcePath of result.newlyProvidedResources ?? []) {
         this.deps.taskRuntimeService.attachResource(result.task.id, resourcePath);
       }
@@ -294,6 +327,16 @@ export class SessionIntentApplicationService {
           newlyProvidedResources: result.newlyProvidedResources,
         }),
       });
+      return true;
+    }
+
+    const admission = this.taskAdmissionGate.evaluateExecution({
+      taskId: result.plan.executionTaskId,
+      runningTask: this.deps.taskRuntimeService.getCurrentRunningTask(),
+    });
+    if (!admission.allowed) {
+      this.deps.callbacks.appendOutput(...admission.lines);
+      this.deps.callbacks.refreshRuntimeState();
       return true;
     }
 

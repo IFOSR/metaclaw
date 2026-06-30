@@ -16,13 +16,25 @@ When touching routing, update focused tests around the active path first: `tests
 
 ## Routing Language
 
+**Task**:
+A top-level durable user goal accepted by MetaClaw. A task may contain multiple work units, and those work units may run on different executors as long as their executor sessions are isolated and tracked under the same task.
+_Avoid_: request, user input, executor run, single executor
+
+**Single Active Task**:
+The admission rule that MetaClaw accepts only one top-level task for execution at a time. It does not mean one work unit, one executor, or no internal parallelism; while the active task runs, new unrelated top-level tasks are rejected at the intake boundary.
+_Avoid_: single executor, single work unit, no parallelism, no decomposition
+
 **ExecutionPolicy**:
 The output of the routing decision. Replaces `ExecutionPlanV2`. Describes not only *who runs* but *how the result is verified*, *whether isolation is required*, and *what happens on failure*.
 _Avoid_: ExecutionPlan, ExecutionPlanV2, plan
 
 **Work Unit**:
-The input granularity the router consumes — a single, already-decomposed piece of work with a clear goal and required capability. The router does not decompose; it receives work units (in the future, from a dedicated decomposition skill) and decides dispatch for each. Today's flat `Task` serves as a stand-in work unit since no decomposition step exists yet.
-_Avoid_: subtask (implies a parent exists; none does today), request, user input (too raw)
+The execution granularity inside a task: a single, already-decomposed piece of work with a clear goal and required capability. The router consumes work units and decides dispatch for each; a work unit may also be called a subtask when emphasizing that it belongs to a parent task.
+_Avoid_: top-level task, request, user input (too raw), executor run
+
+**Task Runtime View**:
+The runtime picture MetaClaw maintains for the active task: the parent task, its work units, each work unit's executor session, work unit progress, and executor state. This is task state, not just executor telemetry.
+_Avoid_: executor-only status, route event, transcript
 
 **Primary Executor**:
 The single executor that owns the main execution for a request. Every policy has exactly one.
@@ -33,8 +45,8 @@ A standby executor selected because it covers a *different capability class* tha
 _Avoid_: candidate executor, backup executor, secondary agent, standby (too vague)
 
 **Parallelism Criterion**:
-Whether executors run in parallel or in sequence is decided by *causal dependence*, not by executor type or count. Causally independent work (no output of one feeds another) runs in parallel, each in its own worktree — the isolation pattern, and the only meaning of `multi_executor`. Causally dependent work runs in sequence *across work units* (e.g. Claude Code finishes the code, then Hermes reports on it) — expressed as a chain of separate single-executor policies, never as one multi-executor policy. The decomposition-DAG (deferred) governs these dependent chains; the router treats each link as an independent work unit.
-_Avoid_: concurrent execution (too vague — hides whether causal), parallel agents
+Whether executors run in parallel or in sequence is decided by *causal dependence*, not by executor type or count. Causally independent work units within the active task may run in parallel, each in an isolated worktree; causally dependent work units run in dependency order under the same parent task.
+_Avoid_: concurrent execution (too vague), parallel agents, single-executor-only task
 
 **Capability Class**:
 A coarse classification of a request's needed competence, defined by *tool/side-effect boundary* (not executor strength). Seven values: `code_edit | research | messaging | memory_ops | office_automation | conversation | general`. A complementary set is built by picking one executor per relevant class. Supersedes the legacy `TaskRouteIntent`, which was the index key of the disused affinity-scoring model and carried wrong granularity (no office/automation class; treated model-level `reasoning` as a routing class).
@@ -53,8 +65,8 @@ The strength of post-execution validation: `none | compile | test | review`. Whe
 _Avoid_: quality gate, acceptance check, validator
 
 **Worktree Isolation**:
-The mechanism for running parallel executor sessions without mutual file interference. Each isolated task gets a dedicated `git worktree` (an independent working directory on its own branch, sharing the `.git` object store). Parallel tasks live in separate worktrees — physical isolation. Within a single worktree, only one executor session runs at a time — logical mutual exclusion, preventing dirty writes. Coordination of cross-task results happens at the orchestration layer (who waits for whom, how outputs pass), not inside the worktree.
-_Avoid_: workspace lock, file locking (too weak — detects but doesn't prevent), sandbox (different concept)
+The mechanism for running parallel executor sessions without mutual file interference. Each parallel work unit or isolated executor session gets a dedicated `git worktree` (an independent working directory on its own branch, sharing the `.git` object store). Within a single worktree, only one executor session runs at a time; the parent task coordinates the isolated work unit results.
+_Avoid_: workspace lock, file locking (too weak because it detects but does not prevent), sandbox (different concept)
 
 **Estimated Cost Class**:
 A prior, type-based cost band (`cheap | moderate | expensive`) used to decide whether spending tokens on a reviewer is justified. Derived from request type and estimated IO scale — *not* from historical statistics, so it cannot decay into a dead static value like the legacy `historicalSuccess`.

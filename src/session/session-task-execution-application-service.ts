@@ -6,6 +6,7 @@ import type { TaskRuntimeService } from '../task/task-runtime-service.js';
 import type { GuidanceActionType, Task } from '../core/types.js';
 import type { QueuedExecutionRequest } from './session-helpers.js';
 import type { ExecutionRecallSelection } from '../memory/memory-context-service.js';
+import { TaskAdmissionGate } from './task-admission-gate.js';
 
 export interface SessionTaskExecutionApplicationCallbacks {
   appendOutput(...lines: string[]): void;
@@ -30,6 +31,7 @@ export interface SessionTaskExecutionApplicationDeps {
 
 export class SessionTaskExecutionApplicationService {
   private readonly approvedRecallSelections = new Map<string, ExecutionRecallSelection>();
+  private readonly taskAdmissionGate = new TaskAdmissionGate();
 
   constructor(private readonly deps: SessionTaskExecutionApplicationDeps) {}
 
@@ -41,6 +43,16 @@ export class SessionTaskExecutionApplicationService {
     const task = this.deps.taskRuntimeService.findTask(taskId);
     if (!task) {
       this.deps.callbacks.appendOutput(`错误：任务不存在 ${taskId}`);
+      return;
+    }
+
+    const admission = this.taskAdmissionGate.evaluateExecution({
+      taskId,
+      runningTask: this.deps.taskRuntimeService.getCurrentRunningTask(),
+    });
+    if (!admission.allowed) {
+      this.deps.callbacks.appendOutput(...admission.lines);
+      this.deps.callbacks.refreshRuntimeState();
       return;
     }
 

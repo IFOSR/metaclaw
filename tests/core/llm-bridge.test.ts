@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { LlmBridge } from '../../src/core/llm-bridge.js';
 
 describe('LlmBridge', () => {
@@ -361,5 +362,40 @@ describe('LlmBridge', () => {
       expect(args).toContain('--dangerously-skip-permissions');
       expect(args).toContain('你好');
     });
+
+    it('builds pi args without Claude-only flags', () => {
+      const bridge = new LlmBridge('pi');
+      const args = (bridge as any).buildCommandArgs('你好');
+
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args).toContain('--no-tools');
+      expect(args).toContain('--no-session');
+      expect(args).toContain('-p');
+      expect(args).toContain('你好');
+    });
+  });
+});
+
+describe('LlmBridge query diagnostics', () => {
+  it('includes command, cwd, exit code, and stderr when the LLM command fails', async () => {
+    const proc = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+    };
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    const spawnMock = vi.fn(() => proc);
+    const bridge = new LlmBridge('pi', {
+      spawn: spawnMock as any,
+      cwd: () => '/tmp/metaclaw-llm-test',
+    });
+
+    const result = bridge.query('hello');
+    proc.stderr.emit('data', Buffer.from('Connection error: provider rejected request\n'));
+    proc.emit('close', 1);
+
+    await expect(result).rejects.toThrow(/LLM command "pi" exited with code 1/);
+    await expect(result).rejects.toThrow(/\/tmp\/metaclaw-llm-test/);
+    await expect(result).rejects.toThrow(/Connection error/);
   });
 });
