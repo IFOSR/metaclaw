@@ -288,6 +288,40 @@ describe('ContextRecaller', () => {
     expect(mockBridge.rankInteractions).toHaveBeenCalled();
   });
 
+  it('普通对话的模糊继续优先使用同会话最近上下文，不让 LLM 相似旧主题覆盖当前主题', async () => {
+    insertInteraction(db, {
+      id: 'int_recent_current',
+      taskId: '',
+      sessionId: 'sess_1',
+      userInput: 'MetaClaw 调度任务时为什么要明确展示 Executor？',
+      systemOutput: '我先讲两点：一是用户需要知道哪个 Executor 在处理；二是 MetaClaw 和 Executor 里程碑要分层展示。',
+      createdAt: '2026-06-24T10:00:00Z',
+    });
+    insertInteraction(db, {
+      id: 'int_old_helmet',
+      taskId: 'task_helmet',
+      sessionId: 'sess_old',
+      userInput: '帮我调研 JUST1 头盔产品',
+      systemOutput: 'JUST1 头盔调研报告。',
+      createdAt: '2026-06-23T10:00:00Z',
+    });
+
+    const mockBridge = {
+      rankInteractions: vi.fn().mockResolvedValue(['int_old_helmet']),
+    } as unknown as LlmBridge;
+    const llmRecaller = new ContextRecaller(db, mockBridge);
+
+    const result = await llmRecaller.recallAsync({
+      taskId: '',
+      sessionId: 'sess_1',
+      userInput: '这个问题你怎么回答了一半？继续完成。',
+    });
+
+    expect(result.map(turn => turn.userInput)).toContain('MetaClaw 调度任务时为什么要明确展示 Executor？');
+    expect(result.map(turn => turn.userInput)).not.toContain('帮我调研 JUST1 头盔产品');
+    expect(mockBridge.rankInteractions).not.toHaveBeenCalled();
+  });
+
   it('LLM 排序失败时 fallback 到 bigram', async () => {
     insertInteraction(db, {
       id: 'int_1', taskId: 'task_X', sessionId: 'sess_old',

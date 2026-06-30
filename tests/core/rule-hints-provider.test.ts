@@ -63,4 +63,20 @@ describe('RuleHintsProvider', () => {
       }),
     ]));
   });
+
+  it('keeps half-answered continuation requests for semantic routing instead of hard resume rules', () => {
+    const provider = new RuleHintsProvider();
+    const hints = provider.collect('这个问题你怎么回答了一半？继续完成。');
+
+    expect(hints).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'resume_task',
+      }),
+    ]));
+    expect(hints).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'conversation_continuation',
+      }),
+    ]));
+  });
 });

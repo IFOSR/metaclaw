@@ -176,6 +176,10 @@ export class ContextRecaller {
       }
     }
 
+    if (!input.taskId && sessionHistory.length > 0) {
+      return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    }
+
     // 第四层：LLM 排序 → fallback bigram
     if (this.llmBridge) {
       const llmTurns = await this.recallByLlm(input.userInput, seenIds);
@@ -264,12 +268,22 @@ export class ContextRecaller {
   }
 
   private recallForTask(taskId: string): InteractionRow[] {
+    if (!taskId) {
+      return [];
+    }
+
     return this.db.prepare(
       'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE task_id = ? ORDER BY created_at DESC LIMIT ?'
     ).all(taskId, TASK_HISTORY_LIMIT) as InteractionRow[];
   }
 
   private recallForSession(sessionId: string, excludeTaskId: string): InteractionRow[] {
+    if (!excludeTaskId) {
+      return this.db.prepare(
+        'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
+      ).all(sessionId, SESSION_HISTORY_LIMIT) as InteractionRow[];
+    }
+
     return this.db.prepare(
       'SELECT id, task_id, user_input, system_output, created_at FROM interactions WHERE session_id = ? AND (task_id IS NULL OR task_id != ?) ORDER BY created_at DESC LIMIT ?'
     ).all(sessionId, excludeTaskId, SESSION_HISTORY_LIMIT) as InteractionRow[];

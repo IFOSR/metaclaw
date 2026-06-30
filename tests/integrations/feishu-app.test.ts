@@ -1219,6 +1219,76 @@ describe('Feishu app helpers', () => {
     expect(client.sendMarkdownCardToChat).toHaveBeenNthCalledWith(2, 'oc_chat', '最终答案');
   });
 
+  it('waits for direct-reply output to settle before sending the final Feishu answer', async () => {
+    vi.useFakeTimers();
+    const listeners = new Set<(snapshot: { output: string[] }) => void>();
+    const output = ['before'];
+    const notify = () => {
+      for (const listener of listeners) {
+        listener({ output: [...output] });
+      }
+    };
+    let resolveSubmit!: () => void;
+    const submitPromise = new Promise<{ exitRequested: false }>(resolve => {
+      resolveSubmit = () => resolve({ exitRequested: false });
+    });
+    const session = {
+      getSnapshot: vi.fn(() => ({ output: [...output] })),
+      subscribe: vi.fn((callback: (snapshot: { output: string[] }) => void) => {
+        listeners.add(callback);
+        callback({ output: [...output] });
+        return () => {
+          listeners.delete(callback);
+        };
+      }),
+      submit: vi.fn().mockImplementation(() => submitPromise),
+      appendSystemMessage: vi.fn(),
+    };
+    const client = {
+      addReactionToMessage: vi.fn().mockResolvedValue('reaction_typing'),
+      removeReactionFromMessage: vi.fn().mockResolvedValue(undefined),
+      sendMarkdownCardToChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const handled = handleFeishuMessageEvent({
+      message: {
+        message_id: 'om_message_direct_settle',
+        chat_id: 'oc_chat',
+        message_type: 'text',
+        content: '{"text":"这个问题你怎么回答了一半？继续完成。"}',
+      },
+    }, {
+      session,
+      client,
+      seenMessageIds: new Set<string>(),
+    });
+
+    await Promise.resolve();
+    output.push(
+      '> 这个问题你怎么回答了一半？继续完成。',
+      '【MetaClaw｜理解用户请求】',
+      '→ MetaClaw：已识别普通对话',
+      '→ MetaClaw：执行策略：直接回答，不创建任务',
+      '【MetaClaw｜召回会话上下文】',
+      '→ MetaClaw：正在召回与本次问答相关的最近对话',
+      '→ MetaClaw：已召回 2 条相关会话上下文',
+      '【Executor: codex-cli｜回答生成】',
+      '→ Executor: codex-cli 正在基于当前问题和会话上下文生成回答',
+    );
+    notify();
+    resolveSubmit();
+    await Promise.resolve();
+    output.push('这是补全后的最终答案，飞书必须展示这一段。');
+    notify();
+
+    await vi.advanceTimersByTimeAsync(301);
+    await handled;
+
+    const sentTexts = client.sendMarkdownCardToChat.mock.calls.map(([, text]) => text);
+    expect(sentTexts.join('\n')).toContain('**处理步骤**');
+    expect(sentTexts.at(-1)).toBe('这是补全后的最终答案，飞书必须展示这一段。');
+  });
+
   it('streams task failure to Feishu when session subscription is available', async () => {
     let output = ['before'];
     let listener: ((snapshot: { output: string[] }) => void) | null = null;
