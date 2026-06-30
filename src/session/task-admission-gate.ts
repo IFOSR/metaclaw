@@ -36,14 +36,14 @@ export class TaskAdmissionGate {
         return allowAdmission();
       }
 
-      return rejectAdmission(runningTask, 'task control would start or resume another top-level task');
+      return rejectAdmission(runningTask, '该任务控制会启动或恢复另一个顶层任务');
     }
 
     if (decision.task.binding === 'reference' && decision.task.taskId === runningTask.id) {
       return allowAdmission();
     }
 
-    return rejectAdmission(runningTask, 'new top-level task intake is closed while a task is running');
+    return rejectAdmission(runningTask, '已有任务在执行,暂不接纳新的顶层任务');
   }
 
   evaluateExecution(input: ExecutionAdmissionInput): TaskAdmissionGateResult {
@@ -52,7 +52,7 @@ export class TaskAdmissionGate {
       return allowAdmission();
     }
 
-    return rejectAdmission(runningTask, `execution request for #${taskId} conflicts with the active top-level task`);
+    return rejectAdmission(runningTask, `针对 #${taskId} 的执行请求与当前活跃顶层任务冲突`);
   }
 
   evaluateNewTopLevelTask(runningTask: Task | null, reason: string): TaskAdmissionGateResult {
@@ -72,9 +72,9 @@ function rejectAdmission(runningTask: Task, reason: string): TaskAdmissionGateRe
   return {
     allowed: false,
     lines: [
-      `-> MetaClaw: single active task gate rejected this request (${reason}).`,
-      `-> Active top-level task: #${runningTask.id} ${runningTask.title}`,
-      '-> Ask for status or finish/cancel the active task before starting another top-level task.',
+      `→ MetaClaw：单活跃任务限制已拒绝该请求(${reason})。`,
+      `→ 当前活跃顶层任务：#${runningTask.id} ${runningTask.title}`,
+      '→ 请先查询状态,或完成/取消当前任务,再开始新的顶层任务。',
     ],
   };
 }

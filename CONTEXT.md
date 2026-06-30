@@ -21,7 +21,7 @@ A top-level durable user goal accepted by MetaClaw. A task may contain multiple 
 _Avoid_: request, user input, executor run, single executor
 
 **Single Active Task**:
-The admission rule that MetaClaw accepts only one top-level task for execution at a time. It does not mean one work unit, one executor, or no internal parallelism; while the active task runs, new unrelated top-level tasks are rejected at the intake boundary.
+The admission rule that MetaClaw accepts only one top-level task for execution at a time. It does not mean one work unit, one executor, or no internal parallelism; while the active task runs, new unrelated top-level tasks are rejected at the intake boundary. This is a **deliberate current-scope decision** (see [`docs/adr/0011-single-active-task-admission-gate.md`](docs/adr/0011-single-active-task-admission-gate.md)): to reduce development load while the routing layer is the priority, multi-task queueing / preemption / auto-resume of a *second* task are intentionally disabled and enforced by `TaskAdmissionGate` (`src/session/task-admission-gate.ts`). It is reversible — relax the gate (don't delete it) when multi-task scheduling is reprioritized.
 _Avoid_: single executor, single work unit, no parallelism, no decomposition
 
 **ExecutionPolicy**:

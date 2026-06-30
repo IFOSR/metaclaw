@@ -266,7 +266,7 @@ export class SessionIntentApplicationService {
     if (result.action === 'fork_follow_up') {
       const admission = this.taskAdmissionGate.evaluateNewTopLevelTask(
         this.deps.taskRuntimeService.getCurrentRunningTask(),
-        'follow-up would create another top-level task',
+        '追问会创建另一个顶层任务',
       );
       if (!admission.allowed) {
         this.deps.callbacks.appendOutput(...admission.lines);

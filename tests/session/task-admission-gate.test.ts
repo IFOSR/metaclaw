@@ -63,7 +63,7 @@ describe('TaskAdmissionGate', () => {
     });
 
     expect(result.allowed).toBe(false);
-    expect(result.lines.join('\n')).toContain('single active task gate');
+    expect(result.lines.join('\n')).toContain('单活跃任务限制');
     expect(result.lines.join('\n')).toContain('#task_running');
   });
 
