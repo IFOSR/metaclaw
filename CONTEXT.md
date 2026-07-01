@@ -32,6 +32,18 @@ _Avoid_: ExecutionPlan, ExecutionPlanV2, plan
 The execution granularity inside a task: a single, already-decomposed piece of work with a clear goal and required capability. The router consumes work units and decides dispatch for each; a work unit may also be called a subtask when emphasizing that it belongs to a parent task.
 _Avoid_: top-level task, request, user input (too raw), executor run
 
+**Leader**:
+The temporary coordinator for one top-level task. A leader decomposes the task into a work graph, records work-unit events, and dispatches ready work units through MetaClaw's runtime. It does not perform implementation, research, writing, review, or other executor work itself.
+_Avoid_: executor, worker, always-on router, implementation agent
+
+**Work Graph**:
+The dependency graph of work units under one top-level task. It describes what must be done, which work units depend on which prior work units, and what capability class each work unit needs. It is the leader's planning output and the runtime's scheduling input.
+_Avoid_: raw prompt, route decision, executor plan, issue thread
+
+**Work Unit Event**:
+A durable event about a work unit or work graph, such as planned, ready, dispatched, blocked, succeeded, failed, cancelled, or lease-expired. Work unit events are the replayable source of truth for leader recovery; session output is only a UI projection.
+_Avoid_: TUI output line, transient progress text, executor-only log
+
 **Task Runtime View**:
 The runtime picture MetaClaw maintains for the active task: the parent task, its work units, each work unit's executor session, work unit progress, and executor state. This is task state, not just executor telemetry.
 _Avoid_: executor-only status, route event, transcript
@@ -52,6 +64,14 @@ _Avoid_: concurrent execution (too vague), parallel agents, single-executor-only
 A coarse classification of a request's needed competence, defined by *tool/side-effect boundary* (not executor strength). Seven values: `code_edit | research | messaging | memory_ops | office_automation | conversation | general`. A complementary set is built by picking one executor per relevant class. Supersedes the legacy `TaskRouteIntent`, which was the index key of the disused affinity-scoring model and carried wrong granularity (no office/automation class; treated model-level `reasoning` as a routing class).
 _Avoid_: intent (overloaded with the legacy intent router), domain (overloaded with executor profile domains), TaskRouteIntent, reasoning-as-a-class
 
+**Executor Instance**:
+A runtime worker slot that can claim one work unit at a time for a specific capability class. A leader may request a capability class, but only the runtime claim step selects an executor instance and authorizes execution.
+_Avoid_: leader-selected agent, permanent worker identity, capability class
+
+**No Action**:
+A valid leader planning outcome meaning no work unit should be dispatched. The runtime must preserve it as an intentional decision rather than forcing a fallback executor run.
+_Avoid_: failure, clarification, unknown route
+
 **Selection Signal**:
 A hard, quantifiable fact the routing tool layer provides to the LLM when multiple executors satisfy a work unit's required capability. The LLM — not the tool layer — decides how to weigh them. Three signals are defined: recent success rate (last 3 tasks per candidate executor, from `executor_route_events.result`), pending load (queued/running task count per executor), and price. These are the *personal-user / open-source* selection strategy; enterprise routing (efficiency/robustness/quality-tuned) is out of scope and documented only as an advanced option.
 _Avoid_: affinity score, historical success (the dead static value), preference
@@ -67,6 +87,10 @@ _Avoid_: quality gate, acceptance check, validator
 **Worktree Isolation**:
 The mechanism for running parallel executor sessions without mutual file interference. Each parallel work unit or isolated executor session gets a dedicated `git worktree` (an independent working directory on its own branch, sharing the `.git` object store). Within a single worktree, only one executor session runs at a time; the parent task coordinates the isolated work unit results.
 _Avoid_: workspace lock, file locking (too weak because it detects but does not prevent), sandbox (different concept)
+
+**Worktree Lease**:
+The runtime claim that one executor session currently owns a specific worktree for one work unit. A lease has an owner, heartbeat, expiry, and release path so crashed executions can be detected and the worktree can be made available again.
+_Avoid_: permanent workspace ownership, executor identity, static work directory assignment
 
 **Estimated Cost Class**:
 A prior, type-based cost band (`cheap | moderate | expensive`) used to decide whether spending tokens on a reviewer is justified. Derived from request type and estimated IO scale — *not* from historical statistics, so it cannot decay into a dead static value like the legacy `historicalSuccess`.
