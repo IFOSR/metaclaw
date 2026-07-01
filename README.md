@@ -11,7 +11,8 @@ It is built for teams who need agents to do more than answer the current turn. M
 - Keeps durable tasks with explicit states: created, ready, running, parked, blocked, done, archived, and cancelled.
 - Restores interrupted work with resume context instead of restarting from scratch.
 - Auto-resumes executable parked tasks when the scheduler is idle.
-- Uses semantic priority, not keyword matching, to decide urgent preemption and resume ordering.
+- Uses semantic priority, not keyword matching, for scheduler ordering when work is eligible to run.
+- Enforces one active top-level task at a time while the routing layer is being hardened.
 - Searches historical tasks with a local SQLite FTS index and hybrid retrieval.
 - Plans complex work as explicit work units with acceptance criteria and aggregation rules.
 - Routes work across executors by task intent, executor capability, and ownership boundaries.
@@ -36,7 +37,7 @@ flowchart LR
   Intent --> Choice{What is this?}
   Choice -->|answer now| Conversation[Direct reply<br/>no durable task]
   Choice -->|control task| Control[Task control<br/>status, resume, clear, recover]
-  Choice -->|do work| Durable[Durable task<br/>state, queue, artifacts]
+  Choice -->|do work| Durable[Durable task<br/>state, admission, artifacts]
 
   Conversation --> Context[Context and memory<br/>recent session first]
   Control --> TaskOS[Task OS<br/>TaskEngine and Scheduler]
@@ -74,8 +75,9 @@ This path is still semantic. "Continue" or "you stopped halfway" is resolved fro
 ```mermaid
 flowchart LR
   Input[User asks MetaClaw to do work] --> Intent[IntentOrchestrator]
-  Intent --> Task[TaskRuntimeService<br/>create or bind task]
-  Task --> Scheduler[SchedulerEngine<br/>queue, priority, preemption]
+  Intent --> Gate[TaskAdmissionGate<br/>single active top-level task]
+  Gate --> Task[TaskRuntimeService<br/>create or bind task]
+  Task --> Scheduler[SchedulerEngine<br/>readiness, priority, idle resume]
   Scheduler --> Context[MemoryContextService<br/>resume pack, preferences, materials]
   Context --> Route[ExecutorRoutingCoordinator<br/>pick executor]
   Route --> Run[ExecutionRuntime<br/>run adapter]
@@ -86,6 +88,8 @@ flowchart LR
 ```
 
 This is the Task OS path. It is where task state, resume context, scheduling, artifact capture, and verification matter.
+
+The current public intake deliberately allows only one active top-level task at a time. Direct replies, clarifications, status queries, clear-task commands, and requests that reference the active task itself are still allowed. A new unrelated top-level task is rejected with a visible message until the active task is finished or cancelled. This keeps the user path predictable while ExecutionPolicy routing and fallback behavior are being hardened.
 
 ### Feishu And Progress Path
 
@@ -439,7 +443,7 @@ MetaClaw calls it as:
 hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
 
-`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. Research workflows can run Pi Agent and Hermes Agent concurrently; MetaClaw records the first returned result and aborts the other executor.
+`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. Current single-executor research routing does not race Pi Agent and Hermes Agent. MetaClaw selects one primary executor from the ExecutionPolicy and uses the configured fallback chain only if that executor fails. Complex multi-executor strategies can still assign different work units to different executors inside one top-level task.
 
 ### Retired Legacy Adapters
 
@@ -714,7 +718,7 @@ Implicit recall excludes the current task, so a task does not accidentally recal
 
 ## Scheduler And Priority Model
 
-MetaClaw uses a single active executor with a scheduler in front of it.
+MetaClaw currently uses a single active top-level task with a scheduler in front of it.
 
 - New tasks are scored by urgency, readiness, continuity benefit, downstream impact, and staleness.
 - Urgency is based on structured semantic priority, not keyword matching.
@@ -725,7 +729,9 @@ MetaClaw uses a single active executor with a scheduler in front of it.
 - Material, permission, authorization, and access blocks stay blocked until the user provides the missing input or explicitly unblocks the task.
 - Not-ready tasks do not auto-run.
 
-This prevents queued work from wasting compute while preserving task safety.
+While one top-level task is running, `TaskAdmissionGate` rejects new unrelated durable tasks and execution requests for other tasks. It still allows direct replies, clarifications, status queries, clear-task commands, and work that explicitly targets the active task. Queueing, urgent preemption, and auto-resume of a second top-level task are intentionally disabled in the current scope; ADR-0011 tracks this as a reversible decision.
+
+This prevents queued work from wasting compute while preserving task safety. Multi-executor work units can still run inside the one admitted top-level task when the ExecutionPolicy strategy calls for it.
 
 ## Executor Routing
 
@@ -767,7 +773,7 @@ Executor strengths:
 
 - Adds a new runtime boundary: model, tools, credentials, permissions, and command-line behavior.
 - Lets MetaClaw route work to the executor that is best suited for that task.
-- Enables fallback, racing, cross-checking, and audit trails across different agents.
+- Enables fallback, cross-checking, and audit trails across different agents.
 - Can integrate private or domain-specific systems that a generic Skill cannot access.
 
 Executor tradeoffs:
@@ -861,6 +867,8 @@ npm test -- tests/core/executor-router.test.ts
 npm test -- tests/core/execution-planning-service.test.ts
 npm test -- tests/core/semantic-intent-router.test.ts
 npm test -- tests/core/scheduler.test.ts
+npm test -- tests/session/task-admission-gate.test.ts
+npm test -- tests/execution/execution-runtime.test.ts
 npm test -- tests/integrations/feishu-app.test.ts
 npm test -- tests/session/scripted-session.test.ts
 ```
