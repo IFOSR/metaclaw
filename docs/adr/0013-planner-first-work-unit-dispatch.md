@@ -47,6 +47,7 @@ The old route coordinator is not part of the main execution path. Its useful log
 - Add parallel subtask scheduling once multiple executor work units and worktree isolation are available.
 - Replace the fixed pool with elastic work unit spawning for cloud-hosted executors.
 - Add error-type-aware fallback: automatic retry for infrastructure failures, planner rescheduling for task/quality failures, and human review for risky or ambiguous failures.
+- Define failure-convergence behavior for the first version: a runtime failure currently releases the work unit and defers to planner replanning, but the replanning trigger, retry cap, and human-escalation path for a repeatedly failing subtask are not yet specified. This is the concrete first-version gap that the error-type-aware fallback above resolves.
 - Move all user-input intake fully behind planner work units as Feishu task windows become the primary control surface.
 
 ## Consequences

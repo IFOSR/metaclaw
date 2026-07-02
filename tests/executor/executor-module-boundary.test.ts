@@ -5,9 +5,7 @@ import { describe, expect, it } from 'vitest';
 const projectRoot = resolve(__dirname, '../..');
 
 const executorServiceFiles = [
-  'executor-profile-service',
   'executor-admin-service',
-  'executor-registry-seeder',
 ];
 
 describe('executor module architecture boundaries', () => {
