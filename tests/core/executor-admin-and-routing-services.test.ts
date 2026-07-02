@@ -55,6 +55,11 @@ describe('agent class admin and planner dispatch services', () => {
       capabilities: ['research', 'report_generation'],
       availability: 'available',
     });
+    expect(new WorkUnitRepo(db).findById('executor-research-bot-1')).toMatchObject({
+      agentClassName: 'research-bot',
+      agentClassKind: 'executor',
+      state: 'idle',
+    });
   });
 
   it('infers package runtime from project URL inside the admin service', async () => {

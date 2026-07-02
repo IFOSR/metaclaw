@@ -63,6 +63,12 @@ export class SchedulerEngine<TExecutionRequest = unknown> {
     this.activeDispatchIds.set(taskId, executionId);
   }
 
+  clearDispatch(taskId: string, reason: string): void {
+    this.activeDispatchIds.delete(taskId);
+    this.queuedExecution.delete(taskId);
+    this.lastEvent = `task #${taskId} dispatch cleared: ${reason}`;
+  }
+
   async markDispatchFinished(taskId: string, result: TaskDispatchResult): Promise<void> {
     this.activeDispatchIds.delete(taskId);
     this.queuedExecution.delete(taskId);

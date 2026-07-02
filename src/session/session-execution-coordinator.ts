@@ -19,7 +19,7 @@ import type { AgentClassService } from '../executor/agent-class-service.js';
 import type { PlannerRuntimeService } from '../planner/planner-runtime-service.js';
 import type { SubtaskRepo } from '../storage/subtask-repo.js';
 import type { TaskEventRepo } from '../storage/task-event-repo.js';
-import type { WorkUnitClaimService } from '../execution/work-unit-claim-service.js';
+import type { WorkUnitClaim, WorkUnitClaimService } from '../execution/work-unit-claim-service.js';
 import type { AcceptanceCriterion } from '../core/execution-strategy-planner.js';
 
 interface FocusContext {
@@ -129,6 +129,8 @@ export class SessionExecutionCoordinator {
     );
 
     let progressTracker: ExecutionProgressTracker | null = null;
+    let activeClaim: WorkUnitClaim | null = null;
+    let activeSubtask: Subtask | null = null;
     try {
       const currentTask = this.deps.taskRuntimeService.findTask(taskId);
       if (!currentTask) {
@@ -149,6 +151,7 @@ export class SessionExecutionCoordinator {
         executionId,
         appendOutput: line => this.deps.callbacks.appendOutput(line),
       });
+      this.recoverExpiredWorkUnits();
 
       const agentClasses = this.deps.agentClassService.listAgentClasses();
       const plannerResult = this.deps.plannerRuntimeService.plan({
@@ -162,12 +165,7 @@ export class SessionExecutionCoordinator {
       });
 
       if (plannerResult.intent.action !== 'plan_work_graph') {
-        await this.deps.scheduler.markDispatchFinished(taskId, {
-          taskId,
-          executionId,
-          status: 'success',
-          reason: plannerResult.intent.reason,
-        });
+        this.deps.scheduler.clearDispatch(taskId, plannerResult.intent.reason);
         await finishExecution([
           `-> Planner: ${plannerResult.intent.action} (${plannerResult.intent.reason})`,
         ], { scheduleNext: false });
@@ -180,11 +178,31 @@ export class SessionExecutionCoordinator {
         `-> Planner: ${plannerResult.workGraph?.reason ?? 'work graph ready'}`,
       );
 
-      const executionOutputs: string[] = [];
+      const executionOutputs: Array<{ subtaskId: string; title: string; output: string }> = [];
       let finalExecution: Awaited<ReturnType<ExecutionRuntime['run']>> | null = null;
       for (;;) {
+        this.recoverExpiredWorkUnits();
+        const loopTask = this.deps.taskRuntimeService.findTask(taskId);
+        if (loopTask?.status !== 'running') {
+          const stoppedSubtask = activeSubtask as Subtask | null;
+          this.recordTaskEvent(taskId, stoppedSubtask?.id ?? null, 'dispatch_stopped', `task status is ${loopTask?.status ?? 'missing'}`, {});
+          this.deps.scheduler.clearDispatch(taskId, `task status is ${loopTask?.status ?? 'missing'}`);
+          progressTracker.clear();
+          return;
+        }
+
         const readySubtask = this.findNextReadySubtask(taskId);
-        if (!readySubtask) break;
+        if (!readySubtask) {
+          const noReadyOutcome = await this.handleNoReadySubtask({
+            taskId,
+            executionId,
+            progressTracker,
+            finishExecution,
+            hasExecution: finalExecution !== null,
+          });
+          if (noReadyOutcome === 'stop') return;
+          break;
+        }
 
         const claim = this.deps.workUnitClaimService.claim({ taskId, subtask: readySubtask });
         if (!claim) {
@@ -196,6 +214,8 @@ export class SessionExecutionCoordinator {
           progressTracker.clear();
           return;
         }
+        activeClaim = claim;
+        activeSubtask = readySubtask;
 
         const agentClass = this.findAgentClassForClaim(agentClasses, claim.workUnit.agentClassName);
         this.deps.subtaskRepo.updateStatus(readySubtask.id, 'running');
@@ -234,13 +254,33 @@ export class SessionExecutionCoordinator {
         });
         finalExecution = execution;
 
+        const postRunTask = this.deps.taskRuntimeService.findTask(taskId);
+        if (postRunTask?.status !== 'running') {
+          this.recordTaskEvent(taskId, readySubtask.id, 'subtask_abandoned_after_task_status_change', readySubtask.title, {
+            taskStatus: postRunTask?.status ?? 'missing',
+            workUnitId: claim.workUnit.id,
+          });
+          claim.release();
+          activeClaim = null;
+          activeSubtask = null;
+          this.deps.scheduler.clearDispatch(taskId, `task status is ${postRunTask?.status ?? 'missing'}`);
+          progressTracker.clear();
+          return;
+        }
+
         if (execution.status === 'success') {
           this.deps.subtaskRepo.updateStatus(readySubtask.id, 'done', { result: execution.output });
           this.recordTaskEvent(taskId, readySubtask.id, 'subtask_done', readySubtask.title, {
-          executorName: execution.executorName,
-        });
-          executionOutputs.push(execution.output);
+            executorName: execution.executorName,
+          });
+          executionOutputs.push({
+            subtaskId: readySubtask.id,
+            title: readySubtask.title,
+            output: execution.output,
+          });
           claim.release();
+          activeClaim = null;
+          activeSubtask = null;
           continue;
         }
 
@@ -251,6 +291,8 @@ export class SessionExecutionCoordinator {
         });
         claim.markFailed(errorMessage);
         claim.release();
+        activeClaim = null;
+        activeSubtask = null;
         if (isRecoverableExecutorFailure(errorMessage)) {
           await this.deps.scheduler.markDispatchBlocked(taskId, errorMessage);
           await finishExecution([
@@ -282,10 +324,9 @@ export class SessionExecutionCoordinator {
       const execution = {
         ...finalExecution,
         output: executionOutputs.length === 1
-          ? executionOutputs[0]!
-          : executionOutputs.map((output, index) => {
-              const subtask = this.deps.subtaskRepo.listByTask(taskId)[index];
-              return `## ${subtask?.title ?? `Subtask ${index + 1}`}\n\n${output}`;
+          ? executionOutputs[0]!.output
+          : executionOutputs.map((entry, index) => {
+              return `## ${entry.title || `Subtask ${index + 1}`}\n\n${entry.output}`;
             }).join('\n\n'),
         userPrompt,
       };
@@ -310,9 +351,20 @@ export class SessionExecutionCoordinator {
         finishExecution,
       });
     } catch (error) {
+      const errorMessage = formatExecutorError((error as Error).message) ?? (error as Error).message;
+      if (activeSubtask) {
+        this.recordTaskEvent(taskId, activeSubtask.id, 'subtask_exception', errorMessage, {
+          workUnitId: activeClaim?.workUnit.id ?? null,
+        });
+      }
+      if (activeClaim) {
+        activeClaim.markFailed(errorMessage);
+        activeClaim.release();
+        activeClaim = null;
+        activeSubtask = null;
+      }
       const currentTask = this.deps.taskRuntimeService.findTask(taskId);
       if (currentTask?.status === 'running') {
-        const errorMessage = formatExecutorError((error as Error).message) ?? (error as Error).message;
         if (isRecoverableExecutorFailure(errorMessage)) {
           await this.deps.scheduler.markDispatchBlocked(taskId, errorMessage);
           await finishExecution([
@@ -454,6 +506,68 @@ export class SessionExecutionCoordinator {
     return subtasks.find(subtask =>
       subtask.status === 'ready' && subtask.dependsOn.every(dependencyId => done.has(dependencyId))
     ) ?? null;
+  }
+
+  private async handleNoReadySubtask(input: {
+    taskId: string;
+    executionId: string;
+    progressTracker: ExecutionProgressTracker;
+    finishExecution(lines: string[], options?: { scheduleNext?: boolean }): Promise<void>;
+    hasExecution: boolean;
+  }): Promise<'continue' | 'stop'> {
+    const subtasks = this.deps.subtaskRepo.listByTask(input.taskId);
+    const unfinished = subtasks.filter(subtask => subtask.status !== 'done');
+    if (unfinished.length === 0) {
+      if (input.hasExecution) {
+        return 'continue';
+      }
+      await this.deps.scheduler.markDispatchFinished(input.taskId, {
+        taskId: input.taskId,
+        executionId: input.executionId,
+        status: 'success',
+        reason: 'all persisted subtasks are already done',
+      });
+      await input.finishExecution(['-> Planner: all persisted subtasks are already done'], { scheduleNext: false });
+      input.progressTracker.clear();
+      return 'stop';
+    }
+
+    const reason = `planner found no ready subtask; unfinished subtasks: ${unfinished
+      .map(subtask => `${subtask.id}:${subtask.status}`)
+      .join(', ')}`;
+    for (const subtask of unfinished) {
+      this.deps.subtaskRepo.updateStatus(subtask.id, 'blocked', { error: subtask.error ?? reason });
+    }
+    this.recordTaskEvent(input.taskId, null, 'no_ready_subtask_blocked', reason, {
+      unfinished: unfinished.map(subtask => ({ id: subtask.id, status: subtask.status })),
+    });
+    await this.deps.scheduler.markDispatchBlocked(input.taskId, reason);
+    await input.finishExecution([
+      `Subtask dispatch blocked: ${reason}`,
+      this.deps.presentation.buildRecoverableFailureHint(input.taskId, reason),
+    ], { scheduleNext: false });
+    input.progressTracker.clear();
+    return 'stop';
+  }
+
+  private recoverExpiredWorkUnits(): void {
+    const lost = this.deps.workUnitClaimService.sweepExpired();
+    for (const workUnit of lost) {
+      if (!workUnit.claimedTaskId || !workUnit.claimedSubtaskId) {
+        continue;
+      }
+      const subtask = this.deps.subtaskRepo.findById(workUnit.claimedSubtaskId);
+      if (subtask && subtask.status !== 'done') {
+        this.deps.subtaskRepo.updateStatus(subtask.id, 'ready');
+      }
+      this.recordTaskEvent(
+        workUnit.claimedTaskId,
+        workUnit.claimedSubtaskId,
+        'work_unit_heartbeat_lost',
+        `work unit ${workUnit.id} heartbeat lost`,
+        { workUnitId: workUnit.id },
+      );
+    }
   }
 
   private findAgentClassForClaim(agentClasses: AgentClass[], agentClassName: string): AgentClass {

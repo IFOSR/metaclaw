@@ -2,7 +2,7 @@ import type { AgentClass, AgentClassAvailability, AgentClassRiskLevel, Task } fr
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
 import type { TaskRouteIntent } from '../core/executor-router.js';
 import { capabilityClassFromTaskRouteIntent } from '../core/executor-router.js';
-import { seedDefaultAgentClasses, seedDefaultWorkUnits } from '../executor/agent-class-seeder.js';
+import { ensureExecutorWorkUnit, seedDefaultAgentClasses, seedDefaultWorkUnits } from '../executor/agent-class-seeder.js';
 import { PlannerRoutingSkill } from '../planner/planner-routing-skill.js';
 import { AgentClassRepo } from '../storage/agent-class-repo.js';
 import { TaskEventRepo } from '../storage/task-event-repo.js';
@@ -213,6 +213,7 @@ export const executorCommand: CommandHandler = {
         };
       }
       agentClassRepo.upsert(buildAgentClassFromArgs(name, optionArgs, agentClassRepo.findByName(name), 'available'));
+      ensureExecutorWorkUnit(workUnitRepo, name);
       return {
         type: 'text',
         content: action === 'register'

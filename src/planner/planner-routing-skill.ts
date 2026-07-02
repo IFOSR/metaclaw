@@ -2,6 +2,7 @@ import type { ExecutionPlan } from '../session/session-helpers.js';
 import type { AgentClass, AgentClassKind, AgentClassRiskLevel, Subtask, Task } from '../core/types.js';
 import type { IntentDecisionV2 } from '../core/intent-orchestrator.js';
 import type { CapabilityClass } from '../core/capability-class.js';
+import type { TaskRouteIntent } from '../core/executor-router.js';
 import { ExecutionStrategyPlanner } from '../core/execution-strategy-planner.js';
 
 export interface SubtaskPlan {
@@ -60,19 +61,31 @@ function unique(items: string[]): string[] {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
+function routeIntentFromCapability(capabilityClass: CapabilityClass): TaskRouteIntent {
+  if (capabilityClass === 'code_edit') return 'repo_execution';
+  if (capabilityClass === 'research') return 'research_workflow';
+  if (capabilityClass === 'messaging' || capabilityClass === 'memory_ops' || capabilityClass === 'office_automation') {
+    return 'memory_agent_ops';
+  }
+  return 'general';
+}
+
 function chooseCandidates(input: PlannerRoutingSkillInput, capabilityClass: CapabilityClass): string[] {
   const availableExecutors = input.agentClasses
     .filter(agentClass => agentClass.kind === 'executor')
     .filter(agentClass => agentClass.availability === 'available');
+  const routeIntent = routeIntentFromCapability(capabilityClass);
   const matched = availableExecutors
     .filter(agentClass => matchesCapability(agentClass, capabilityClass))
     .sort((left, right) => {
-      const leftAffinity = left.intentAffinity[capabilityClass] ?? left.historicalSuccess;
-      const rightAffinity = right.intentAffinity[capabilityClass] ?? right.historicalSuccess;
+      const leftAffinity = left.intentAffinity[routeIntent] ?? left.historicalSuccess;
+      const rightAffinity = right.intentAffinity[routeIntent] ?? right.historicalSuccess;
       return rightAffinity - leftAffinity;
     })
     .map(agentClass => agentClass.name);
-  const explicit = input.intentDecision?.execution.selectedExecutor ?? null;
+  const explicit = availableExecutors.find(agentClass =>
+    agentClass.name === input.intentDecision?.execution.selectedExecutor
+  )?.name ?? null;
   return unique([
     explicit ?? '',
     ...matched,
@@ -84,13 +97,41 @@ function riskFromCapability(capabilityClass: CapabilityClass): AgentClassRiskLev
   return capabilityClass === 'code_edit' ? 'medium' : 'low';
 }
 
+function candidateList(hint: string | null, candidates: string[]): string[] {
+  return unique([
+    hint && candidates.includes(hint) ? hint : '',
+    ...candidates,
+  ]);
+}
+
+function agentClassHint(hint: string | null, candidates: string[]): string | null {
+  return hint && candidates.includes(hint) ? hint : null;
+}
+
+function stableSubtaskId(taskId: string, unitId: string, used: Set<string>): string {
+  const base = `${taskId}_${unitId}`;
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  let index = 2;
+  for (;;) {
+    const candidate = `${base}_${index}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
 export class PlannerRoutingSkill {
   constructor(private readonly strategyPlanner = new ExecutionStrategyPlanner()) {}
 
   plan(input: PlannerRoutingSkillInput): WorkGraphPlan {
     const capabilityClass = input.intentDecision?.execution.capabilityClass ?? 'general';
     const candidates = chooseCandidates(input, capabilityClass);
-    const primaryExecutor = candidates[0] ?? input.agentClasses.find(agentClass => agentClass.kind === 'executor')?.name ?? 'executor';
+    const primaryExecutor = candidates[0] ?? '';
     const strategy = this.strategyPlanner.plan({
       task: input.task,
       userPrompt: input.userPrompt,
@@ -120,13 +161,13 @@ export class PlannerRoutingSkill {
         taskId: input.task.id,
         reason: strategy.reason,
         subtasks: [{
-          id: `${input.task.id}_subtask_summary`,
+          id: `${input.task.id}_subtask_execute`,
           title: input.task.title || 'Execute task',
           goal: input.userPrompt,
           dependsOn: [],
           requiredAgentClassKind: 'executor',
-          agentClassHint: strategy.executorName,
-          candidateAgentClasses: unique([strategy.executorName, ...candidates]),
+          agentClassHint: agentClassHint(strategy.executorName, candidates),
+          candidateAgentClasses: candidateList(strategy.executorName, candidates),
           expectedOutput,
           acceptance: expectedOutput === 'patch'
             ? ['List changed files and provide test command output or explain why tests were not run.']
@@ -136,21 +177,25 @@ export class PlannerRoutingSkill {
       };
     }
 
+    const usedIds = new Set<string>();
     return {
       taskId: input.task.id,
       reason: strategy.reason,
-      subtasks: strategy.subtasks.map(unit => ({
-        id: `${input.task.id}_${unit.id}`,
-        title: unit.title,
-        goal: unit.goal,
-        dependsOn: unit.dependsOn.map(id => `${input.task.id}_${id}`),
-        requiredAgentClassKind: 'executor',
-        agentClassHint: unit.executorHint,
-        candidateAgentClasses: unique([unit.executorHint, ...candidates]),
-        expectedOutput: unit.expectedOutput,
-        acceptance: unit.acceptance,
-        riskLevel: unit.riskLevel,
-      })),
+      subtasks: strategy.subtasks.map(unit => {
+        const id = stableSubtaskId(input.task.id, unit.id, usedIds);
+        return {
+          id,
+          title: unit.title,
+          goal: unit.goal,
+          dependsOn: unit.dependsOn.map(dependencyId => `${input.task.id}_${dependencyId}`),
+          requiredAgentClassKind: 'executor',
+          agentClassHint: agentClassHint(unit.executorHint, candidates),
+          candidateAgentClasses: candidateList(unit.executorHint, candidates),
+          expectedOutput: unit.expectedOutput,
+          acceptance: unit.acceptance,
+          riskLevel: unit.riskLevel,
+        };
+      }),
     };
   }
 }

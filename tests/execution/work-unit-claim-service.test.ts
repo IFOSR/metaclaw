@@ -109,6 +109,15 @@ describe('WorkUnitClaimService', () => {
     const lost = new WorkUnitClaimService(repo).sweepExpired(new Date('2026-07-02T00:01:00.000Z'));
 
     expect(lost).toHaveLength(1);
-    expect(repo.findById('executor-1')?.state).toBe('heartbeat_lost');
+    expect(repo.findById('executor-1')).toMatchObject({
+      state: 'heartbeat_lost',
+      claimedTaskId: 'task_1',
+      claimedSubtaskId: 'subtask_1',
+    });
+    expect(lost[0]).toMatchObject({
+      state: 'heartbeat_lost',
+      claimedTaskId: 'task_1',
+      claimedSubtaskId: 'subtask_1',
+    });
   });
 });

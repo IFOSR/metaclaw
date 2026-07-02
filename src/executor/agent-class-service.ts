@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { AgentClass, AgentClassKind } from '../core/types.js';
-import { seedDefaultAgentClasses, seedDefaultWorkUnits } from './agent-class-seeder.js';
+import { ensureExecutorWorkUnit, seedDefaultAgentClasses, seedDefaultWorkUnits } from './agent-class-seeder.js';
 import { AgentClassRepo } from '../storage/agent-class-repo.js';
 import { WorkUnitRepo } from '../storage/work-unit-repo.js';
 
@@ -47,5 +47,8 @@ export class AgentClassService {
 
   upsert(agentClass: AgentClass): void {
     this.agentClassRepo.upsert(agentClass);
+    if (agentClass.kind === 'executor') {
+      ensureExecutorWorkUnit(this.workUnitRepo, agentClass.name);
+    }
   }
 }

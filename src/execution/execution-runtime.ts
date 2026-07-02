@@ -217,12 +217,23 @@ export class ExecutionRuntime {
     input: Omit<ExecutorInput, 'onProgress'>,
     onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void,
   ): Promise<ExecutorResult> {
+    let progressCallbackError: Error | null = null;
     try {
       return await executor.execute({
         ...input,
-        onProgress: event => onProgress(event, executor),
+        onProgress: event => {
+          try {
+            onProgress(event, executor);
+          } catch (error) {
+            progressCallbackError = error as Error;
+            throw error;
+          }
+        },
       });
     } catch (error) {
+      if (progressCallbackError === error) {
+        throw error;
+      }
       return {
         success: false,
         output: '',

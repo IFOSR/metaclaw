@@ -122,6 +122,14 @@ export class WorkUnitRepo {
     } = {},
   ): void {
     const now = new Date().toISOString();
+    const existing = this.findById(id);
+    if (!existing) {
+      return;
+    }
+    const hasClaimedTaskId = Object.prototype.hasOwnProperty.call(changes, 'claimedTaskId');
+    const hasClaimedSubtaskId = Object.prototype.hasOwnProperty.call(changes, 'claimedSubtaskId');
+    const hasHeartbeatAt = Object.prototype.hasOwnProperty.call(changes, 'heartbeatAt');
+    const hasLeaseExpiresAt = Object.prototype.hasOwnProperty.call(changes, 'leaseExpiresAt');
     this.db.prepare(`
       UPDATE work_units
       SET state = ?,
@@ -133,10 +141,10 @@ export class WorkUnitRepo {
       WHERE id = ?
     `).run(
       state,
-      changes.claimedTaskId ?? null,
-      changes.claimedSubtaskId ?? null,
-      changes.heartbeatAt ?? null,
-      changes.leaseExpiresAt ?? null,
+      hasClaimedTaskId ? changes.claimedTaskId ?? null : existing.claimedTaskId,
+      hasClaimedSubtaskId ? changes.claimedSubtaskId ?? null : existing.claimedSubtaskId,
+      hasHeartbeatAt ? changes.heartbeatAt ?? null : existing.heartbeatAt,
+      hasLeaseExpiresAt ? changes.leaseExpiresAt ?? null : existing.leaseExpiresAt,
       now,
       id,
     );
@@ -175,6 +183,8 @@ export class WorkUnitRepo {
     for (const row of rows) {
       this.updateState(row.id, 'heartbeat_lost');
     }
-    return rows.map(rowToWorkUnit);
+    return rows
+      .map(row => this.findById(row.id))
+      .filter((workUnit): workUnit is WorkUnit => workUnit !== null);
   }
 }

@@ -102,11 +102,15 @@ export class SubtaskRepo {
 
   updateStatus(id: string, status: TaskStatus, changes: { result?: string; error?: string | null } = {}): void {
     const now = new Date().toISOString();
+    const hasError = Object.prototype.hasOwnProperty.call(changes, 'error');
     this.db.prepare(`
       UPDATE subtasks
-      SET status = ?, result = COALESCE(?, result), error = ?, updated_at = ?
+      SET status = ?,
+          result = COALESCE(?, result),
+          error = CASE WHEN ? THEN ? ELSE error END,
+          updated_at = ?
       WHERE id = ?
-    `).run(status, changes.result ?? null, changes.error ?? null, now, id);
+    `).run(status, changes.result ?? null, hasError ? 1 : 0, changes.error ?? null, now, id);
   }
 
   deleteByTask(taskId: string): void {

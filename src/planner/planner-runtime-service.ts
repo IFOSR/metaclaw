@@ -52,16 +52,20 @@ export class PlannerRuntimeService {
     const existing = this.subtaskRepo.listByTask(input.task.id);
     if (existing.length > 0) {
       const resumed = existing.map(subtask => {
-        if (subtask.status === 'done' || subtask.status === 'running') {
+        if (subtask.status === 'done') {
           return subtask;
         }
+        const previousStatus = subtask.status;
         const readySubtask = {
           ...subtask,
           status: 'ready' as const,
-          error: null,
         };
-        this.subtaskRepo.upsert(readySubtask);
-        this.recordTaskEvent(input.task.id, readySubtask.id, 'subtask_resumed', readySubtask.title, {});
+        if (previousStatus !== 'ready') {
+          this.subtaskRepo.upsert(readySubtask);
+          this.recordTaskEvent(input.task.id, readySubtask.id, 'subtask_recovered_for_dispatch', readySubtask.title, {
+            previousStatus,
+          });
+        }
         return readySubtask;
       });
       return {

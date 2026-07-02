@@ -123,3 +123,26 @@ export function seedDefaultWorkUnits(
     });
   }
 }
+
+export function ensureExecutorWorkUnit(
+  workUnitRepo: Pick<WorkUnitRepo, 'upsert' | 'findById'>,
+  agentClassName: string,
+): void {
+  const id = `executor-${agentClassName}-1`;
+  if (workUnitRepo.findById(id)) {
+    return;
+  }
+  const now = new Date().toISOString();
+  workUnitRepo.upsert({
+    id,
+    agentClassName,
+    agentClassKind: 'executor',
+    state: 'idle',
+    claimedTaskId: null,
+    claimedSubtaskId: null,
+    heartbeatAt: now,
+    leaseExpiresAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
