@@ -119,18 +119,18 @@ describe('ExecutionStrategyPlanner', () => {
 
     expect(strategy.mode).toBe('multi_executor');
     if (strategy.mode !== 'multi_executor') throw new Error('expected multi_executor');
-    expect(strategy.workUnits.map(unit => unit.id)).toEqual([
-      'wu_research',
-      'wu_implementation',
-      'wu_review',
+    expect(strategy.subtasks.map(unit => unit.id)).toEqual([
+      'subtask_research',
+      'subtask_implementation',
+      'subtask_review',
     ]);
-    expect(strategy.workUnits.find(unit => unit.id === 'wu_implementation')?.dependsOn).toEqual(['wu_research']);
-    expect(strategy.workUnits.find(unit => unit.id === 'wu_review')?.dependsOn).toEqual(['wu_implementation']);
+    expect(strategy.subtasks.find(unit => unit.id === 'subtask_implementation')?.dependsOn).toEqual(['subtask_research']);
+    expect(strategy.subtasks.find(unit => unit.id === 'subtask_review')?.dependsOn).toEqual(['subtask_implementation']);
     expect(strategy.aggregation.mode).toBe('verify_and_summarize');
     expect(strategy.aggregation.conflictPolicy).toBe('flag_conflicts');
   });
 
-  it('adds an independent review work unit for repo mutation with high-risk validation', () => {
+  it('adds an independent review subtask for repo mutation with high-risk validation', () => {
     const strategy = new ExecutionStrategyPlanner().plan({
       task: createTask(),
       userPrompt: '大规模重构任务系统代码，完成后做独立评审和测试验收',
@@ -146,8 +146,8 @@ describe('ExecutionStrategyPlanner', () => {
 
     expect(strategy.mode).toBe('multi_executor');
     if (strategy.mode !== 'multi_executor') throw new Error('expected multi_executor');
-    expect(strategy.workUnits.some(unit => unit.expectedOutput === 'patch')).toBe(true);
-    const review = strategy.workUnits.find(unit => unit.expectedOutput === 'review');
+    expect(strategy.subtasks.some(unit => unit.expectedOutput === 'patch')).toBe(true);
+    const review = strategy.subtasks.find(unit => unit.expectedOutput === 'review');
     expect(review).toBeDefined();
     expect(review?.riskLevel).toBe('high');
     expect(review?.acceptance.join(' ')).toContain('pass');
@@ -170,7 +170,7 @@ describe('ExecutionStrategyPlanner', () => {
     expect(strategy.mode).toBe('multi_executor');
     if (strategy.mode !== 'multi_executor') throw new Error('expected multi_executor');
     expect(strategy.reason).toContain('用户显式要求多 agent');
-    expect(strategy.workUnits.length).toBeGreaterThanOrEqual(1);
+    expect(strategy.subtasks.length).toBeGreaterThanOrEqual(1);
     expect(strategy.aggregation.mode).toBe('summarize');
   });
 

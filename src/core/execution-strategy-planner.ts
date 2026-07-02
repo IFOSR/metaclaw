@@ -16,7 +16,7 @@ export interface ExecutionStrategyInput {
   resources: string[];
 }
 
-export interface ExecutionWorkUnit {
+export interface ExecutionSubtask {
   id: string;
   title: string;
   goal: string;
@@ -37,7 +37,7 @@ export interface AcceptanceCriterion {
   description: string;
   requiredEvidence: string[];
   severity: 'must' | 'should';
-  appliesToWorkUnitIds: string[];
+  appliesToSubtaskIds: string[];
 }
 
 export interface AggregationPlan {
@@ -57,7 +57,7 @@ export type ExecutionStrategy =
   | {
       mode: 'multi_executor';
       reason: string;
-      workUnits: ExecutionWorkUnit[];
+      subtasks: ExecutionSubtask[];
       aggregation: AggregationPlan;
     };
 
@@ -190,17 +190,17 @@ export class ExecutionStrategyPlanner {
       };
     }
 
-    const workUnits = this.buildWorkUnits(input, signals);
+    const subtasks = this.buildSubtasks(input, signals);
     return {
       mode: 'multi_executor',
       reason: `命中复杂任务强信号：${signals.map(signal => signal.reason).join('；')}`,
-      workUnits,
+      subtasks,
       aggregation: {
-        mode: workUnits.some(unit => unit.expectedOutput === 'patch' || unit.expectedOutput === 'review')
+        mode: subtasks.some(unit => unit.expectedOutput === 'patch' || unit.expectedOutput === 'review')
           ? 'verify_and_summarize'
           : 'summarize',
-        acceptance: unique(workUnits.flatMap(unit => unit.acceptance)),
-        criteria: this.buildAcceptanceCriteria(input, workUnits),
+        acceptance: unique(subtasks.flatMap(unit => unit.acceptance)),
+        criteria: this.buildAcceptanceCriteria(input, subtasks),
         conflictPolicy: 'flag_conflicts',
         maxIterations: 2,
       },
@@ -209,66 +209,66 @@ export class ExecutionStrategyPlanner {
 
   private buildAcceptanceCriteria(
     input: ExecutionStrategyInput,
-    workUnits: ExecutionWorkUnit[],
+    subtasks: ExecutionSubtask[],
   ): AcceptanceCriterion[] {
     const criteria: AcceptanceCriterion[] = [{
       id: 'user_request_satisfied',
       description: `最终结果必须回应用户原始需求：${input.userPrompt}`,
       requiredEvidence: ['最终汇总说明每个用户需求点如何被满足'],
       severity: 'must',
-      appliesToWorkUnitIds: workUnits.map(unit => unit.id),
+      appliesToSubtaskIds: subtasks.map(unit => unit.id),
     }];
 
-    const patchUnitIds = workUnits.filter(unit => unit.expectedOutput === 'patch').map(unit => unit.id);
+    const patchUnitIds = subtasks.filter(unit => unit.expectedOutput === 'patch').map(unit => unit.id);
     if (patchUnitIds.length > 0) {
       criteria.push({
         id: 'patch_verified',
         description: '代码或仓库修改必须提供测试命令，或明确说明未运行测试的原因',
         requiredEvidence: ['测试命令', '测试结果', '未运行测试原因'],
         severity: 'must',
-        appliesToWorkUnitIds: patchUnitIds,
+        appliesToSubtaskIds: patchUnitIds,
       });
     }
 
-    const researchUnitIds = workUnits.filter(unit => unit.expectedOutput === 'analysis').map(unit => unit.id);
+    const researchUnitIds = subtasks.filter(unit => unit.expectedOutput === 'analysis').map(unit => unit.id);
     if (researchUnitIds.length > 0) {
       criteria.push({
         id: 'research_sourced',
         description: '调研或分析必须说明来源、材料范围或来源限制',
         requiredEvidence: ['来源', '材料范围', '来源限制'],
         severity: 'should',
-        appliesToWorkUnitIds: researchUnitIds,
+        appliesToSubtaskIds: researchUnitIds,
       });
     }
 
-    const artifactUnitIds = workUnits.filter(unit => unit.expectedOutput === 'artifact').map(unit => unit.id);
+    const artifactUnitIds = subtasks.filter(unit => unit.expectedOutput === 'artifact').map(unit => unit.id);
     if (artifactUnitIds.length > 0) {
       criteria.push({
         id: 'artifact_delivered',
         description: '文档、报告或其他产物必须返回可定位的文件路径或完整最终内容',
         requiredEvidence: ['文件路径', '最终内容'],
         severity: 'must',
-        appliesToWorkUnitIds: artifactUnitIds,
+        appliesToSubtaskIds: artifactUnitIds,
       });
     }
 
-    const reviewUnitIds = workUnits.filter(unit => unit.expectedOutput === 'review').map(unit => unit.id);
+    const reviewUnitIds = subtasks.filter(unit => unit.expectedOutput === 'review').map(unit => unit.id);
     if (reviewUnitIds.length > 0) {
       criteria.push({
         id: 'review_verdict',
         description: '独立验收审查必须给出 pass 或 concerns，并列出剩余风险',
         requiredEvidence: ['pass', 'concerns', '剩余风险'],
         severity: 'must',
-        appliesToWorkUnitIds: reviewUnitIds,
+        appliesToSubtaskIds: reviewUnitIds,
       });
     }
 
     return criteria;
   }
 
-  private buildWorkUnits(input: ExecutionStrategyInput, signals: ComplexitySignal[]): ExecutionWorkUnit[] {
+  private buildSubtasks(input: ExecutionStrategyInput, signals: ComplexitySignal[]): ExecutionSubtask[] {
     const recalledTaskIds = input.retrievedTasks.map(candidate => candidate.taskId);
-    const units: ExecutionWorkUnit[] = [];
+    const units: ExecutionSubtask[] = [];
     const prompt = input.userPrompt;
     const needsResearch = containsAny(prompt, RESEARCH_TERMS)
       || signals.some(signal => signal.kind === 'multi_source_synthesis');
@@ -279,7 +279,7 @@ export class ExecutionStrategyPlanner {
 
     if (needsResearch) {
       units.push({
-        id: 'wu_research',
+        id: 'subtask_research',
         title: '调研与上下文归纳',
         goal: '汇总外部资料、历史任务和当前资源，形成后续执行依据',
         executorHint: preferredResearchExecutor(input),
@@ -297,11 +297,11 @@ export class ExecutionStrategyPlanner {
 
     if (needsImplementation) {
       units.push({
-        id: 'wu_implementation',
+        id: 'subtask_implementation',
         title: '实现或修改',
         goal: '在仓库中完成必要代码、文档或测试修改',
         executorHint: 'codex-cli',
-        dependsOn: needsResearch ? ['wu_research'] : [],
+        dependsOn: needsResearch ? ['subtask_research'] : [],
         inputs: {
           taskId: input.task.id,
           resources: input.resources,
@@ -313,11 +313,11 @@ export class ExecutionStrategyPlanner {
       });
     } else if (needsArtifact) {
       units.push({
-        id: 'wu_artifact',
+        id: 'subtask_artifact',
         title: '产物生成',
         goal: '生成用户要求的文档、报告、方案或说明',
         executorHint: input.primaryExecutor,
-        dependsOn: needsResearch ? ['wu_research'] : [],
+        dependsOn: needsResearch ? ['subtask_research'] : [],
         inputs: {
           taskId: input.task.id,
           resources: input.resources,
@@ -331,7 +331,7 @@ export class ExecutionStrategyPlanner {
 
     if (needsReview) {
       units.push({
-        id: 'wu_review',
+        id: 'subtask_review',
         title: '独立验收审查',
         goal: '检查前序产物是否满足验收条件并标记风险',
         executorHint: preferredReviewExecutor(input),
@@ -349,7 +349,7 @@ export class ExecutionStrategyPlanner {
 
     if (units.length === 0) {
       units.push({
-        id: 'wu_summary',
+        id: 'subtask_summary',
         title: '综合总结',
         goal: '整合多来源上下文并给出最终结论',
         executorHint: input.primaryExecutor,

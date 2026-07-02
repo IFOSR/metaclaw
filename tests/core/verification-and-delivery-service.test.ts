@@ -11,12 +11,12 @@ import {
   VerificationAndDeliveryService,
   extractConciseExecutorSummary,
 } from '../../src/delivery/verification-and-delivery-service.js';
-import type { AggregationPlan, ExecutionWorkUnit } from '../../src/core/execution-strategy-planner.js';
-import type { WorkUnitResult } from '../../src/execution/multi-executor-orchestrator.js';
+import type { AggregationPlan, ExecutionSubtask } from '../../src/core/execution-strategy-planner.js';
+import type { SubtaskResult } from '../../src/execution/multi-executor-orchestrator.js';
 
-function createAggregationWorkUnit(overrides: Partial<ExecutionWorkUnit>): ExecutionWorkUnit {
+function createAggregationSubtask(overrides: Partial<ExecutionSubtask>): ExecutionSubtask {
   return {
-    id: 'wu_test',
+    id: 'subtask_test',
     title: 'Test unit',
     goal: 'Test goal',
     executorHint: 'codex-cli',
@@ -66,7 +66,7 @@ describe('VerificationAndDeliveryService', () => {
         description: '仓库修改任务必须提供测试结果，或说明未运行测试原因',
         requiredEvidence: ['测试命令', '测试结果', '未运行测试原因'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       }],
     });
 
@@ -95,7 +95,7 @@ describe('VerificationAndDeliveryService', () => {
         description: '仓库修改任务必须提供测试结果，或说明未运行测试原因',
         requiredEvidence: ['测试命令', '测试结果', '未运行测试原因'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       }],
     });
 
@@ -125,7 +125,7 @@ describe('VerificationAndDeliveryService', () => {
         description: '必须产出可访问 artifact',
         requiredEvidence: ['artifact path'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       }],
     });
 
@@ -147,7 +147,7 @@ describe('VerificationAndDeliveryService', () => {
         description: '最终结果必须回应用户原始需求',
         requiredEvidence: ['最终输出或产物说明'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       }],
     });
 
@@ -168,7 +168,7 @@ describe('VerificationAndDeliveryService', () => {
         description: '文档、报告或其他产物必须返回可定位的文件路径或完整最终内容',
         requiredEvidence: ['文件路径', '最终内容'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       }],
     });
 
@@ -198,7 +198,7 @@ describe('VerificationAndDeliveryService', () => {
       preferences: [],
       nextStep: '无后续建议',
       aggregationVerification: {
-        workUnits: [createAggregationWorkUnit({ id: 'wu_missing', expectedOutput: 'review' })],
+        subtasks: [createAggregationSubtask({ id: 'subtask_missing', expectedOutput: 'review' })],
         results: [],
         aggregation: createAggregationPlan(),
       },
@@ -206,7 +206,7 @@ describe('VerificationAndDeliveryService', () => {
 
     expect(result.verification).toEqual({
       status: 'blocked',
-      reason: 'multi-executor aggregation verification failed: 缺少 work unit 执行结果',
+      reason: 'multi-executor aggregation verification failed: 缺少 subtask 执行结果',
     });
   });
 
@@ -216,16 +216,16 @@ describe('VerificationAndDeliveryService', () => {
       acceptanceCriteria: [],
       artifactPaths: [],
       aggregationVerification: {
-        workUnits: [createAggregationWorkUnit({ id: 'wu_patch', expectedOutput: 'patch' })],
+        subtasks: [createAggregationSubtask({ id: 'subtask_patch', expectedOutput: 'patch' })],
         results: [{
-          workUnitId: 'wu_patch',
+          subtaskId: 'subtask_patch',
           executorName: 'codex-cli',
           status: 'success',
           output: 'Changed src/core/foo.ts.',
           artifacts: [],
           startedAt: '2026-06-22T00:00:00.000Z',
           finishedAt: '2026-06-22T00:00:01.000Z',
-        } satisfies WorkUnitResult],
+        } satisfies SubtaskResult],
         aggregation: createAggregationPlan(),
       },
     });

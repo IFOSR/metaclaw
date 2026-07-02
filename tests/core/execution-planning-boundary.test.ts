@@ -36,6 +36,6 @@ describe('Execution planning architecture boundaries', () => {
 
     expect(planningSource).toContain('export interface ExecutionResult');
     expect(planningSource).toContain("status: 'success' | 'failed' | 'blocked' | 'cancelled'");
-    expect(planningSource).toContain('workUnitResults');
+    expect(planningSource).toContain('subtaskResults');
   });
 });

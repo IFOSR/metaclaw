@@ -205,7 +205,7 @@ executeTask
 
 - 基于 `IntentDecisionV2.execution` 决定 single executor、race executor、multi executor。
 - 选择 executor profile。
-- 生成 work units。
+- 生成 subtasks。
 - 生成 acceptance criteria。
 - 输出 `ExecutionPlanV2`。
 
@@ -495,7 +495,7 @@ interface IntentDecisionV2 {
 - planner 入口改为 `IntentDecisionV2.execution`。
 - 关键词复杂度判断只保留为 fallback hints。
 - 生成 single executor、race executor、multi executor plan。
-- 生成 work units 和 acceptance criteria。
+- 生成 subtasks 和 acceptance criteria。
 
 `ExecutionResult` 至少包含：
 
@@ -508,7 +508,7 @@ interface ExecutionResult {
   output: string;
   error: string | null;
   artifacts: string[];
-  workUnitResults: WorkUnitResult[];
+  subtaskResults: SubtaskResult[];
   durationMs: number;
   userPrompt: string;
   preferences: ResolvedPreference[];
@@ -540,7 +540,7 @@ interface ExecutionResult {
 - `QueuedExecutionRequest.semanticExecutorDecision` 必须贯穿到 runtime，不允许执行时重新做自然语言路由。
 - `MultiExecutorOrchestrator` 接入主路径。
 - `AgenticLoopController` 接入复杂任务主路径。
-- 后序 work unit 必须能看到前序 work unit 输出。
+- 后序 subtask 必须能看到前序 subtask 输出。
 - `ExecutionRuntime.run()` 只产出标准化 `ExecutionResult`，不内联 Feishu 投递和最终展示。
 - Scheduler bridge 接入 runtime：执行完成后通过 `markDispatchFinished()` 或 `markDispatchBlocked()` 触发后续调度。
 

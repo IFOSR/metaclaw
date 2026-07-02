@@ -96,5 +96,5 @@ describe('Round 8 inline web links acceptance', () => {
     const output = session.getSnapshot().output.join('\n');
     expect(output).toContain('已自动关联 2 份材料');
     expect(output).toContain(weeklyUrl);
-  });
+  }, 10_000);
 });

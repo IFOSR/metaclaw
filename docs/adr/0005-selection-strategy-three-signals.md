@@ -6,7 +6,7 @@ status: proposed
 
 ## Context
 
-When a work unit's required `CapabilityClass` is satisfied by more than one available executor (e.g. `code_edit` → codex-cli / claude-code / deepseek-tui), the router must pick a primary. The legacy approach scored executors with a static `historicalSuccess` seed (ADR-0001 abolishes it). A new, non-static selection signal is needed.
+When a subtask's required `CapabilityClass` is satisfied by more than one available executor (e.g. `code_edit` → codex-cli / claude-code / deepseek-tui), the router must pick a primary. The legacy approach scored executors with a static `historicalSuccess` seed (ADR-0001 abolishes it). A new, non-static selection signal is needed.
 
 The user's positioning: this is an open-source project for individual users. Selection among same-class executors uses basic, hard-quantifiable logic — "the most preliminary intelligence." A more data-rich efficiency/robustness/quality routing strategy is an enterprise (paid) concern, out of scope for the project, documented only as an advanced option (e.g. in README).
 

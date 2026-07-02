@@ -39,8 +39,8 @@ function createStrategy(): Extract<ExecutionStrategy, { mode: 'multi_executor' }
   return {
     mode: 'multi_executor',
     reason: 'test',
-    workUnits: [{
-      id: 'wu_patch',
+    subtasks: [{
+      id: 'subtask_patch',
       title: 'Patch',
       goal: 'Modify code',
       executorHint: 'codex-cli',
@@ -58,7 +58,7 @@ function createStrategy(): Extract<ExecutionStrategy, { mode: 'multi_executor' }
         description: 'Patch must be verified',
         requiredEvidence: ['tests'],
         severity: 'must',
-        appliesToWorkUnitIds: ['wu_patch'],
+        appliesToSubtaskIds: ['subtask_patch'],
       }],
       conflictPolicy: 'flag_conflicts',
       maxIterations: 2,
@@ -73,7 +73,7 @@ describe('AgenticLoopController', () => {
         .mockResolvedValueOnce({
           status: 'success',
           results: [{
-            workUnitId: 'wu_patch',
+            subtaskId: 'subtask_patch',
             executorName: 'codex-cli',
             status: 'success',
             output: 'Changed src/core/foo.ts',
@@ -85,7 +85,7 @@ describe('AgenticLoopController', () => {
         .mockResolvedValueOnce({
           status: 'success',
           results: [{
-            workUnitId: 'wu_patch',
+            subtaskId: 'subtask_patch',
             executorName: 'codex-cli',
             status: 'success',
             output: 'Changed src/core/foo.ts. npm test -- tests/execution/agentic-loop-controller.test.ts',
@@ -108,7 +108,7 @@ describe('AgenticLoopController', () => {
     expect(result.status).toBe('pass');
     expect(result.iterations).toBe(2);
     expect(orchestrator.run).toHaveBeenCalledTimes(2);
-    expect(orchestrator.run.mock.calls[1]?.[0].strategy.workUnits[0].goal).toContain('Agentic loop feedback');
+    expect(orchestrator.run.mock.calls[1]?.[0].strategy.subtasks[0].goal).toContain('Agentic loop feedback');
     expect(result.aggregation.finalOutput).toContain('Verification: pass');
   });
 
@@ -117,7 +117,7 @@ describe('AgenticLoopController', () => {
       run: vi.fn().mockResolvedValue({
         status: 'success',
         results: [{
-          workUnitId: 'wu_patch',
+          subtaskId: 'subtask_patch',
           executorName: 'codex-cli',
           status: 'success',
           output: 'Changed src/core/foo.ts',

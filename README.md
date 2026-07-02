@@ -14,7 +14,7 @@ It is built for teams who need agents to do more than answer the current turn. M
 - Uses semantic priority, not keyword matching, for scheduler ordering when work is eligible to run.
 - Enforces one active top-level task at a time while the routing layer is being hardened.
 - Searches historical tasks with a local SQLite FTS index and hybrid retrieval.
-- Plans complex work as explicit work units with acceptance criteria and aggregation rules.
+- Plans complex work as explicit subtasks with acceptance criteria and aggregation rules.
 - Routes work across executors by task intent, executor capability, and ownership boundaries.
 - Provides a tested Agentic Loop core that aggregates executor results, checks evidence, and feeds failures back for retry.
 - Recalls only clearly applicable preferences and task memory; uncertain recall is skipped by default so Feishu and unattended executors never wait for confirmation.
@@ -114,7 +114,7 @@ The conversation/task boundary matters:
 
 The current direct-reply path is explicit: MetaClaw first shows intent understanding, then recalls recent conversation context, then sends the answer to the selected executor. Feishu and TUI output separate `MetaClaw` milestones from concrete `Executor: <name>` milestones so users can see whether the router, the scheduler, or the executor is doing the work. Feishu final replies wait for direct-reply output to settle before sending the answer, so a progress card does not replace the final result.
 
-The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is reflected in the codebase: task search indexing, hybrid task retrieval, execution strategy planning, multi-executor work units, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
+The Task OS upgrade described in [MetaClaw Task OS Architecture And Strategy Upgrade](docs/plans/2026-06-14-metaclaw-task-os-architecture-strategy-upgrade.md) is reflected in the codebase: task search indexing, hybrid task retrieval, execution strategy planning, multi-executor subtasks, aggregation, verification, and the Agentic Loop core are implemented and covered by targeted tests. Broad Executor Discovery, remote registries, and large multi-client Gateway expansion remain intentionally out of scope for this cycle.
 
 Important runtime boundary: the Agentic Loop is implemented as a core architecture layer and tested directly. The current interactive/script session path uses the session runtime unless a feature path explicitly calls the strategy/orchestration loop.
 
@@ -443,7 +443,7 @@ MetaClaw calls it as:
 hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
 
-`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. Current single-executor research routing does not race Pi Agent and Hermes Agent. MetaClaw selects one primary executor from the ExecutionPolicy and uses the configured fallback chain only if that executor fails. Complex multi-executor strategies can still assign different work units to different executors inside one top-level task.
+`--oneshot` runs Hermes in script/headless mode, `--yolo` bypasses dangerous-command approval prompts, and `--accept-hooks` auto-accepts unseen hooks. Current single-executor research routing does not race Pi Agent and Hermes Agent. MetaClaw selects one primary executor from the ExecutionPolicy and uses the configured fallback chain only if that executor fails. Complex multi-executor strategies can still assign different subtasks to different executors inside one top-level task.
 
 ### Retired Legacy Adapters
 
@@ -659,7 +659,7 @@ MetaClaw will:
 3. Retrieve relevant historical task context when available.
 4. Apply semantic task priority.
 5. Route the task to the best executor.
-6. For complex work, build work units and acceptance criteria.
+6. For complex work, build subtasks and acceptance criteria.
 7. Execute and stream progress.
 8. Store result summaries, artifacts, and task memory.
 9. Suggest what to do next.
@@ -731,7 +731,7 @@ MetaClaw currently uses a single active top-level task with a scheduler in front
 
 While one top-level task is running, `TaskAdmissionGate` rejects new unrelated durable tasks and execution requests for other tasks. It still allows direct replies, clarifications, status queries, clear-task commands, and work that explicitly targets the active task. Queueing, urgent preemption, and auto-resume of a second top-level task are intentionally disabled in the current scope; ADR-0011 tracks this as a reversible decision.
 
-This prevents queued work from wasting compute while preserving task safety. Multi-executor work units can still run inside the one admitted top-level task when the ExecutionPolicy strategy calls for it.
+This prevents queued work from wasting compute while preserving task safety. Multi-executor subtasks can still run inside the one admitted top-level task when the ExecutionPolicy strategy calls for it.
 
 ## Executor Routing
 
@@ -744,17 +744,17 @@ The older `ExecutorRouter` and legacy route intent names such as `repo_execution
 MetaClaw can represent complex requests as a strategy instead of a single undifferentiated prompt. The strategy planner decides between:
 
 - `single_executor`: one executor is enough.
-- `multi_executor`: split the request into work units with executor hints, dependencies, inputs, expected output type, risk level, and acceptance checks.
+- `multi_executor`: split the request into subtasks with executor hints, dependencies, inputs, expected output type, risk level, and acceptance checks.
 
 The planner uses complexity signals such as explicit multi-agent wording, multiple capability domains, staged dependencies, high-risk validation, multiple resources, and relevant historical tasks.
 
 For multi-executor strategies, the Agentic Loop core is:
 
-1. Run work units through `MultiExecutorOrchestrator`.
+1. Run subtasks through `MultiExecutorOrchestrator`.
 2. Aggregate results with `ExecutionAggregator`.
-3. Check required evidence: user request coverage, patch test evidence, research sources, artifact paths, review verdicts, missing work units, and cross-unit conflicts.
+3. Check required evidence: user request coverage, patch test evidence, research sources, artifact paths, review verdicts, missing subtasks, and cross-unit conflicts.
 4. If verification passes, produce the final aggregated result.
-5. If verification has concerns, append targeted feedback to failed work units and retry until the strategy passes or reaches `maxIterations`.
+5. If verification has concerns, append targeted feedback to failed subtasks and retry until the strategy passes or reaches `maxIterations`.
 6. If it still fails, return `blocked` with the reason instead of silently shipping an unverified result.
 
 This is the acceptance layer for agentic work: executor output is not treated as final just because a worker returned text. The core modules are implemented and tested; integration into each user-facing execution path is intentionally staged so existing runtime behavior remains stable.

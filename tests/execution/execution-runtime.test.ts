@@ -87,14 +87,14 @@ function createPolicy(overrides: Partial<ExecutionPolicy> = {}): ExecutionPolicy
     strategy: {
       mode: 'single_executor',
       reason: 'test strategy',
-      workUnits: [],
+      subtasks: [],
       aggregation: {
         summary: 'single executor',
         requiredArtifacts: [],
         criteria: [],
       },
     },
-    workUnits: [],
+    subtasks: [],
     ...overrides,
   };
 }
@@ -233,9 +233,9 @@ describe('ExecutionRuntime', () => {
         strategy: {
           mode: 'multi_executor',
           reason: 'research then implement',
-          workUnits: [
+          subtasks: [
             {
-              id: 'wu_research',
+              id: 'subtask_research',
               title: 'Research',
               goal: 'Research first',
               executorHint: 'hermes-agent',
@@ -246,11 +246,11 @@ describe('ExecutionRuntime', () => {
               riskLevel: 'medium',
             },
             {
-              id: 'wu_implementation',
+              id: 'subtask_implementation',
               title: 'Implementation',
               goal: 'Implement after research',
               executorHint: 'codex-cli',
-              dependsOn: ['wu_research'],
+              dependsOn: ['subtask_research'],
               inputs: { taskId: 'task_runtime', resources: [], recalledTaskIds: [] },
               expectedOutput: 'patch',
               acceptance: ['include tests'],
@@ -278,11 +278,11 @@ describe('ExecutionRuntime', () => {
       status: 'success',
       executorName: 'codex-cli',
     });
-    expect(result.workUnitResults.map(item => item.workUnitId)).toEqual(['wu_research', 'wu_implementation']);
+    expect(result.subtaskResults.map(item => item.subtaskId)).toEqual(['subtask_research', 'subtask_implementation']);
     expect(hermes.execute).toHaveBeenCalledTimes(1);
     expect(codex.execute).toHaveBeenCalledTimes(1);
     const implementationPrompt = (codex.execute as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].userPrompt;
-    expect(implementationPrompt).toContain('Previous work unit outputs');
+    expect(implementationPrompt).toContain('Previous subtask outputs');
     expect(implementationPrompt).toContain('research sources');
   });
 

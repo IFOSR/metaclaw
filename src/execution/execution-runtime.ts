@@ -13,7 +13,7 @@ import type { Config, ExecutorResult } from '../core/types.js';
 import type { ExecutionResult } from '../core/execution-planning-service.js';
 import type { ExecutionPolicy } from '../core/execution-policy.js';
 import type { ExecutionStrategy } from '../core/execution-strategy-planner.js';
-import { MultiExecutorOrchestrator, type WorkUnitResult } from './multi-executor-orchestrator.js';
+import { MultiExecutorOrchestrator, type SubtaskResult } from './multi-executor-orchestrator.js';
 import { AgenticLoopController } from './agentic-loop-controller.js';
 
 export interface ExecutorRegistryDeps {
@@ -182,7 +182,7 @@ export class ExecutionRuntime {
       input,
       executor: attempt.executor,
       result: attempt.result,
-      workUnitResults: [],
+      subtaskResults: [],
       runtime: {
         attemptedExecutors: attempt.attemptedExecutors,
         fallbackExecutors: attempt.fallbackExecutors,
@@ -206,7 +206,7 @@ export class ExecutionRuntime {
         input,
         executor: fallbackExecutor,
         result,
-        workUnitResults: [],
+        subtaskResults: [],
         runtime: {
           attemptedExecutors: [fallbackExecutor.name],
           fallbackExecutors: [],
@@ -217,7 +217,7 @@ export class ExecutionRuntime {
     }
 
     const startedAt = Date.now();
-    const executors = this.resolveWorkUnitExecutors(input.policy.strategy);
+    const executors = this.resolveSubtaskExecutors(input.policy.strategy);
     const loopResult = await this.agenticLoopController.run({
       strategy: input.policy.strategy,
       task: input.executorInput.task,
@@ -238,7 +238,7 @@ export class ExecutionRuntime {
       input,
       executor: this.registry.resolveRequired(input.policy.primaryExecutor),
       result,
-      workUnitResults: loopResult.results,
+      subtaskResults: loopResult.results,
       runtime: {
         attemptedExecutors: Array.from(executors.values()).map(item => item.name),
         fallbackExecutors: [],
@@ -252,7 +252,7 @@ export class ExecutionRuntime {
     input: ExecutionRuntimeRunInput;
     executor: ExecutorAdapter;
     result: ExecutorResult;
-    workUnitResults: WorkUnitResult[];
+    subtaskResults: SubtaskResult[];
     runtime: ExecutionResult['runtime'];
   }): ExecutionResult {
     return {
@@ -264,8 +264,8 @@ export class ExecutionRuntime {
       executorName: input.executor.name,
       output: input.result.output,
       error: input.result.error ?? null,
-      artifacts: input.workUnitResults.flatMap(result => result.artifacts),
-      workUnitResults: input.workUnitResults,
+      artifacts: input.subtaskResults.flatMap(result => result.artifacts),
+      subtaskResults: input.subtaskResults,
       durationMs: input.result.durationMs,
       userPrompt: input.input.executorInput.userPrompt,
       preferences: input.input.executorInput.executionContextBundle?.memoryContext.resolvedPreferences ?? [],
@@ -278,9 +278,9 @@ export class ExecutionRuntime {
     };
   }
 
-  private resolveWorkUnitExecutors(strategy: Extract<ExecutionStrategy, { mode: 'multi_executor' }>): Map<string, ExecutorAdapter> {
+  private resolveSubtaskExecutors(strategy: Extract<ExecutionStrategy, { mode: 'multi_executor' }>): Map<string, ExecutorAdapter> {
     const executors = new Map<string, ExecutorAdapter>();
-    for (const unit of strategy.workUnits) {
+    for (const unit of strategy.subtasks) {
       const executor = this.registry.resolve(unit.executorHint);
       if (executor) {
         executors.set(unit.executorHint, executor);

@@ -4,7 +4,7 @@ import { ExecutionPolicyPlanner } from '../routing/execution-policy-planner.js';
 import type { ExecutorProfile, IntentDecision } from './executor-router.js';
 import type { ExecutionPolicy } from './execution-policy.js';
 import type { IntentDecisionV2 } from './intent-orchestrator.js';
-import type { WorkUnitResult } from '../execution/multi-executor-orchestrator.js';
+import type { SubtaskResult } from '../execution/multi-executor-orchestrator.js';
 import type { ExecutionContextBundleV2, ResolvedPreference, Task } from './types.js';
 
 export interface ExecutionPlanningInput {
@@ -27,7 +27,7 @@ export interface ExecutionResult {
   output: string;
   error: string | null;
   artifacts: string[];
-  workUnitResults: WorkUnitResult[];
+  subtaskResults: SubtaskResult[];
   durationMs: number;
   userPrompt: string;
   preferences: ResolvedPreference[];

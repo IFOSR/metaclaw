@@ -1,7 +1,7 @@
 import type { AcceptanceCriterion } from './execution-strategy-planner.js';
 import type {
   ExecutionStrategy,
-  ExecutionWorkUnit,
+  ExecutionSubtask,
 } from './execution-strategy-planner.js';
 import type { CapabilityClass } from './capability-class.js';
 
@@ -25,5 +25,5 @@ export interface ExecutionPolicy {
   capabilityClasses: CapabilityClass[];
   reason: string;
   strategy: ExecutionStrategy;
-  workUnits: ExecutionWorkUnit[];
+  subtasks: ExecutionSubtask[];
 }

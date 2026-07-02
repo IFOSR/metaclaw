@@ -255,7 +255,7 @@ export class ExecutionPolicyPlanner {
       capabilityClasses: [capabilityClass],
       reason: strategy.reason,
       strategy,
-      workUnits: strategy.mode === 'multi_executor' ? strategy.workUnits : [],
+      subtasks: strategy.mode === 'multi_executor' ? strategy.subtasks : [],
     };
   }
 
@@ -268,7 +268,7 @@ export class ExecutionPolicyPlanner {
       description: `Final result must satisfy the original user request: ${input.userPrompt}`,
       requiredEvidence: ['final output or artifact explanation'],
       severity: 'must',
-      appliesToWorkUnitIds: [],
+      appliesToSubtaskIds: [],
     }];
 
     if (capabilityClass === 'code_edit') {
@@ -277,7 +277,7 @@ export class ExecutionPolicyPlanner {
         description: 'Repository modification tasks must provide test results or explain why tests were not run.',
         requiredEvidence: ['test command', 'test result', 'reason tests were not run'],
         severity: 'must',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       });
     }
 
@@ -287,7 +287,7 @@ export class ExecutionPolicyPlanner {
         description: 'Research tasks must state sources, material scope, or source limitations.',
         requiredEvidence: ['sources', 'material scope', 'source limitations'],
         severity: 'should',
-        appliesToWorkUnitIds: [],
+        appliesToSubtaskIds: [],
       });
     }
 

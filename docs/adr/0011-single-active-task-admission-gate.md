@@ -44,7 +44,7 @@ now. This is a scope decision, not a discovery of a bug.
 ## Consequences
 
 - **Queueing, preemption, and auto-resume of a *second* task are intentionally
-  disabled.** The single active task may still contain multiple work units on
+  disabled.** The single active task may still contain multiple subtasks on
   different executors (see CONTEXT.md "Single Active Task") — the restriction is
   on *top-level* task intake, not on intra-task parallelism.
 - The following pre-existing acceptance cases encode the *old* multi-task

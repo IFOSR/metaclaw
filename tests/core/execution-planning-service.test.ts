@@ -179,7 +179,7 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('multi_executor');
-    expect(plan.workUnits.length).toBeGreaterThan(1);
+    expect(plan.subtasks.length).toBeGreaterThan(1);
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toContain('user_request_satisfied');
   });
 
@@ -201,7 +201,7 @@ describe('ExecutionPlanningService', () => {
     });
 
     expect(plan.mode).toBe('single_executor');
-    expect(plan.workUnits).toEqual([]);
+    expect(plan.subtasks).toEqual([]);
     expect(plan.acceptanceCriteria.map(criterion => criterion.id)).toEqual(['user_request_satisfied']);
   });
 });

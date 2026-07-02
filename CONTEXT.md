@@ -16,82 +16,74 @@ When touching routing, update focused tests around the active path first: `tests
 
 ## Routing Language
 
-**Task**:
-A top-level durable user goal accepted by MetaClaw. A task may contain multiple work units, and those work units may run on different executors as long as their executor sessions are isolated and tracked under the same task.
-_Avoid_: request, user input, executor run, single executor
+**Task（任务）**:
+A user-opened conversation window with a unique id and its own durable context, including user messages, task state, execution results, and later re-entry. A task may contain multiple subtasks, and tasks and subtasks use the same task state vocabulary.
+_Avoid_: request, prompt, executor run, browser tab
 
-**Single Active Task**:
-The admission rule that MetaClaw accepts only one top-level task for execution at a time. It does not mean one work unit, one executor, or no internal parallelism; while the active task runs, new unrelated top-level tasks are rejected at the intake boundary. This is a **deliberate current-scope decision** (see [`docs/adr/0011-single-active-task-admission-gate.md`](docs/adr/0011-single-active-task-admission-gate.md)): to reduce development load while the routing layer is the priority, multi-task queueing / preemption / auto-resume of a *second* task are intentionally disabled and enforced by `TaskAdmissionGate` (`src/session/task-admission-gate.ts`). It is reversible — relax the gate (don't delete it) when multi-task scheduling is reprioritized.
-_Avoid_: single executor, single work unit, no parallelism, no decomposition
+**Subtask（子任务）**:
+A decomposed piece of work inside a task, planned so it can be claimed and executed by one work unit at a time. Subtasks share the task state vocabulary rather than having a separate lifecycle language.
+_Avoid_: work unit, executor instance, raw prompt
 
-**ExecutionPolicy**:
-The output of the routing decision. Replaces `ExecutionPlanV2`. Describes not only *who runs* but *how the result is verified*, *whether isolation is required*, and *what happens on failure*.
-_Avoid_: ExecutionPlan, ExecutionPlanV2, plan
+**Task State（任务状态）**:
+The shared lifecycle vocabulary for tasks and subtasks, currently including states such as created, ready, running, parked, blocked, done, archived, and cancelled.
+_Avoid_: executor state, work unit state
 
-**Work Unit**:
-The execution granularity inside a task: a single, already-decomposed piece of work with a clear goal and required capability. The router consumes work units and decides dispatch for each; a work unit may also be called a subtask when emphasizing that it belongs to a parent task.
-_Avoid_: top-level task, request, user input (too raw), executor run
+**Agent Class（Agent 类）**:
+A fixed configuration template for a type of agent, including its harness, model, skills, MCP servers, plugins, and runtime settings. MetaClaw starts with two canonical classes: planner and executor.
+_Avoid_: executor profile, capability class, instance, worker
 
-**Leader**:
-The temporary coordinator for one top-level task. A leader decomposes the task into a work graph, records work-unit events, and dispatches ready work units through MetaClaw's runtime. It does not perform implementation, research, writing, review, or other executor work itself.
-_Avoid_: executor, worker, always-on router, implementation agent
+**Planner（规划器）**:
+The agent class responsible for task intake, subtask planning, dispatch decisions, human-instruction handling, and receiving reports from executor work units. A planner coordinates but does not perform executor work itself.
+_Avoid_: leader, router agent, implementation agent, executor
 
-**Work Graph**:
-The dependency graph of work units under one top-level task. It describes what must be done, which work units depend on which prior work units, and what capability class each work unit needs. It is the leader's planning output and the runtime's scheduling input.
+**Executor（执行器）**:
+The agent class responsible for carrying out claimed subtasks and reporting results back to the planner/task context. Executors do not own task planning.
+_Avoid_: planner, leader, router
+
+**Work Unit（工作单元）**:
+A concrete runtime agent instance that belongs to an agent class and can be either a planner or an executor. A work unit is the runtime slot that starts, idles, claims work, runs, waits, heartbeats, drains, fails, or stops.
+_Avoid_: subtask, task, agent class, capability class
+
+**Work Unit State（工作单元状态）**:
+The runtime lifecycle vocabulary for work units: starting, idle, claimed, running, waiting, heartbeat_lost, failed, draining, and stopped.
+_Avoid_: task state, subtask state
+
+**Work Graph（工作图）**:
+The dependency graph of subtasks under one task. It describes what must be done, which subtasks depend on which prior subtasks, and what agent class or execution capability each subtask requires.
 _Avoid_: raw prompt, route decision, executor plan, issue thread
 
-**Work Unit Event**:
-A durable event about a work unit or work graph, such as planned, ready, dispatched, blocked, succeeded, failed, cancelled, or lease-expired. Work unit events are the replayable source of truth for leader recovery; session output is only a UI projection.
-_Avoid_: TUI output line, transient progress text, executor-only log
+**Work Unit Event（工作单元事件）**:
+A durable runtime event about a work unit, such as state changes, claims, heartbeats, failures, draining, or stop events.
+_Avoid_: TUI output line, transient progress text, task message
 
-**Task Runtime View**:
-The runtime picture MetaClaw maintains for the active task: the parent task, its work units, each work unit's executor session, work unit progress, and executor state. This is task state, not just executor telemetry.
+**Task Event（任务事件）**:
+A durable event about a task or subtask, such as planned, ready, dispatched, blocked, succeeded, failed, cancelled, or resumed. Task events are the replayable source of truth for planner recovery; session output is only a UI projection.
+_Avoid_: executor-only log, route event, progress line
+
+**Task Runtime View（任务运行视图）**:
+The runtime picture MetaClaw maintains for a task: the task conversation, subtasks, current work graph, claimed work units, progress, and reports.
 _Avoid_: executor-only status, route event, transcript
 
-**Primary Executor**:
-The single executor that owns the main execution for a request. Every policy has exactly one.
-_Avoid_: selected executor, main agent, dispatcher target
-
-**Complementary Executor**:
-A standby executor selected because it covers a *different capability class* than the primary — e.g. one coding agent (Codex CLI / Claude Code) plus one office/automation agent (OpenClaw / Hermes). Complementarity, not redundancy, is the selection principle. Availability and customer subscription constrain the choice.
-_Avoid_: candidate executor, backup executor, secondary agent, standby (too vague)
-
-**Parallelism Criterion**:
-Whether executors run in parallel or in sequence is decided by *causal dependence*, not by executor type or count. Causally independent work units within the active task may run in parallel, each in an isolated worktree; causally dependent work units run in dependency order under the same parent task.
-_Avoid_: concurrent execution (too vague), parallel agents, single-executor-only task
-
-**Capability Class**:
-A coarse classification of a request's needed competence, defined by *tool/side-effect boundary* (not executor strength). Seven values: `code_edit | research | messaging | memory_ops | office_automation | conversation | general`. A complementary set is built by picking one executor per relevant class. Supersedes the legacy `TaskRouteIntent`, which was the index key of the disused affinity-scoring model and carried wrong granularity (no office/automation class; treated model-level `reasoning` as a routing class).
-_Avoid_: intent (overloaded with the legacy intent router), domain (overloaded with executor profile domains), TaskRouteIntent, reasoning-as-a-class
-
-**Executor Instance**:
-A runtime worker slot that can claim one work unit at a time for a specific capability class. A leader may request a capability class, but only the runtime claim step selects an executor instance and authorizes execution.
-_Avoid_: leader-selected agent, permanent worker identity, capability class
-
 **No Action**:
-A valid leader planning outcome meaning no work unit should be dispatched. The runtime must preserve it as an intentional decision rather than forcing a fallback executor run.
+A valid planner outcome meaning no subtask should be dispatched. The runtime must preserve it as an intentional decision rather than forcing an executor run.
 _Avoid_: failure, clarification, unknown route
 
 **Selection Signal**:
-A hard, quantifiable fact the routing tool layer provides to the LLM when multiple executors satisfy a work unit's required capability. The LLM — not the tool layer — decides how to weigh them. Three signals are defined: recent success rate (last 3 tasks per candidate executor, from `executor_route_events.result`), pending load (queued/running task count per executor), and price. These are the *personal-user / open-source* selection strategy; enterprise routing (efficiency/robustness/quality-tuned) is out of scope and documented only as an advanced option.
-_Avoid_: affinity score, historical success (the dead static value), preference
+A hard, quantifiable fact provided to the planner or routing skill package when multiple work units can satisfy a subtask, such as recent success rate, pending load, price, or current availability.
+_Avoid_: affinity score, historical success as static truth, preference
 
 **Fallback Chain**:
-The ordered executors tried sequentially when the primary fails or produces low-quality output. Replaces the `race_executors` mode. Only the *next* executor runs after the previous one has *definitively* failed — no parallel racing, no wasted tokens.
+The ordered recovery path when a claimed work unit fails or produces low-quality output. Fallback starts after the current attempt definitively fails or misses its claim/heartbeat expectations.
 _Avoid_: race, racing, parallel candidates, competing executors
 
 **Verification Level**:
-The strength of post-execution validation: `none | compile | test | review`. When `review`, a `reviewerExecutor` (distinct from the primary) judges the result.
+The strength of post-execution validation: none, compile, test, or review.
 _Avoid_: quality gate, acceptance check, validator
 
 **Worktree Isolation**:
-The mechanism for running parallel executor sessions without mutual file interference. Each parallel work unit or isolated executor session gets a dedicated `git worktree` (an independent working directory on its own branch, sharing the `.git` object store). Within a single worktree, only one executor session runs at a time; the parent task coordinates the isolated work unit results.
-_Avoid_: workspace lock, file locking (too weak because it detects but does not prevent), sandbox (different concept)
+The mechanism for running parallel executor work units without mutual file interference. Each parallel or isolated execution receives a dedicated git worktree.
+_Avoid_: workspace lock, file locking, sandbox
 
 **Worktree Lease**:
-The runtime claim that one executor session currently owns a specific worktree for one work unit. A lease has an owner, heartbeat, expiry, and release path so crashed executions can be detected and the worktree can be made available again.
+The runtime claim that one work unit currently owns a specific worktree for one subtask. A lease has an owner, heartbeat, expiry, and release path so crashed executions can be detected and the worktree can be made available again.
 _Avoid_: permanent workspace ownership, executor identity, static work directory assignment
-
-**Estimated Cost Class**:
-A prior, type-based cost band (`cheap | moderate | expensive`) used to decide whether spending tokens on a reviewer is justified. Derived from request type and estimated IO scale — *not* from historical statistics, so it cannot decay into a dead static value like the legacy `historicalSuccess`.
-_Avoid_: token cost, budget, historical success

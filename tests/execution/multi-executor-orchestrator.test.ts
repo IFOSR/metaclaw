@@ -8,7 +8,7 @@ function createTask(): Task {
   return {
     id: 'task_multi_executor',
     title: '多执行器编排测试',
-    goal: '验证 work unit 编排',
+    goal: '验证 subtask 编排',
     status: 'running',
     summary: '',
     snapshots: [],
@@ -40,13 +40,13 @@ function createExecutor(name: string, output: string, success = true): ExecutorA
   };
 }
 
-function createStrategy(workUnits: ExecutionStrategy extends infer T
-  ? T extends { mode: 'multi_executor'; workUnits: infer W } ? W : never
+function createStrategy(subtasks: ExecutionStrategy extends infer T
+  ? T extends { mode: 'multi_executor'; subtasks: infer W } ? W : never
   : never): Extract<ExecutionStrategy, { mode: 'multi_executor' }> {
   return {
     mode: 'multi_executor',
     reason: 'test multi strategy',
-    workUnits: workUnits as Extract<ExecutionStrategy, { mode: 'multi_executor' }>['workUnits'],
+    subtasks: subtasks as Extract<ExecutionStrategy, { mode: 'multi_executor' }>['subtasks'],
     aggregation: {
       mode: 'verify_and_summarize',
       acceptance: [],
@@ -56,12 +56,12 @@ function createStrategy(workUnits: ExecutionStrategy extends infer T
 }
 
 describe('MultiExecutorOrchestrator', () => {
-  it('runs sequential work units according to dependencies', async () => {
+  it('runs sequential subtasks according to dependencies', async () => {
     const researchExecutor = createExecutor('hermes-agent', 'research output docs/research.md');
     const implementationExecutor = createExecutor('codex-cli', 'implementation output docs/patch.md');
     const strategy = createStrategy([
       {
-        id: 'wu_research',
+        id: 'subtask_research',
         title: 'Research',
         goal: 'Research first',
         executorHint: 'hermes-agent',
@@ -72,11 +72,11 @@ describe('MultiExecutorOrchestrator', () => {
         riskLevel: 'medium',
       },
       {
-        id: 'wu_implementation',
+        id: 'subtask_implementation',
         title: 'Implementation',
         goal: 'Implement after research',
         executorHint: 'codex-cli',
-        dependsOn: ['wu_research'],
+        dependsOn: ['subtask_research'],
         inputs: { taskId: 'task_multi_executor', resources: [], recalledTaskIds: [] },
         expectedOutput: 'patch',
         acceptance: ['patch done'],
@@ -96,19 +96,19 @@ describe('MultiExecutorOrchestrator', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(result.results.map(item => item.workUnitId)).toEqual(['wu_research', 'wu_implementation']);
+    expect(result.results.map(item => item.subtaskId)).toEqual(['subtask_research', 'subtask_implementation']);
     expect((researchExecutor.execute as any).mock.invocationCallOrder[0]).toBeLessThan(
       (implementationExecutor.execute as any).mock.invocationCallOrder[0],
     );
     expect(result.results[0]?.artifacts).toContain('docs/research.md');
   });
 
-  it('runs independent fan-out work units in the same orchestration batch', async () => {
+  it('runs independent fan-out subtasks in the same orchestration batch', async () => {
     const leftExecutor = createExecutor('hermes-agent', 'left analysis');
     const rightExecutor = createExecutor('pi-agent', 'right analysis');
     const strategy = createStrategy([
       {
-        id: 'wu_left',
+        id: 'subtask_left',
         title: 'Left',
         goal: 'Left analysis',
         executorHint: 'hermes-agent',
@@ -119,7 +119,7 @@ describe('MultiExecutorOrchestrator', () => {
         riskLevel: 'low',
       },
       {
-        id: 'wu_right',
+        id: 'subtask_right',
         title: 'Right',
         goal: 'Right analysis',
         executorHint: 'pi-agent',
@@ -143,16 +143,16 @@ describe('MultiExecutorOrchestrator', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(result.results.map(item => item.workUnitId).sort()).toEqual(['wu_left', 'wu_right']);
+    expect(result.results.map(item => item.subtaskId).sort()).toEqual(['subtask_left', 'subtask_right']);
     expect(leftExecutor.execute).toHaveBeenCalledTimes(1);
     expect(rightExecutor.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks the main orchestration when a work unit fails', async () => {
+  it('blocks the main orchestration when a subtask fails', async () => {
     const failingExecutor = createExecutor('codex-cli', 'test failure', false);
     const strategy = createStrategy([
       {
-        id: 'wu_implementation',
+        id: 'subtask_implementation',
         title: 'Implementation',
         goal: 'Implement',
         executorHint: 'codex-cli',
@@ -173,9 +173,9 @@ describe('MultiExecutorOrchestrator', () => {
     });
 
     expect(result.status).toBe('blocked');
-    expect(result.blockedReason).toContain('wu_implementation failed');
+    expect(result.blockedReason).toContain('subtask_implementation failed');
     expect(result.results[0]).toMatchObject({
-      workUnitId: 'wu_implementation',
+      subtaskId: 'subtask_implementation',
       status: 'failed',
     });
   });
@@ -184,7 +184,7 @@ describe('MultiExecutorOrchestrator', () => {
     const defaultExecutor = createExecutor('codex-cli', 'fallback output');
     const strategy = createStrategy([
       {
-        id: 'wu_unknown',
+        id: 'subtask_unknown',
         title: 'Unknown executor unit',
         goal: 'Run through fallback',
         executorHint: 'missing-agent',
@@ -199,7 +199,7 @@ describe('MultiExecutorOrchestrator', () => {
     const result = await new MultiExecutorOrchestrator().run({
       strategy,
       task: createTask(),
-      userPrompt: '执行未知 executor work unit',
+      userPrompt: '执行未知 executor subtask',
       executors: new Map(),
       defaultExecutor,
     });

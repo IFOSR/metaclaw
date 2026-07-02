@@ -1,14 +1,14 @@
-import type { AggregationPlan, ExecutionWorkUnit } from '../core/execution-strategy-planner.js';
-import type { WorkUnitResult } from './multi-executor-orchestrator.js';
+import type { AggregationPlan, ExecutionSubtask } from '../core/execution-strategy-planner.js';
+import type { SubtaskResult } from './multi-executor-orchestrator.js';
 
 export interface ExecutionAggregationInput {
-  workUnits: ExecutionWorkUnit[];
-  results: WorkUnitResult[];
+  subtasks: ExecutionSubtask[];
+  results: SubtaskResult[];
   aggregation: AggregationPlan;
 }
 
 export interface ExecutionVerificationConcern {
-  workUnitId: string;
+  subtaskId: string;
   criterionId: string;
   severity: 'warning' | 'error';
   message: string;
@@ -21,7 +21,7 @@ export interface ExecutionAggregationResult {
   concerns: ExecutionVerificationConcern[];
   artifacts: string[];
   retryFeedback: Array<{
-    workUnitId: string;
+    subtaskId: string;
     feedback: string;
   }>;
 }
@@ -38,7 +38,7 @@ function hasReviewVerdict(output: string): boolean {
   return /\b(pass|concerns)\b|通过|风险|问题|未通过|建议/i.test(output);
 }
 
-function hasConflict(left: WorkUnitResult, right: WorkUnitResult): boolean {
+function hasConflict(left: SubtaskResult, right: SubtaskResult): boolean {
   const pair = `${left.output}\n${right.output}`;
   return /(冲突|conflict|contradict|不一致)/i.test(pair);
 }
@@ -62,27 +62,27 @@ export class ExecutionAggregator {
 
   private verify(input: ExecutionAggregationInput): ExecutionVerificationConcern[] {
     const concerns: ExecutionVerificationConcern[] = [];
-    const resultsById = new Map(input.results.map(result => [result.workUnitId, result]));
+    const resultsById = new Map(input.results.map(result => [result.subtaskId, result]));
 
-    for (const unit of input.workUnits) {
+    for (const unit of input.subtasks) {
       const result = resultsById.get(unit.id);
       if (!result) {
         concerns.push({
-          workUnitId: unit.id,
-          criterionId: 'work_unit_result_present',
+          subtaskId: unit.id,
+          criterionId: 'subtask_result_present',
           severity: 'error',
-          message: '缺少 work unit 执行结果',
-          feedback: '请重新执行该 work unit，并返回完整执行结果。',
+          message: '缺少 subtask 执行结果',
+          feedback: '请重新执行该 subtask，并返回完整执行结果。',
         });
         continue;
       }
 
       if (result.status !== 'success') {
         concerns.push({
-          workUnitId: unit.id,
-          criterionId: 'work_unit_success',
+          subtaskId: unit.id,
+          criterionId: 'subtask_success',
           severity: 'error',
-          message: `work unit 未成功完成：${result.status}`,
+          message: `subtask 未成功完成：${result.status}`,
           feedback: `请修复失败原因后重新执行。失败状态：${result.status}。错误：${result.error ?? result.output}`,
         });
         continue;
@@ -90,40 +90,40 @@ export class ExecutionAggregator {
 
       if (unit.expectedOutput === 'patch' && !hasTestEvidence(result.output)) {
         concerns.push({
-          workUnitId: unit.id,
+          subtaskId: unit.id,
           criterionId: 'patch_verified',
           severity: 'warning',
-          message: 'patch 类 work unit 未提供测试命令或未运行测试说明',
+          message: 'patch 类 subtask 未提供测试命令或未运行测试说明',
           feedback: '请补充测试命令和测试结果；如果不能运行测试，明确说明原因和风险。',
         });
       }
 
       if (unit.expectedOutput === 'analysis' && !hasResearchSourceEvidence(result.output)) {
         concerns.push({
-          workUnitId: unit.id,
+          subtaskId: unit.id,
           criterionId: 'research_sourced',
           severity: 'warning',
-          message: 'research/analysis 类 work unit 未列出来源或来源限制',
+          message: 'research/analysis 类 subtask 未列出来源或来源限制',
           feedback: '请补充来源、材料范围或来源限制，避免无依据结论。',
         });
       }
 
       if (unit.expectedOutput === 'review' && !hasReviewVerdict(result.output)) {
         concerns.push({
-          workUnitId: unit.id,
+          subtaskId: unit.id,
           criterionId: 'review_verdict',
           severity: 'warning',
-          message: 'review 类 work unit 未给出 pass 或 concerns',
+          message: 'review 类 subtask 未给出 pass 或 concerns',
           feedback: '请给出明确 pass 或 concerns，并列出剩余风险。',
         });
       }
 
       if (unit.expectedOutput === 'artifact' && result.artifacts.length === 0) {
         concerns.push({
-          workUnitId: unit.id,
+          subtaskId: unit.id,
           criterionId: 'artifact_delivered',
           severity: 'warning',
-          message: 'artifact 类 work unit 未返回文件路径',
+          message: 'artifact 类 subtask 未返回文件路径',
           feedback: '请返回可定位的文件路径，或提供完整最终内容。',
         });
       }
@@ -135,10 +135,10 @@ export class ExecutionAggregator {
         const right = input.results[rightIndex]!;
         if (hasConflict(left, right)) {
           concerns.push({
-            workUnitId: `${left.workUnitId},${right.workUnitId}`,
-            criterionId: 'cross_work_unit_consistency',
+            subtaskId: `${left.subtaskId},${right.subtaskId}`,
+            criterionId: 'cross_subtask_consistency',
             severity: 'warning',
-            message: '不同 work unit 输出存在冲突或不一致，需要人工确认',
+            message: '不同 subtask 输出存在冲突或不一致，需要人工确认',
             feedback: '请对冲突结论进行复核，明确采用哪个结论以及理由。',
           });
         }
@@ -154,7 +154,7 @@ export class ExecutionAggregator {
     artifacts: string[],
   ): string {
     const resultLines = input.results.map(result => [
-      `## ${result.workUnitId} (${result.executorName}, ${result.status})`,
+      `## ${result.subtaskId} (${result.executorName}, ${result.status})`,
       result.output.trim() || '(no output)',
     ].join('\n'));
 
@@ -163,7 +163,7 @@ export class ExecutionAggregator {
       '',
       concerns.length === 0 ? 'Verification: pass' : 'Verification: concerns',
       concerns.length > 0
-        ? concerns.map(concern => `- [${concern.severity}] ${concern.workUnitId} (${concern.criterionId}): ${concern.message}`).join('\n')
+        ? concerns.map(concern => `- [${concern.severity}] ${concern.subtaskId} (${concern.criterionId}): ${concern.message}`).join('\n')
         : '',
       artifacts.length > 0 ? `Artifacts:\n${artifacts.map(artifact => `- ${artifact}`).join('\n')}` : '',
       '',
@@ -176,22 +176,22 @@ export class ExecutionAggregator {
 
   private buildRetryFeedback(
     concerns: ExecutionVerificationConcern[],
-  ): Array<{ workUnitId: string; feedback: string }> {
-    const feedbackByWorkUnit = new Map<string, string[]>();
+  ): Array<{ subtaskId: string; feedback: string }> {
+    const feedbackBySubtask = new Map<string, string[]>();
     for (const concern of concerns) {
-      for (const workUnitId of concern.workUnitId.split(',')) {
-        const trimmed = workUnitId.trim();
+      for (const subtaskId of concern.subtaskId.split(',')) {
+        const trimmed = subtaskId.trim();
         if (!trimmed) {
           continue;
         }
-        const feedback = feedbackByWorkUnit.get(trimmed) ?? [];
+        const feedback = feedbackBySubtask.get(trimmed) ?? [];
         feedback.push(`[${concern.criterionId}] ${concern.feedback}`);
-        feedbackByWorkUnit.set(trimmed, feedback);
+        feedbackBySubtask.set(trimmed, feedback);
       }
     }
 
-    return Array.from(feedbackByWorkUnit.entries()).map(([workUnitId, feedback]) => ({
-      workUnitId,
+    return Array.from(feedbackBySubtask.entries()).map(([subtaskId, feedback]) => ({
+      subtaskId,
       feedback: feedback.join('\n'),
     }));
   }

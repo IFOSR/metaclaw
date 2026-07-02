@@ -1,9 +1,9 @@
 import type { ExecutorAdapter, ExecutorInput } from '../executor/adapter.js';
-import type { ExecutionStrategy, ExecutionWorkUnit } from '../core/execution-strategy-planner.js';
+import type { ExecutionStrategy, ExecutionSubtask } from '../core/execution-strategy-planner.js';
 import type { ExecutorResult, Task } from '../core/types.js';
 
-export interface WorkUnitResult {
-  workUnitId: string;
+export interface SubtaskResult {
+  subtaskId: string;
   executorName: string;
   status: 'success' | 'failed' | 'timeout' | 'cancelled';
   output: string;
@@ -15,7 +15,7 @@ export interface WorkUnitResult {
 
 export interface MultiExecutorOrchestrationResult {
   status: 'success' | 'blocked';
-  results: WorkUnitResult[];
+  results: SubtaskResult[];
   blockedReason?: string;
 }
 
@@ -33,7 +33,7 @@ function extractArtifactPaths(output: string): string[] {
   return Array.from(new Set(paths.map(path => path.trim())));
 }
 
-function mapExecutorStatus(result: ExecutorResult): WorkUnitResult['status'] {
+function mapExecutorStatus(result: ExecutorResult): SubtaskResult['status'] {
   if (result.interrupted) {
     return 'cancelled';
   }
@@ -43,15 +43,15 @@ function mapExecutorStatus(result: ExecutorResult): WorkUnitResult['status'] {
   return result.success ? 'success' : 'failed';
 }
 
-function canRun(unit: ExecutionWorkUnit, completed: Set<string>): boolean {
+function canRun(unit: ExecutionSubtask, completed: Set<string>): boolean {
   return unit.dependsOn.every(dep => completed.has(dep));
 }
 
 export class MultiExecutorOrchestrator {
   async run(input: MultiExecutorOrchestratorInput): Promise<MultiExecutorOrchestrationResult> {
-    const pending = [...input.strategy.workUnits];
+    const pending = [...input.strategy.subtasks];
     const completed = new Set<string>();
-    const results: WorkUnitResult[] = [];
+    const results: SubtaskResult[] = [];
 
     while (pending.length > 0) {
       const runnable = pending.filter(unit => canRun(unit, completed));
@@ -59,21 +59,21 @@ export class MultiExecutorOrchestrator {
         return {
           status: 'blocked',
           results,
-          blockedReason: `work unit dependency cycle or missing dependency: ${pending.map(unit => unit.id).join(', ')}`,
+          blockedReason: `subtask dependency cycle or missing dependency: ${pending.map(unit => unit.id).join(', ')}`,
         };
       }
 
-      const batchResults = await Promise.all(runnable.map(unit => this.runWorkUnit(unit, input, results)));
+      const batchResults = await Promise.all(runnable.map(unit => this.runSubtask(unit, input, results)));
       for (const result of batchResults) {
         results.push(result);
         if (result.status !== 'success') {
           return {
             status: 'blocked',
             results,
-            blockedReason: `work unit ${result.workUnitId} failed on ${result.executorName}: ${result.error ?? result.output}`,
+            blockedReason: `subtask ${result.subtaskId} failed on ${result.executorName}: ${result.error ?? result.output}`,
           };
         }
-        completed.add(result.workUnitId);
+        completed.add(result.subtaskId);
       }
 
       for (const unit of runnable) {
@@ -90,11 +90,11 @@ export class MultiExecutorOrchestrator {
     };
   }
 
-  private async runWorkUnit(
-    unit: ExecutionWorkUnit,
+  private async runSubtask(
+    unit: ExecutionSubtask,
     input: MultiExecutorOrchestratorInput,
-    completedResults: WorkUnitResult[],
-  ): Promise<WorkUnitResult> {
+    completedResults: SubtaskResult[],
+  ): Promise<SubtaskResult> {
     const executor = input.executors.get(unit.executorHint) ?? input.defaultExecutor;
     const startedAt = new Date().toISOString();
     const result = await executor.execute({
@@ -102,13 +102,13 @@ export class MultiExecutorOrchestrator {
       preferences: input.baseExecutorInput?.preferences ?? [],
       conversationHistory: input.baseExecutorInput?.conversationHistory ?? [],
       executionContextBundle: input.baseExecutorInput?.executionContextBundle,
-      userPrompt: this.buildWorkUnitPrompt(input.userPrompt, unit, completedResults),
+      userPrompt: this.buildSubtaskPrompt(input.userPrompt, unit, completedResults),
       onProgress: input.baseExecutorInput?.onProgress,
     });
     const finishedAt = new Date().toISOString();
 
     return {
-      workUnitId: unit.id,
+      subtaskId: unit.id,
       executorName: executor.name,
       status: mapExecutorStatus(result),
       output: result.output,
@@ -119,24 +119,24 @@ export class MultiExecutorOrchestrator {
     };
   }
 
-  private buildWorkUnitPrompt(
+  private buildSubtaskPrompt(
     userPrompt: string,
-    unit: ExecutionWorkUnit,
-    completedResults: WorkUnitResult[],
+    unit: ExecutionSubtask,
+    completedResults: SubtaskResult[],
   ): string {
     const dependencyOutputs = completedResults
-      .filter(result => unit.dependsOn.includes(result.workUnitId))
+      .filter(result => unit.dependsOn.includes(result.subtaskId))
       .map(result => [
-        `Dependency ${result.workUnitId} (${result.executorName}, ${result.status}):`,
+        `Dependency ${result.subtaskId} (${result.executorName}, ${result.status}):`,
         result.output.trim() || '(no output)',
       ].join('\n'));
 
     return [
       `Main task prompt: ${userPrompt}`,
-      `Work unit: ${unit.title}`,
+      `Subtask: ${unit.title}`,
       `Goal: ${unit.goal}`,
       `Expected output: ${unit.expectedOutput}`,
-      dependencyOutputs.length > 0 ? `Previous work unit outputs:\n\n${dependencyOutputs.join('\n\n')}` : '',
+      dependencyOutputs.length > 0 ? `Previous subtask outputs:\n\n${dependencyOutputs.join('\n\n')}` : '',
       unit.acceptance.length > 0 ? `Acceptance:\n${unit.acceptance.map(item => `- ${item}`).join('\n')}` : '',
       unit.inputs.resources.length > 0 ? `Resources:\n${unit.inputs.resources.join('\n')}` : '',
       unit.inputs.recalledTaskIds.length > 0 ? `Recalled task ids:\n${unit.inputs.recalledTaskIds.join('\n')}` : '',
