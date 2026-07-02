@@ -11,7 +11,8 @@ MetaClaw 是一个本地优先的 AI Task OS。它把自然语言需求变成可
 - 持久任务状态：created、ready、running、parked、blocked、done、archived、cancelled。
 - 中断后通过 resume context 继续，不从头重做。
 - 系统空闲时自动恢复满足条件的挂起任务。
-- 用语义优先级判断紧急任务，不靠关键词匹配。
+- 用语义优先级判断可执行任务的调度顺序，不靠关键词匹配。
+- 当前强制单一活跃顶层任务，避免路由层重构期间出现多任务并存的歧义。
 - 通过本地 SQLite FTS 索引检索历史任务，并结合混合召回恢复相关上下文。
 - 将复杂任务规划为 work units、验收标准和聚合规则。
 - 按任务意图、执行器能力和执行边界自动路由。
@@ -36,7 +37,7 @@ flowchart LR
   Intent --> Choice{这是什么请求？}
   Choice -->|现在回答| Conversation[Direct reply<br/>不创建持久任务]
   Choice -->|控制任务| Control[Task control<br/>状态、恢复、清理、解除阻塞]
-  Choice -->|执行工作| Durable[Durable task<br/>状态、队列、产物]
+  Choice -->|执行工作| Durable[Durable task<br/>状态、门禁、产物]
 
   Conversation --> Context[上下文和记忆<br/>最近会话优先]
   Control --> TaskOS[Task OS<br/>TaskEngine 和 Scheduler]
@@ -74,8 +75,9 @@ flowchart LR
 ```mermaid
 flowchart LR
   Input[用户要求执行工作] --> Intent[IntentOrchestrator]
-  Intent --> Task[TaskRuntimeService<br/>创建或绑定任务]
-  Task --> Scheduler[SchedulerEngine<br/>队列、优先级、抢占]
+  Intent --> Gate[TaskAdmissionGate<br/>单活跃顶层任务]
+  Gate --> Task[TaskRuntimeService<br/>创建或绑定任务]
+  Task --> Scheduler[SchedulerEngine<br/>准备度、优先级、空闲恢复]
   Scheduler --> Context[MemoryContextService<br/>恢复包、偏好、材料]
   Context --> Route[ExecutorRoutingCoordinator<br/>选择 executor]
   Route --> Run[ExecutionRuntime<br/>运行 adapter]
@@ -86,6 +88,8 @@ flowchart LR
 ```
 
 这就是 Task OS 路径。任务状态、恢复上下文、调度、产物捕获和验收都在这里发生。
+
+当前公开入口有一个明确约束：同一时间只接纳一个活跃顶层任务。普通问答、澄清、状态查询、清理任务命令，以及明确指向当前活跃任务本身的请求仍然允许通过。新的无关顶层任务会被拒绝，并给出可见提示，直到当前任务完成或取消。这样可以在 ExecutionPolicy 路由和 fallback 行为加固期间保持用户路径可预测。
 
 ### 飞书和进度展示路径
 
@@ -148,7 +152,7 @@ sudo apt-get install -y build-essential python3 make g++
 执行器前提：
 
 - 使用默认 `codex-cli`：安装并登录 OpenAI Codex CLI。
-- 使用调研并行竞速：安装并登录 Pi Agent 和 Hermes Agent。
+- 如果希望调研类工作可路由到默认执行器之外：安装并登录 Pi Agent 或 Hermes Agent。
 
 飞书集成前提：
 
@@ -437,7 +441,7 @@ MetaClaw 调用方式：
 hermes --oneshot "<prompt>" --yolo --accept-hooks
 ```
 
-`--oneshot` 让 Hermes 以脚本/headless 模式运行，`--yolo` 跳过危险命令确认，`--accept-hooks` 自动接受未见过的 hooks。调研任务可以并行启动 Pi Agent 和 Hermes Agent；MetaClaw 记录先返回的结果，并中止另一个 executor。
+`--oneshot` 让 Hermes 以脚本/headless 模式运行，`--yolo` 跳过危险命令确认，`--accept-hooks` 自动接受未见过的 hooks。当前 single-executor 调研路由不会默认让 Pi Agent 和 Hermes Agent 竞速。MetaClaw 会根据 ExecutionPolicy 选择一个 primary executor；只有 primary executor 失败时，才按 fallback chain 尝试兜底。复杂 multi-executor 策略仍可以在同一个顶层任务内部，把不同 work unit 分配给不同 executor。
 
 ### 已退役的兼容 Adapter
 
@@ -463,7 +467,7 @@ Executor 的优势：
 
 - 增加新的 runtime 边界，包括模型、工具、凭证、权限和命令行行为。
 - 让 MetaClaw 可以把任务路由给最适合的执行者。
-- 支持不同 Agent 之间的回退、竞速、交叉验证和审计。
+- 支持不同 Agent 之间的回退、交叉验证和审计。
 - 可以接入通用 Skill 无法访问的私有系统或垂直领域系统。
 
 Executor 的代价：
@@ -749,7 +753,7 @@ HybridTaskRetriever 会综合多种信号：
 
 ## 调度和优先级模型
 
-MetaClaw 使用单一活跃 executor，前面有一个调度器。
+MetaClaw 当前使用单一活跃顶层任务，前面有一个调度器。
 
 - 新任务按紧急度、准备度、连续性收益、下游影响和搁置时间评分。
 - 紧急度来自结构化语义判断，不靠关键词匹配。
@@ -760,7 +764,9 @@ MetaClaw 使用单一活跃 executor，前面有一个调度器。
 - 材料、权限、授权和访问类阻塞不会自动解除，必须等用户补充输入或显式 unblock。
 - 未 ready 的任务不会自动执行。
 
-这样既防止排队任务浪费算力，又保证任务安全。
+当一个顶层任务正在运行时，`TaskAdmissionGate` 会拒绝新的无关 durable task，以及针对其他任务的执行请求。它仍允许普通问答、澄清、状态查询、清理任务命令，以及明确指向当前活跃任务的请求。第二个顶层任务的排队、紧急抢占和自动恢复在当前范围内刻意关闭；ADR-0011 把这记录为一个可逆决策。
+
+这样既防止排队任务浪费算力，又保证任务安全。如果 ExecutionPolicy 策略需要，单个已接纳的顶层任务内部仍然可以运行 multi-executor work units。
 
 ## Executor 路由
 
@@ -857,6 +863,8 @@ npm test -- tests/core/executor-router.test.ts
 npm test -- tests/core/execution-planning-service.test.ts
 npm test -- tests/core/semantic-intent-router.test.ts
 npm test -- tests/core/scheduler.test.ts
+npm test -- tests/session/task-admission-gate.test.ts
+npm test -- tests/execution/execution-runtime.test.ts
 npm test -- tests/integrations/feishu-app.test.ts
 npm test -- tests/session/scripted-session.test.ts
 ```
