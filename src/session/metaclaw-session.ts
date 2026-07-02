@@ -5,6 +5,7 @@ import type {
   GuidanceActionType,
   GuidanceProposal,
   RuntimeState,
+  AgentClass,
   Task,
   TaskRecoveryTrigger,
 } from '../core/types.js';
@@ -38,15 +39,15 @@ import { learningCommand } from '../commands/learning-commands.js';
 import { dashboardCommand, attachCommand, historyCommand, configCommand, helpCommand, exitCommand } from '../commands/global-commands.js';
 import { isPermissionFailure, isRecoverableExecutorFailure } from '../executor/error-utils.js';
 import { SessionStateRepo } from '../storage/session-state-repo.js';
-import type { IntentDecision } from '../core/executor-router.js';
+import type { ExecutorProfile, IntentDecision } from '../core/executor-router.js';
 import { TaskRuntimeService } from '../task/task-runtime-service.js';
 import { TaskSemanticService } from '../task/task-semantic-service.js';
 import { ExecutionRuntime, ExecutorRegistry } from '../execution/execution-runtime.js';
 import { VerificationAndDeliveryService } from '../delivery/verification-and-delivery-service.js';
-import { ExecutorProfileService } from '../executor/executor-profile-service.js';
+import { AgentClassService } from '../executor/agent-class-service.js';
 import { ExecutorAdminService } from '../executor/executor-admin-service.js';
-import { ExecutorRoutingCoordinator } from '../core/executor-routing-coordinator.js';
 import { ExecutionProgressService } from '../execution/execution-progress-service.js';
+import { WorkUnitClaimService } from '../execution/work-unit-claim-service.js';
 import { WorkspaceTargetService } from '../execution/workspace-target-service.js';
 import { InputController } from './input-controller.js';
 import { SessionPresentationService, type GuidanceState } from './session-presentation-service.js';
@@ -60,6 +61,10 @@ import {
   type QueuedExecutionRequest,
 } from './session-helpers.js';
 import { SessionIntentApplicationService } from './session-intent-application-service.js';
+import { SubtaskRepo } from '../storage/subtask-repo.js';
+import { TaskEventRepo } from '../storage/task-event-repo.js';
+import { WorkUnitRepo } from '../storage/work-unit-repo.js';
+import { PlannerRuntimeService } from '../planner/planner-runtime-service.js';
 
 export interface MetaclawSessionDeps {
   taskEngine: TaskEngine;
@@ -99,6 +104,28 @@ interface FocusContext {
 const BUSY_LLM_TIMEOUT_MS = 250;
 const DEFAULT_LLM_TIMEOUT_MS = 5_000;
 
+function agentClassToLegacyProfile(agentClass: AgentClass): ExecutorProfile {
+  return {
+    name: agentClass.name,
+    domains: agentClass.domains,
+    capabilities: agentClass.capabilities,
+    inputTypes: agentClass.inputTypes,
+    outputTypes: agentClass.outputTypes,
+    strengths: agentClass.strengths,
+    weaknesses: agentClass.weaknesses,
+    primaryUseCases: agentClass.primaryUseCases,
+    avoidUseCases: agentClass.avoidUseCases,
+    intentAffinity: agentClass.intentAffinity,
+    riskLevel: agentClass.riskLevel,
+    availability: agentClass.availability,
+    historicalSuccess: agentClass.historicalSuccess,
+    runtimeCommand: agentClass.runtimeCommand,
+    runtimeArgs: agentClass.runtimeArgs,
+    runtimeCheckCommand: agentClass.runtimeCheckCommand,
+    projectUrl: agentClass.projectUrl,
+  };
+}
+
 export class MetaclawSession {
   private output: string[] = [];
   private runtimeState: RuntimeState = {
@@ -136,10 +163,13 @@ export class MetaclawSession {
   private readonly recallReviewApplicationService: RecallReviewApplicationService;
   private readonly taskResumePlanner: TaskResumePlanner;
   private readonly presentation: SessionPresentationService;
-  private readonly executorProfileService: ExecutorProfileService;
+  private readonly agentClassService: AgentClassService;
   private readonly executorAdminService: ExecutorAdminService;
-  private readonly executorRoutingCoordinator: ExecutorRoutingCoordinator;
   private readonly executionProgressService: ExecutionProgressService;
+  private readonly plannerRuntimeService: PlannerRuntimeService;
+  private readonly subtaskRepo: SubtaskRepo;
+  private readonly taskEventRepo: TaskEventRepo;
+  private readonly workUnitClaimService: WorkUnitClaimService;
   private readonly workspaceTargetService: WorkspaceTargetService;
   private readonly sessionExecutionCoordinator: SessionExecutionCoordinator;
   private readonly taskExecutionApplicationService: SessionTaskExecutionApplicationService;
@@ -161,7 +191,7 @@ export class MetaclawSession {
       llmBridge: deps.llmBridge,
       timeoutMs: () => this.getLlmTimeoutMs(),
     });
-    this.executorProfileService = new ExecutorProfileService({
+    this.agentClassService = new AgentClassService({
       db: deps.db,
       defaultExecutorName: deps.executor.name,
       availableCommands: deps.availableExecutorCommands,
@@ -177,16 +207,14 @@ export class MetaclawSession {
     this.persistenceService = new SessionPersistenceService(deps.db);
     this.presentation = new SessionPresentationService();
     this.executorAdminService = new ExecutorAdminService({
-      profileService: this.executorProfileService,
+      agentClassService: this.agentClassService,
       presentation: this.presentation,
     });
-    this.executorRoutingCoordinator = new ExecutorRoutingCoordinator({
-      profileService: this.executorProfileService,
-      taskRuntimeService: this.taskRuntimeService,
-      persistenceService: this.persistenceService,
-      defaultExecutorName: deps.executor.name,
-    });
     this.executionProgressService = new ExecutionProgressService(deps.db);
+    this.subtaskRepo = new SubtaskRepo(deps.db);
+    this.taskEventRepo = new TaskEventRepo(deps.db);
+    this.plannerRuntimeService = new PlannerRuntimeService(this.subtaskRepo, this.taskEventRepo);
+    this.workUnitClaimService = new WorkUnitClaimService(new WorkUnitRepo(deps.db));
     this.workspaceTargetService = new WorkspaceTargetService();
     this.memoryContextService = new MemoryContextService({
       memoryEngine: deps.memoryEngine,
@@ -245,7 +273,11 @@ export class MetaclawSession {
       notifier: this.notifier,
       taskRuntimeService: this.taskRuntimeService,
       memoryContextService: this.memoryContextService,
-      executorRoutingCoordinator: this.executorRoutingCoordinator,
+      agentClassService: this.agentClassService,
+      plannerRuntimeService: this.plannerRuntimeService,
+      subtaskRepo: this.subtaskRepo,
+      taskEventRepo: this.taskEventRepo,
+      workUnitClaimService: this.workUnitClaimService,
       executionRuntime: this.executionRuntime,
       scheduler: this.scheduler,
       executionProgressService: this.executionProgressService,
@@ -358,7 +390,7 @@ export class MetaclawSession {
   initialize(options: { resumeStartupTasks?: boolean; showDashboard?: boolean } = {}): void {
     if (this.initialized) return;
 
-    this.seedExecutorRegistry();
+    this.seedAgentRuntime();
 
     const resumeStartupTasks = options.resumeStartupTasks ?? true;
     const showDashboard = options.showDashboard ?? true;
@@ -695,8 +727,8 @@ export class MetaclawSession {
     this.appendOutput('→ 操作提案已记录，不等待用户确认；满足执行条件的任务由调度器自动处理');
   }
 
-  private seedExecutorRegistry(): void {
-    this.executorProfileService.seedDefaults();
+  private seedAgentRuntime(): void {
+    this.agentClassService.seedDefaults();
   }
 
   private async maybeHandleIntentOrchestratorDecision(
@@ -726,7 +758,7 @@ export class MetaclawSession {
       return this.intentOrchestrator;
     }
 
-    const executorProfiles = this.executorProfileService.listProfiles();
+    const executorProfiles = this.agentClassService.listAgentClasses().map(agentClassToLegacyProfile);
     return IntentOrchestrator.createDefault({
       llmBridge: this.deps.llmBridge,
       executorProfiles,
@@ -750,7 +782,7 @@ export class MetaclawSession {
     recentTasks: TaskSummary[],
     options: { suppressSafetyGuardHints?: boolean } = {},
   ): IntentOrchestratorInput {
-    const executorProfiles = this.executorProfileService.listProfiles();
+    const executorProfiles = this.agentClassService.listAgentClasses().map(agentClassToLegacyProfile);
     const hints = new RuleHintsProvider(process.cwd()).collect(userInput);
     return {
       userInput,

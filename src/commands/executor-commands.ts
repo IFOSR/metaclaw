@@ -1,12 +1,12 @@
-import type { ExecutorAvailability, ExecutorProfile, ExecutorRiskLevel, TaskRouteIntent } from '../core/executor-router.js';
-import { capabilityClassFromTaskRouteIntent } from '../core/executor-router.js';
-import { ExecutionPlanningService } from '../core/execution-planning-service.js';
-import { buildRouteDecisionFromPolicy } from '../routing/execution-policy-planner.js';
+import type { AgentClass, AgentClassAvailability, AgentClassRiskLevel, Task } from '../core/types.js';
 import type { IntentDecisionV2, IntentExecutionMode } from '../core/intent-orchestrator.js';
-import type { Task } from '../core/types.js';
-import { seedDefaultExecutorProfiles } from '../executor/executor-registry-seeder.js';
-import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
-import { ExecutorRouteEventRepo } from '../storage/executor-route-event-repo.js';
+import type { TaskRouteIntent } from '../core/executor-router.js';
+import { capabilityClassFromTaskRouteIntent } from '../core/executor-router.js';
+import { seedDefaultAgentClasses, seedDefaultWorkUnits } from '../executor/agent-class-seeder.js';
+import { PlannerRoutingSkill } from '../planner/planner-routing-skill.js';
+import { AgentClassRepo } from '../storage/agent-class-repo.js';
+import { TaskEventRepo } from '../storage/task-event-repo.js';
+import { WorkUnitRepo } from '../storage/work-unit-repo.js';
 import { generateInteractionId } from '../utils/id.js';
 import type { CommandHandler } from './router.js';
 
@@ -26,15 +26,16 @@ function parseRuntimeArgs(value?: string): string[] {
   return value.split(/\s+/).map(item => item.trim()).filter(Boolean);
 }
 
-function buildProfileFromArgs(
+function buildAgentClassFromArgs(
   name: string,
   args: string[],
-  existing?: ExecutorProfile | null,
-  availability: ExecutorAvailability = 'available',
-): ExecutorProfile {
-  const risk = (parseScalarArg(args, '--risk') ?? existing?.riskLevel ?? 'medium') as ExecutorRiskLevel;
+  existing?: AgentClass | null,
+  availability: AgentClassAvailability = 'available',
+): AgentClass {
+  const risk = (parseScalarArg(args, '--risk') ?? existing?.riskLevel ?? 'medium') as AgentClassRiskLevel;
   return {
     name,
+    kind: 'executor',
     domains: parseListArg(args, '--domains').length > 0 ? parseListArg(args, '--domains') : existing?.domains ?? [],
     capabilities: parseListArg(args, '--capabilities').length > 0 ? parseListArg(args, '--capabilities') : existing?.capabilities ?? [],
     inputTypes: parseListArg(args, '--inputs').length > 0 ? parseListArg(args, '--inputs') : existing?.inputTypes ?? ['text'],
@@ -51,6 +52,11 @@ function buildProfileFromArgs(
     riskLevel: risk,
     availability,
     historicalSuccess: Number.parseFloat(parseScalarArg(args, '--success') ?? String(existing?.historicalSuccess ?? 0.5)),
+    harness: existing?.harness ?? 'cli',
+    model: existing?.model ?? null,
+    skills: existing?.skills ?? [],
+    mcpServers: existing?.mcpServers ?? [],
+    plugins: existing?.plugins ?? [],
     runtimeCommand: parseScalarArg(args, '--command') ?? existing?.runtimeCommand ?? null,
     runtimeArgs: parseScalarArg(args, '--args') ? parseRuntimeArgs(parseScalarArg(args, '--args')) : existing?.runtimeArgs ?? [],
     runtimeCheckCommand: parseScalarArg(args, '--check') ?? existing?.runtimeCheckCommand ?? null,
@@ -58,21 +64,21 @@ function buildProfileFromArgs(
   };
 }
 
-function formatProfile(profile: ExecutorProfile): string {
-  const intents = Object.entries(profile.intentAffinity ?? {})
+function formatAgentClass(agentClass: AgentClass): string {
+  const intents = Object.entries(agentClass.intentAffinity ?? {})
     .map(([intent, score]) => `${intent}:${score}`)
     .join(',');
-  const runtime = profile.runtimeCommand
-    ? `runtime=${profile.runtimeCommand} ${(profile.runtimeArgs ?? []).join(' ')}`.trim()
+  const runtime = agentClass.runtimeCommand
+    ? `runtime=${agentClass.runtimeCommand} ${(agentClass.runtimeArgs ?? []).join(' ')}`.trim()
     : 'runtime=-';
-  return `  ${profile.name} status=${profile.availability} domains=${profile.domains.join(',') || '-'} capabilities=${profile.capabilities.join(',') || '-'} intents=${intents || '-'} risk=${profile.riskLevel} success=${profile.historicalSuccess} ${runtime}`;
+  return `  ${agentClass.name} kind=${agentClass.kind} status=${agentClass.availability} domains=${agentClass.domains.join(',') || '-'} capabilities=${agentClass.capabilities.join(',') || '-'} intents=${intents || '-'} risk=${agentClass.riskLevel} success=${agentClass.historicalSuccess} ${runtime}`;
 }
 
 function createPreviewTask(userInput: string): Task {
   const now = new Date().toISOString();
   return {
     id: `route_preview_${generateInteractionId()}`,
-    title: userInput.slice(0, 50) || 'Executor route preview',
+    title: userInput.slice(0, 50) || 'Planner route preview',
     goal: userInput,
     status: 'created',
     summary: '',
@@ -119,16 +125,16 @@ function inferPreviewExecutionMode(userInput: string): IntentExecutionMode {
     : 'single_executor';
 }
 
-function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile[], defaultExecutorName: string): IntentDecisionV2 {
+function buildPreviewIntentDecision(userInput: string, agentClasses: AgentClass[], defaultExecutorName: string): IntentDecisionV2 {
   const primaryIntent = inferPreviewPrimaryIntent(userInput);
-  const matchingProfiles = profiles
-    .filter(profile => profile.availability === 'available')
-    .filter(profile => {
+  const matching = agentClasses
+    .filter(agentClass => agentClass.kind === 'executor' && agentClass.availability === 'available')
+    .filter(agentClass => {
       const searchable = [
-        profile.name,
-        ...profile.domains,
-        ...profile.capabilities,
-        ...(profile.primaryUseCases ?? []),
+        agentClass.name,
+        ...agentClass.domains,
+        ...agentClass.capabilities,
+        ...(agentClass.primaryUseCases ?? []),
       ].join('\n');
       if (primaryIntent === 'general') {
         return /合同|条款|法务|legal|contract|风险矩阵/i.test(userInput)
@@ -136,14 +142,14 @@ function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile
       }
       return true;
     });
-  const selectedExecutor = matchingProfiles.find(profile => profile.name !== defaultExecutorName)?.name
-    ?? matchingProfiles[0]?.name
+  const selectedExecutor = matching.find(agentClass => agentClass.name !== defaultExecutorName)?.name
+    ?? matching[0]?.name
     ?? defaultExecutorName;
 
   return {
     interactionType: 'executor_dispatch',
     confidence: 0.72,
-    reason: 'executor route preview uses ExecutionPlanningService from a conservative command intent decision',
+    reason: 'planner route preview uses PlannerRoutingSkill without claiming work units',
     clarificationQuestion: null,
     risk: {
       level: /合同|条款|法务|legal|contract|发送给客户|通知客户/i.test(userInput) ? 'high' : 'medium',
@@ -160,7 +166,7 @@ function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile
       mode: inferPreviewExecutionMode(userInput),
       complexity: 'simple',
       selectedExecutor,
-      candidateExecutors: matchingProfiles.map(profile => profile.name),
+      candidateExecutors: matching.map(agentClass => agentClass.name),
       requiresVerification: primaryIntent === 'repo_execution',
       canModifyFiles: primaryIntent === 'repo_execution',
       requiresExternalGateway: primaryIntent === 'memory_agent_ops',
@@ -175,13 +181,15 @@ function buildPreviewIntentDecision(userInput: string, profiles: ExecutorProfile
 export const executorCommand: CommandHandler = {
   name: 'executor',
   aliases: ['executors'],
-  description: 'Executor 管理：/executor [list|register|unregister|route|route-feedback]',
+  description: 'AgentClass/WorkUnit management: /executor [list|register|unregister|route|route-feedback]',
   async execute(args, context) {
     const action = args[0] ?? 'list';
-    const profileRepo = new ExecutorProfileRepo(context.db);
-    seedDefaultExecutorProfiles(profileRepo, {
+    const agentClassRepo = new AgentClassRepo(context.db);
+    const workUnitRepo = new WorkUnitRepo(context.db);
+    seedDefaultAgentClasses(agentClassRepo, {
       defaultExecutorName: context.executor.name,
     });
+    seedDefaultWorkUnits(workUnitRepo, { executorAgentClassName: context.executor.name });
 
     if (action === 'register' || (action === 'profile' && args[1] === 'upsert')) {
       const name = action === 'register' ? args[1] : args[2];
@@ -190,9 +198,9 @@ export const executorCommand: CommandHandler = {
         return {
           type: 'text',
           content: [
-            '进入 Executor 注册向导：请直接输入 /executor register wizard',
+            'Enter the AgentClass registration wizard with /executor register wizard',
             '',
-            '一次性注册用法:',
+            'One-line usage:',
             '/executor register <name> --command <cmd> --args "exec --prompt {prompt}" --check "<cmd> --version" [--project-url <url>] [--domains a,b] [--capabilities a,b]',
           ].join('\n'),
         };
@@ -200,49 +208,49 @@ export const executorCommand: CommandHandler = {
       if (name === 'wizard') {
         return {
           type: 'text',
-          content: 'Executor 注册向导已启动。请按提示回答；输入 cancel 可取消。',
+          content: 'Executor AgentClass registration wizard started. Answer the prompts, or type cancel.',
           data: { executorRegisterWizard: true },
         };
       }
-      profileRepo.upsert(buildProfileFromArgs(name, optionArgs, profileRepo.findByName(name), 'available'));
+      agentClassRepo.upsert(buildAgentClassFromArgs(name, optionArgs, agentClassRepo.findByName(name), 'available'));
       return {
         type: 'text',
         content: action === 'register'
-          ? `已注册 Executor：${name}`
-          : `已更新 Executor Profile：${name}`,
+          ? `Registered Executor AgentClass: ${name}`
+          : `Updated Executor AgentClass: ${name}`,
       };
     }
 
     if (action === 'unregister') {
       const name = args[1];
       if (!name) {
-        return { type: 'text', content: '用法: /executor unregister <name>' };
+        return { type: 'text', content: 'Usage: /executor unregister <name>' };
       }
-      const existing = profileRepo.findByName(name);
+      const existing = agentClassRepo.findByName(name);
       if (!existing) {
-        return { type: 'text', content: `Executor 未注册：${name}` };
+        return { type: 'text', content: `Executor AgentClass is not registered: ${name}` };
       }
-      profileRepo.upsert({
-        ...existing,
-        availability: 'unavailable',
-      });
-      return { type: 'text', content: `已反注册 Executor：${name}` };
+      agentClassRepo.upsert({ ...existing, availability: 'unavailable' });
+      return { type: 'text', content: `Unregistered Executor AgentClass: ${name}` };
     }
 
     if (action === 'list' || action === 'profiles') {
-      const profiles = profileRepo.findAll();
-      if (profiles.length === 0) {
-        return { type: 'text', content: '暂无已注册 Executor' };
+      const agentClasses = agentClassRepo.findAll();
+      if (agentClasses.length === 0) {
+        return { type: 'text', content: 'No AgentClass records are registered.' };
       }
+      const workUnits = workUnitRepo.findAll();
       return {
         type: 'text',
         content: [
-          `已注册 Executors（默认：${context.executor.name}）：`,
-          ...profiles.map(formatProfile),
+          `Registered AgentClasses (default executor: ${context.executor.name}):`,
+          ...agentClasses.map(formatAgentClass),
           '',
-          '命令：/executor register wizard',
-          '命令：/executor register <name> --command <cmd> --args "exec --prompt {prompt}" --check "<cmd> --version" [--domains a,b] [--capabilities a,b]',
-          '命令：/executor unregister <name>',
+          `WorkUnits: ${workUnits.map(unit => `${unit.id}:${unit.agentClassName}:${unit.state}`).join(', ') || '-'}`,
+          '',
+          'Commands: /executor register wizard',
+          'Commands: /executor register <name> --command <cmd> --args "exec --prompt {prompt}" --check "<cmd> --version" [--domains a,b] [--capabilities a,b]',
+          'Commands: /executor unregister <name>',
         ].join('\n'),
       };
     }
@@ -250,31 +258,10 @@ export const executorCommand: CommandHandler = {
     if (action === 'route') {
       const userInput = args.slice(1).join(' ');
       if (!userInput) {
-        return { type: 'text', content: '用法: /executor route <任务描述>' };
+        return { type: 'text', content: 'Usage: /executor route <task description>' };
       }
-      const profiles = profileRepo.findAll();
-      const defaultExecutorName = context.executor.name;
-      const routeProfiles = [
-        ...profiles,
-        ...(profiles.some(profile => profile.name === defaultExecutorName)
-          ? []
-          : [{
-            name: defaultExecutorName,
-            domains: ['software'],
-            capabilities: ['coding'],
-            inputTypes: ['text'],
-            outputTypes: ['code'],
-            strengths: [],
-            weaknesses: [],
-            primaryUseCases: [],
-            avoidUseCases: [],
-            intentAffinity: { repo_execution: 1 },
-            riskLevel: 'medium' as const,
-            availability: 'available' as const,
-            historicalSuccess: 0.5,
-          }]),
-      ];
-      const policy = new ExecutionPlanningService().plan({
+      const agentClasses = agentClassRepo.findAll();
+      const plan = new PlannerRoutingSkill().plan({
         task: createPreviewTask(userInput),
         userPrompt: userInput,
         taskExecutionPlan: {
@@ -283,52 +270,38 @@ export const executorCommand: CommandHandler = {
           contextTaskId: 'route-preview',
           transitions: [],
         },
-        intentDecision: buildPreviewIntentDecision(userInput, routeProfiles, defaultExecutorName),
-        executorProfiles: routeProfiles,
-        defaultExecutorName,
+        intentDecision: buildPreviewIntentDecision(userInput, agentClasses, context.executor.name),
+        agentClasses,
         resources: [],
+        recalledTaskIds: [],
       });
-      const decision = buildRouteDecisionFromPolicy(policy);
-      new ExecutorRouteEventRepo(context.db).insert({
-        id: `route_${generateInteractionId()}`,
-        taskId: null,
-        userInput,
-        selectedExecutor: decision.selectedExecutor,
-        action: decision.action,
-        candidates: decision.candidates,
-        primaryIntent: decision.primaryIntent,
-        matchedBoundary: decision.matchedBoundary,
-        rejected: decision.rejected,
-        reason: decision.reason,
-        confirmedByUser: false,
-        result: null,
-        createdAt: new Date().toISOString(),
-      });
+      const firstSubtask = plan.subtasks[0];
       return {
         type: 'text',
         content: [
-          `Route Decision：${decision.selectedExecutor}`,
-          `action=${decision.action} confidence=${decision.confidence.toFixed(2)}`,
-          `intent=${decision.primaryIntent}`,
-          `boundary=${decision.matchedBoundary.join(',') || '-'}`,
-          `reason=${decision.reason}`,
+          'Planner Route Preview',
+          `subtasks=${plan.subtasks.length}`,
+          `reason=${plan.reason}`,
+          firstSubtask ? `first=${firstSubtask.title}` : 'first=-',
+          firstSubtask ? `candidateAgentClasses=${firstSubtask.candidateAgentClasses.join(',') || '-'}` : 'candidateAgentClasses=-',
+          firstSubtask ? `agentClassKind=${firstSubtask.requiredAgentClassKind}` : 'agentClassKind=-',
         ].join('\n'),
       };
     }
 
     if (action === 'route-feedback') {
-      const events = new ExecutorRouteEventRepo(context.db).listRecent();
+      const events = new TaskEventRepo(context.db).listRecent();
       if (events.length === 0) {
-        return { type: 'text', content: '暂无 Executor Route Feedback' };
+        return { type: 'text', content: 'No planner task events recorded yet.' };
       }
       return {
         type: 'text',
-        content: `Executor Route Feedback：\n${events.map(event =>
-          `  #${event.id} ${event.selectedExecutor} ${event.action} ${event.primaryIntent} ${event.userInput}`
+        content: `Planner Task Events:\n${events.map(event =>
+          `  #${event.id} ${event.eventType} task=${event.taskId} subtask=${event.subtaskId ?? '-'} ${event.message}`
         ).join('\n')}`,
       };
     }
 
-    return { type: 'text', content: `未知 executor 操作: ${action}` };
+    return { type: 'text', content: `Unknown executor operation: ${action}` };
   },
 };

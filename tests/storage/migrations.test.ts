@@ -71,7 +71,7 @@ describe('runMigrations', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const versions = db.prepare('SELECT version FROM schema_version ORDER BY version').all() as Array<{ version: number }>;
-    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 
     const taskColumns = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
     expect(taskColumns.map(column => column.name)).toEqual(expect.arrayContaining([
@@ -109,6 +109,39 @@ describe('runMigrations', () => {
       'runtime_args_json',
       'runtime_check_command',
       'project_url',
+    ]));
+
+    const agentClassColumns = db.prepare('PRAGMA table_info(agent_classes)').all() as Array<{ name: string }>;
+    expect(agentClassColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'name',
+      'kind',
+      'harness',
+      'model',
+      'skills_json',
+      'mcp_servers_json',
+      'plugins_json',
+      'runtime_command',
+    ]));
+
+    const subtaskColumns = db.prepare('PRAGMA table_info(subtasks)').all() as Array<{ name: string }>;
+    expect(subtaskColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'id',
+      'task_id',
+      'status',
+      'required_agent_class_kind',
+      'candidate_agent_classes_json',
+    ]));
+
+    const workUnitColumns = db.prepare('PRAGMA table_info(work_units)').all() as Array<{ name: string }>;
+    expect(workUnitColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'id',
+      'agent_class_name',
+      'agent_class_kind',
+      'state',
+      'claimed_task_id',
+      'claimed_subtask_id',
+      'heartbeat_at',
+      'lease_expires_at',
     ]));
 
     const taskSearchIndexColumns = db.prepare('PRAGMA table_info(task_search_index)').all() as Array<{ name: string }>;

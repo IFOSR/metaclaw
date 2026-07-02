@@ -2,15 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { ExecutorAdminService } from '../../src/executor/executor-admin-service.js';
-import { ExecutorProfileService } from '../../src/executor/executor-profile-service.js';
+import { AgentClassService } from '../../src/executor/agent-class-service.js';
 import { SessionPresentationService } from '../../src/session/session-presentation-service.js';
-import { SessionPersistenceService } from '../../src/session/session-persistence-service.js';
-import { ExecutorRoutingCoordinator } from '../../src/core/executor-routing-coordinator.js';
+import { PlannerRoutingSkill } from '../../src/planner/planner-routing-skill.js';
+import { WorkUnitClaimService } from '../../src/execution/work-unit-claim-service.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
+import { SubtaskRepo } from '../../src/storage/subtask-repo.js';
+import { WorkUnitRepo } from '../../src/storage/work-unit-repo.js';
 import { TaskEngine } from '../../src/task/task-engine.js';
-import { OrchestrationEngine } from '../../src/guidance/orchestration.js';
-import { TaskRuntimeService } from '../../src/task/task-runtime-service.js';
-import type { ExecutorAdapter } from '../../src/executor/adapter.js';
 
 function createDb() {
   const db = new Database(':memory:');
@@ -19,39 +18,21 @@ function createDb() {
   return db;
 }
 
-function createTaskRuntime(db: Database.Database) {
-  const taskRepo = new TaskRepo(db);
-  const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-admin-routing-tests');
-  const executor: ExecutorAdapter = {
-    name: 'codex-cli',
-    execute: vi.fn(),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    abort: vi.fn(),
-  };
-  return {
-    executor,
-    taskRuntimeService: new TaskRuntimeService({
-      taskEngine,
-      taskRepo,
-      orchestration: new OrchestrationEngine(taskEngine),
-    }),
-  };
-}
-
-describe('executor admin and routing services', () => {
-  it('owns executor register wizard state and persists profiles without session logic', async () => {
+describe('agent class admin and planner dispatch services', () => {
+  it('owns executor AgentClass register wizard state and persists classes without session logic', async () => {
     const db = createDb();
-    const profileService = new ExecutorProfileService({
+    const agentClassService = new AgentClassService({
       db,
       defaultExecutorName: 'codex-cli',
+      availableCommands: new Set(['codex']),
     });
     const service = new ExecutorAdminService({
-      profileService,
+      agentClassService,
       presentation: new SessionPresentationService(),
       fetchText: vi.fn(),
     });
 
-    expect(service.startWizard().join('\n')).toContain('Executor 名称是什么');
+    expect(service.startWizard().join('\n')).toContain('Executor AgentClass name');
     await service.handlePendingWizardInput('research-bot');
     await service.handlePendingWizardInput('manual');
     await service.handlePendingWizardInput('research-bot');
@@ -62,10 +43,11 @@ describe('executor admin and routing services', () => {
     const result = await service.handlePendingWizardInput('y');
 
     expect(result.handled).toBe(true);
-    expect(result.lines.join('\n')).toContain('已注册 Executor：research-bot');
+    expect(result.lines.join('\n')).toContain('Registered Executor AgentClass: research-bot');
     expect(service.hasPendingWizard()).toBe(false);
-    expect(profileService.findByName('research-bot')).toMatchObject({
+    expect(agentClassService.findByName('research-bot')).toMatchObject({
       name: 'research-bot',
+      kind: 'executor',
       runtimeCommand: 'research-bot',
       runtimeArgs: ['run', '--prompt', '{prompt}'],
       runtimeCheckCommand: 'research-bot --version',
@@ -78,9 +60,10 @@ describe('executor admin and routing services', () => {
   it('infers package runtime from project URL inside the admin service', async () => {
     const db = createDb();
     const service = new ExecutorAdminService({
-      profileService: new ExecutorProfileService({
+      agentClassService: new AgentClassService({
         db,
         defaultExecutorName: 'codex-cli',
+        availableCommands: new Set(['codex']),
       }),
       presentation: new SessionPresentationService(),
       fetchText: vi.fn(async url => url.endsWith('/package.json')
@@ -97,56 +80,51 @@ describe('executor admin and routing services', () => {
     expect(result.lines.join('\n')).toContain('check=research-bot --version');
   });
 
-  it('owns executor route event persistence and display labels', () => {
+  it('keeps business dispatch in PlannerRoutingSkill and resource arbitration in WorkUnitClaimService', () => {
     const db = createDb();
-    const profileService = new ExecutorProfileService({
+    const agentClassService = new AgentClassService({
       db,
       defaultExecutorName: 'codex-cli',
+      availableCommands: new Set(['codex']),
     });
-    profileService.seedDefaults();
-    const { taskRuntimeService, executor } = createTaskRuntime(db);
-    const task = taskRuntimeService.createTask({
-      title: '写测试',
-      goal: '请实现 TypeScript 单元测试',
+    agentClassService.seedDefaults();
+    const taskRepo = new TaskRepo(db);
+    const taskEngine = new TaskEngine(taskRepo, '/tmp/metaclaw-admin-routing-tests');
+    const task = taskEngine.create({
+      title: 'Write tests',
+      goal: 'Please implement TypeScript unit tests',
     });
-    const coordinator = new ExecutorRoutingCoordinator({
-      profileService,
-      taskRuntimeService,
-      persistenceService: new SessionPersistenceService(db),
-      defaultExecutorName: executor.name,
-    });
-
-    const routed = coordinator.resolveForTask({
-      taskId: task.id,
-      userInput: task.goal,
-      intentDecision: {
-        interactionType: 'durable_task',
-        confidence: 0.8,
-        reason: 'repo task',
-        clarificationQuestion: null,
-        risk: { level: 'low', requiresConfirmation: false, reasons: [] },
-        task: { binding: 'new', taskId: null, control: 'none', scope: null },
-        execution: {
-          mode: 'single_executor',
-          complexity: 'simple',
-          selectedExecutor: 'codex-cli',
-          candidateExecutors: ['codex-cli'],
-          requiresVerification: true,
-          canModifyFiles: true,
-          requiresExternalGateway: false,
-          capabilityClass: 'code_edit',
-          primaryIntent: 'repo_execution',
-          matchedBoundary: ['repo_execution'],
-        },
-        hints: [],
+    const subtaskPlan = new PlannerRoutingSkill().plan({
+      task,
+      userPrompt: task.goal,
+      taskExecutionPlan: {
+        mode: 'reuse-existing',
+        executionTaskId: task.id,
+        contextTaskId: task.id,
+        transitions: [],
       },
+      intentDecision: null,
+      agentClasses: agentClassService.listAgentClasses(),
+      resources: [],
+      recalledTaskIds: [],
+    }).subtasks[0]!;
+
+    const subtaskRepo = new SubtaskRepo(db);
+    subtaskRepo.upsert({
+      ...subtaskPlan,
+      taskId: task.id,
+      status: 'ready',
+      result: '',
+      error: null,
+    });
+    const claim = new WorkUnitClaimService(new WorkUnitRepo(db)).claim({
+      taskId: task.id,
+      subtask: subtaskRepo.listByTask(task.id)[0]!,
     });
 
-    expect(routed.eventId).toMatch(/^route_/);
-    expect(coordinator.formatRoutingDecision(routed).join('\n')).toContain('route decision: codex-cli');
-    expect(coordinator.formatRunLabel(routed.executionPolicy)).toBe('codex-cli');
-    expect(db.prepare('SELECT selected_executor FROM executor_route_events').get()).toEqual({
-      selected_executor: 'codex-cli',
-    });
+    expect(subtaskPlan.candidateAgentClasses).toContain('codex-cli');
+    expect(JSON.stringify(subtaskPlan)).not.toContain('ExecutionPolicy');
+    expect(claim?.workUnit.id).toBe('executor-1');
+    expect(claim?.workUnit.agentClassName).toBe('codex-cli');
   });
 });

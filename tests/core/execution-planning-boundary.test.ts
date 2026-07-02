@@ -9,24 +9,27 @@ function readSource(path: string): string {
 }
 
 describe('Execution planning architecture boundaries', () => {
-  it('keeps executor routing decisions behind ExecutionPolicyPlanner', () => {
+  it('keeps business dispatch in PlannerRoutingSkill and resource arbitration in WorkUnitClaimService', () => {
     const sessionSource = readSource('src/session/metaclaw-session.ts');
+    const coordinatorSource = readSource('src/session/session-execution-coordinator.ts');
     const executorCommandSource = readSource('src/commands/executor-commands.ts');
-    const routingCoordinatorSource = readSource('src/core/executor-routing-coordinator.ts');
-    const planningSource = readSource('src/core/execution-planning-service.ts');
-    const policyPlannerSource = readSource('src/routing/execution-policy-planner.ts');
+    const plannerRoutingSource = readSource('src/planner/planner-routing-skill.ts');
     const strategyPlannerSource = readSource('src/core/execution-strategy-planner.ts');
 
     expect(sessionSource).not.toContain('new ExecutorRouter');
     expect(executorCommandSource).not.toContain('new ExecutorRouter');
-    expect(executorCommandSource).toContain('ExecutionPlanningService');
-    expect(sessionSource).toContain('ExecutorRoutingCoordinator');
+    expect(sessionSource).not.toContain('ExecutorRoutingCoordinator');
+    expect(coordinatorSource).not.toContain('resolveForTask');
+    expect(coordinatorSource).not.toContain('ExecutionPolicyPlanner');
+    expect(coordinatorSource).not.toContain('fallbackChain');
+    expect(coordinatorSource).toContain('plannerRuntimeService.plan');
+    expect(coordinatorSource).toContain('workUnitClaimService.claim');
+    expect(executorCommandSource).not.toContain('ExecutionPlanningService');
+    expect(executorCommandSource).toContain('PlannerRoutingSkill');
     expect(sessionSource).not.toContain('executionPlanningService.plan');
-    expect(routingCoordinatorSource).toContain('executionPlanningService.plan');
-    expect(planningSource).not.toContain('new ExecutorRouter');
-    expect(planningSource).not.toContain('ExecutionPlanV2');
-    expect(planningSource).toContain('ExecutionPolicyPlanner');
-    expect(policyPlannerSource).toContain('ExecutionStrategyPlanner');
+    expect(plannerRoutingSource).toContain('ExecutionStrategyPlanner');
+    expect(plannerRoutingSource).not.toContain('ExecutionPolicy');
+    expect(plannerRoutingSource).not.toContain('fallbackChain');
     expect(strategyPlannerSource).not.toContain('ExecutorRouteDecision');
     expect(strategyPlannerSource).not.toContain('routeDecision');
   });

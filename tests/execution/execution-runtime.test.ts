@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import type { ExecutorAdapter, ExecutorInput } from '../../src/executor/adapter.js';
-import type { ExecutorResult, Config, Task } from '../../src/core/types.js';
+import type { AgentClass, Config, ExecutorResult, Subtask, Task, WorkUnit } from '../../src/core/types.js';
 import { ExecutionRuntime, ExecutorAdapterRegistry, ExecutorRegistry } from '../../src/execution/execution-runtime.js';
-import type { ExecutionPolicy } from '../../src/core/execution-policy.js';
-import { ExecutorProfileRepo } from '../../src/storage/executor-profile-repo.js';
+import { AgentClassRepo } from '../../src/storage/agent-class-repo.js';
 import { runMigrations } from '../../src/storage/migrations.js';
 
 function createDb(): Database.Database {
@@ -68,34 +67,67 @@ function createResult(output: string, success = true): ExecutorResult {
   };
 }
 
-function createPolicy(overrides: Partial<ExecutionPolicy> = {}): ExecutionPolicy {
-  const primaryExecutor = overrides.primaryExecutor ?? 'codex-cli';
+function createAgentClass(name = 'codex-cli'): AgentClass {
   return {
+    name,
+    kind: 'executor',
+    domains: ['software'],
+    capabilities: ['coding'],
+    inputTypes: ['text'],
+    outputTypes: ['markdown'],
+    strengths: [],
+    weaknesses: [],
+    primaryUseCases: [],
+    avoidUseCases: [],
+    intentAffinity: {},
+    riskLevel: 'medium',
+    availability: 'available',
+    historicalSuccess: 0.8,
+    harness: 'cli',
+    model: null,
+    skills: [],
+    mcpServers: [],
+    plugins: [],
+    runtimeCommand: null,
+    runtimeArgs: [],
+    runtimeCheckCommand: null,
+    projectUrl: null,
+  };
+}
+
+function createSubtask(): Subtask {
+  return {
+    id: 'subtask_runtime',
     taskId: 'task_runtime',
-    mode: 'single_executor',
-    primaryExecutor,
-    candidateExecutors: [primaryExecutor],
-    isolationRequired: false,
-    verificationLevel: 'none',
-    reviewerExecutor: null,
-    riskLevel: 'low',
-    estimatedCostClass: 'cheap',
-    fallbackChain: [],
-    acceptanceCriteria: [],
-    capabilityClasses: ['general'],
-    reason: 'test policy',
-    strategy: {
-      mode: 'single_executor',
-      reason: 'test strategy',
-      subtasks: [],
-      aggregation: {
-        summary: 'single executor',
-        requiredArtifacts: [],
-        criteria: [],
-      },
-    },
-    subtasks: [],
-    ...overrides,
+    title: 'Runtime subtask',
+    goal: 'execute runtime subtask',
+    status: 'running',
+    dependsOn: [],
+    requiredAgentClassKind: 'executor',
+    agentClassHint: 'codex-cli',
+    candidateAgentClasses: ['codex-cli'],
+    expectedOutput: 'summary',
+    acceptance: [],
+    riskLevel: 'medium',
+    result: '',
+    error: null,
+    createdAt: '2026-06-22T00:00:00Z',
+    updatedAt: '2026-06-22T00:00:00Z',
+  };
+}
+
+function createWorkUnit(agentClassName = 'codex-cli'): WorkUnit {
+  return {
+    id: 'executor-1',
+    agentClassName,
+    agentClassKind: 'executor',
+    state: 'running',
+    claimedTaskId: 'task_runtime',
+    claimedSubtaskId: 'subtask_runtime',
+    heartbeatAt: '2026-06-22T00:00:00Z',
+    leaseExpiresAt: null,
+    createdAt: '2026-06-22T00:00:00Z',
+    updatedAt: '2026-06-22T00:00:00Z',
   };
 }
 
@@ -124,68 +156,34 @@ function createRuntime(options: {
 }
 
 describe('ExecutionRuntime', () => {
-  it('executes the selected single executor from an execution policy', async () => {
+  it('executes a claimed subtask on the claimed work unit agent class', async () => {
     const deepseek = createExecutor('deepseek-tui', createResult('deepseek ok'));
     const runtime = createRuntime({ executors: { 'deepseek-tui': deepseek } });
+    const agentClass = createAgentClass('deepseek-tui');
 
     const result = await runtime.run({
       taskId: 'task_runtime',
       executionId: 'exec_runtime',
-      policy: createPolicy({
-        primaryExecutor: 'deepseek-tui',
-        candidateExecutors: ['deepseek-tui'],
-      }),
+      spec: {
+        subtask: createSubtask(),
+        workUnit: createWorkUnit('deepseek-tui'),
+        agentClass,
+        acceptance: [],
+        expectedOutput: 'summary',
+      },
       executorInput: createExecutorInput(),
       onProgress: vi.fn(),
     });
 
     expect(result.executorName).toBe('deepseek-tui');
     expect(result.output).toBe('deepseek ok');
-    expect(result).toMatchObject({
-      taskId: 'task_runtime',
-      executionId: 'exec_runtime',
-      status: 'success',
-      executorName: 'deepseek-tui',
-      output: 'deepseek ok',
-    });
     expect(result.runtime.attemptedExecutors).toEqual(['deepseek-tui']);
+    expect(result.runtime.fallbackExecutors).toEqual([]);
     expect(deepseek.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('runs research policies on the primary executor without racing peers', async () => {
-    let resolvePi!: (value: ExecutorResult) => void;
-    const piPromise = new Promise<ExecutorResult>(resolve => {
-      resolvePi = resolve;
-    });
-    const pi = createExecutor('pi-agent', piPromise);
-    const hermes = createExecutor('hermes-agent', createResult('hermes should not run'));
-    const runtime = createRuntime({ executors: { 'pi-agent': pi, 'hermes-agent': hermes } });
-
-    const runPromise = runtime.run({
-      taskId: 'task_runtime',
-      executionId: 'exec_runtime',
-      policy: createPolicy({
-        mode: 'single_executor',
-        primaryExecutor: 'pi-agent',
-        candidateExecutors: ['pi-agent', 'hermes-agent'],
-      }),
-      executorInput: createExecutorInput(),
-      onProgress: vi.fn(),
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(pi.execute).toHaveBeenCalledTimes(1);
-    expect(hermes.execute).not.toHaveBeenCalled();
-    resolvePi(createResult('pi wins'));
-
-    const result = await runPromise;
-    expect(result.executorName).toBe('pi-agent');
-    expect(result.runtime.attemptedExecutors).toEqual(['pi-agent']);
-    expect(hermes.abort).not.toHaveBeenCalled();
-  });
-
-  it('uses the policy fallback chain when the primary executor fails', async () => {
-    const codex = createExecutor('codex-cli', createResult('codex fallback ok'));
+  it('does not perform runtime fallback when the claimed executor fails', async () => {
+    const codex = createExecutor('codex-cli', createResult('codex should not run'));
     const pi = createExecutor('pi-agent', createResult('executor idle timeout', false));
     const runtime = createRuntime({
       defaultExecutor: codex,
@@ -195,110 +193,31 @@ describe('ExecutionRuntime', () => {
     const result = await runtime.run({
       taskId: 'task_runtime',
       executionId: 'exec_runtime',
-      policy: createPolicy({
-        primaryExecutor: 'pi-agent',
-        candidateExecutors: ['pi-agent'],
-        fallbackChain: ['codex-cli'],
-      }),
+      spec: {
+        subtask: createSubtask(),
+        workUnit: createWorkUnit('pi-agent'),
+        agentClass: createAgentClass('pi-agent'),
+        acceptance: [],
+        expectedOutput: 'summary',
+      },
       executorInput: createExecutorInput(),
       onProgress: vi.fn(),
     });
 
-    expect(result.executorName).toBe('codex-cli');
-    expect(result.output).toBe('codex fallback ok');
-    expect(result.runtime.attemptedExecutors).toEqual(['pi-agent', 'codex-cli']);
-    expect(result.runtime.fallbackExecutors).toEqual(['codex-cli']);
-    expect(result.runtime.fallbackReason).toBe('pi-agent failed; trying configured fallback chain');
-    expect(result.runtime.fallbackLines).toEqual(['pi-agent failed: executor idle timeout']);
+    expect(result.status).toBe('failed');
+    expect(result.executorName).toBe('pi-agent');
+    expect(result.runtime.attemptedExecutors).toEqual(['pi-agent']);
+    expect(result.runtime.fallbackExecutors).toEqual([]);
     expect(pi.execute).toHaveBeenCalledTimes(1);
-    expect(codex.execute).toHaveBeenCalledTimes(1);
+    expect(codex.execute).not.toHaveBeenCalled();
   });
 
-  it('runs multi-executor policies through orchestrator and agentic loop with dependency outputs', async () => {
-    const hermes = createExecutor('hermes-agent', createResult('research sources: https://example.com docs/research.md'));
-    const codex = createExecutor('codex-cli', createResult('implementation used prior research. npm test -- tests/execution/execution-runtime.test.ts docs/patch.md'));
-    const runtime = createRuntime({
-      defaultExecutor: codex,
-      executors: { 'hermes-agent': hermes },
-    });
-
-    const result = await runtime.run({
-      taskId: 'task_runtime',
-      executionId: 'exec_runtime_multi',
-      policy: createPolicy({
-        mode: 'multi_executor',
-        primaryExecutor: 'codex-cli',
-        candidateExecutors: ['hermes-agent', 'codex-cli'],
-        verificationLevel: 'test',
-        strategy: {
-          mode: 'multi_executor',
-          reason: 'research then implement',
-          subtasks: [
-            {
-              id: 'subtask_research',
-              title: 'Research',
-              goal: 'Research first',
-              executorHint: 'hermes-agent',
-              dependsOn: [],
-              inputs: { taskId: 'task_runtime', resources: [], recalledTaskIds: [] },
-              expectedOutput: 'analysis',
-              acceptance: ['include sources'],
-              riskLevel: 'medium',
-            },
-            {
-              id: 'subtask_implementation',
-              title: 'Implementation',
-              goal: 'Implement after research',
-              executorHint: 'codex-cli',
-              dependsOn: ['subtask_research'],
-              inputs: { taskId: 'task_runtime', resources: [], recalledTaskIds: [] },
-              expectedOutput: 'patch',
-              acceptance: ['include tests'],
-              riskLevel: 'high',
-            },
-          ],
-          aggregation: {
-            mode: 'verify_and_summarize',
-            acceptance: ['include sources', 'include tests'],
-            criteria: [],
-            conflictPolicy: 'flag_conflicts',
-            maxIterations: 1,
-          },
-        },
-      }),
-      executorInput: createExecutorInput(),
-      onProgress: vi.fn(),
-    });
-
-    expect(result.status).toBe('success');
-    expect(result.output).toContain('Verification: pass');
-    expect(result).toMatchObject({
-      taskId: 'task_runtime',
-      executionId: 'exec_runtime_multi',
-      status: 'success',
-      executorName: 'codex-cli',
-    });
-    expect(result.subtaskResults.map(item => item.subtaskId)).toEqual(['subtask_research', 'subtask_implementation']);
-    expect(hermes.execute).toHaveBeenCalledTimes(1);
-    expect(codex.execute).toHaveBeenCalledTimes(1);
-    const implementationPrompt = (codex.execute as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].userPrompt;
-    expect(implementationPrompt).toContain('Previous subtask outputs');
-    expect(implementationPrompt).toContain('research sources');
-  });
-
-  it('resolves custom executor runtime profiles through the registry', () => {
+  it('resolves custom executor runtime agent classes through the registry', () => {
     const db = createDb();
-    new ExecutorProfileRepo(db).upsert({
-      name: 'research-bot',
+    new AgentClassRepo(db).upsert({
+      ...createAgentClass('research-bot'),
       domains: ['research'],
       capabilities: ['report_generation'],
-      inputTypes: ['text'],
-      outputTypes: ['markdown'],
-      strengths: [],
-      weaknesses: [],
-      riskLevel: 'medium',
-      availability: 'available',
-      historicalSuccess: 0.8,
       runtimeCommand: 'research-bot',
       runtimeArgs: ['run', '--prompt', '{prompt}'],
       runtimeCheckCommand: 'research-bot --version',

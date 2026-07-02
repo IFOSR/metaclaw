@@ -185,11 +185,11 @@ describe('MetaclawSession architecture boundaries', () => {
     expect(source).not.toContain('private buildRecoverableFailureHint');
   });
 
-  it('keeps executor administration, profile persistence, and runtime inference outside the session facade', () => {
+  it('keeps executor administration, agent class persistence, and runtime inference outside the session facade', () => {
     const source = readSource('src/session/metaclaw-session.ts');
 
     expect(source).toContain('ExecutorAdminService');
-    expect(source).toContain('ExecutorProfileService');
+    expect(source).toContain('AgentClassService');
     expect(source).not.toContain("from 'child_process'");
     expect(source).not.toContain('spawnSync');
     expect(source).not.toContain('ExecutorProfileRepo');
@@ -201,10 +201,11 @@ describe('MetaclawSession architecture boundaries', () => {
     expect(source).not.toContain('private fetchText');
   });
 
-  it('keeps executor routing, progress observation, and workspace filesystem effects outside the session facade', () => {
+  it('keeps planner dispatch, progress observation, and workspace filesystem effects outside the session facade', () => {
     const source = readSource('src/session/metaclaw-session.ts');
 
-    expect(source).toContain('ExecutorRoutingCoordinator');
+    expect(source).toContain('PlannerRuntimeService');
+    expect(source).toContain('WorkUnitClaimService');
     expect(source).toContain('ExecutionProgressService');
     expect(source).toContain('WorkspaceTargetService');
     expect(source).not.toContain("from 'fs'");

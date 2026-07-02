@@ -4,15 +4,19 @@ The vocabulary for how MetaClaw decides which executor(s) run a user request. Ex
 
 ## Current Implementation Notes
 
-The active execution path is policy-first. Natural-language input is classified by `src/core/intent-orchestrator.ts` and `src/core/semantic-intent-router.ts` into interaction type plus one `CapabilityClass`. Session code reaches executor selection through `src/core/executor-routing-coordinator.ts`, `src/core/execution-planning-service.ts`, and `src/routing/execution-policy-planner.ts`. `ExecutionPolicyPlanner` owns the primary executor, candidate executors, fallback chain, risk level, verification level, acceptance criteria, and strategy handoff to `src/core/execution-strategy-planner.ts`.
+The active execution path is planner-first. Session execution prepares durable task context, asks `src/planner/planner-runtime-service.ts` to recognize intent and produce a work graph, persists `Subtask` nodes, claims an idle executor `WorkUnit`, and calls `ExecutionRuntime` with a `SubtaskExecutionSpec`.
 
-`src/core/executor-router.ts` is a legacy compatibility seam. Keep its exported types, route-event shape, fallback intent helper, and capability/legacy-intent adapter functions stable for older callers, tests, and persisted route records. Do not add new primary routing behavior there unless the task explicitly targets compatibility. `historicalSuccess` remains profile/admin/storage metadata and must not be reintroduced into current scoring.
+`src/planner/intent-recognition-skill.ts` owns the reusable intake decision logic for direct reply, task control, durable task, clarification, no action, and coarse capability. It must not output a selected executor or work unit.
 
-`src/core/llm-bridge.ts` still contains deprecated route-compatible schemas for old LLM flows; treat it as a process adapter and compatibility parser, not the owner of current routing policy. `src/core/semantic-intent-router.ts` may normalize legacy route intent names, but new behavior should prefer `CapabilityClass` values (`code_edit`, `research`, `messaging`, `memory_ops`, `office_automation`, `conversation`, `general`).
+`src/planner/planner-routing-skill.ts` owns reusable planning and routing heuristics. It may rank candidate `AgentClass` values and produce `SubtaskPlan` nodes, but it must not claim a `WorkUnit`, write route events, or produce an `ExecutionPolicy`.
 
-Default executor profiles are seeded in `src/executor/executor-registry-seeder.ts`. `codex-cli` is the normal default profile. Pi/Hermes are available when their commands are installed. `deepseek-tui`, `claude-code`, and `openclaw` are retained for explicit/default configuration compatibility, not default seeding.
+`src/execution/work-unit-claim-service.ts` is the runtime resource arbitration layer. It owns claim, running, waiting, failure, release, heartbeat, and heartbeat-lost transitions for concrete work units.
 
-When touching routing, update focused tests around the active path first: `tests/core/execution-planning-service.test.ts`, `tests/core/semantic-intent-router.test.ts`, `tests/core/intent-orchestrator.test.ts`, and only then `tests/core/executor-router.test.ts` for legacy compatibility behavior.
+`src/core/executor-router.ts`, `src/routing/execution-policy-planner.ts`, and `src/core/executor-routing-coordinator.ts` are no longer the active execution path. Treat them as migration reference for logic that is being folded into planner skills; do not add new primary routing behavior there.
+
+Default agent classes and fixed first-pool work units are seeded in `src/executor/agent-class-seeder.ts`: `planner`/`planner-1` and the configured executor agent class/`executor-1`. Existing `executor_profiles` rows migrate into `agent_classes` as `kind=executor`.
+
+When touching dispatch, update focused tests around the active path first: planner skills, work unit claim service, session execution coordinator, execution runtime, and storage migrations.
 
 ## Routing Language
 

@@ -468,6 +468,135 @@ const MIGRATIONS: Migration[] = [
       END;
     `,
   },
+  {
+    version: 15,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_classes (
+          name TEXT PRIMARY KEY,
+          kind TEXT NOT NULL DEFAULT 'executor',
+          domains_json TEXT NOT NULL DEFAULT '[]',
+          capabilities_json TEXT NOT NULL DEFAULT '[]',
+          input_types_json TEXT NOT NULL DEFAULT '[]',
+          output_types_json TEXT NOT NULL DEFAULT '[]',
+          strengths_json TEXT NOT NULL DEFAULT '[]',
+          weaknesses_json TEXT NOT NULL DEFAULT '[]',
+          primary_use_cases_json TEXT NOT NULL DEFAULT '[]',
+          avoid_use_cases_json TEXT NOT NULL DEFAULT '[]',
+          intent_affinity_json TEXT NOT NULL DEFAULT '{}',
+          risk_level TEXT NOT NULL DEFAULT 'medium',
+          availability TEXT NOT NULL DEFAULT 'available',
+          historical_success REAL NOT NULL DEFAULT 0.5,
+          harness TEXT,
+          model TEXT,
+          skills_json TEXT NOT NULL DEFAULT '[]',
+          mcp_servers_json TEXT NOT NULL DEFAULT '[]',
+          plugins_json TEXT NOT NULL DEFAULT '[]',
+          runtime_command TEXT,
+          runtime_args_json TEXT NOT NULL DEFAULT '[]',
+          runtime_check_command TEXT,
+          project_url TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS subtasks (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'created',
+          depends_on_json TEXT NOT NULL DEFAULT '[]',
+          required_agent_class_kind TEXT NOT NULL DEFAULT 'executor',
+          agent_class_hint TEXT,
+          candidate_agent_classes_json TEXT NOT NULL DEFAULT '[]',
+          expected_output TEXT NOT NULL DEFAULT 'summary',
+          acceptance_json TEXT NOT NULL DEFAULT '[]',
+          risk_level TEXT NOT NULL DEFAULT 'medium',
+          result TEXT NOT NULL DEFAULT '',
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS task_events (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          subtask_id TEXT,
+          event_type TEXT NOT NULL,
+          message TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS work_units (
+          id TEXT PRIMARY KEY,
+          agent_class_name TEXT NOT NULL,
+          agent_class_kind TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'starting',
+          claimed_task_id TEXT,
+          claimed_subtask_id TEXT,
+          heartbeat_at TEXT,
+          lease_expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (agent_class_name) REFERENCES agent_classes(name)
+        );
+
+        CREATE TABLE IF NOT EXISTS work_unit_events (
+          id TEXT PRIMARY KEY,
+          work_unit_id TEXT NOT NULL,
+          task_id TEXT,
+          subtask_id TEXT,
+          event_type TEXT NOT NULL,
+          state TEXT,
+          message TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (work_unit_id) REFERENCES work_units(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS worktree_leases (
+          id TEXT PRIMARY KEY,
+          worktree_path TEXT NOT NULL,
+          work_unit_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          subtask_id TEXT NOT NULL,
+          heartbeat_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          released_at TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (work_unit_id) REFERENCES work_units(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_work_units_state ON work_units(agent_class_kind, state, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_work_unit_events_unit ON work_unit_events(work_unit_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_worktree_leases_active ON worktree_leases(worktree_path, released_at, expires_at);
+      `);
+
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT OR IGNORE INTO agent_classes (
+          name, kind, domains_json, capabilities_json, input_types_json, output_types_json,
+          strengths_json, weaknesses_json, primary_use_cases_json, avoid_use_cases_json,
+          intent_affinity_json, risk_level, availability, historical_success,
+          runtime_command, runtime_args_json, runtime_check_command, project_url,
+          harness, model, skills_json, mcp_servers_json, plugins_json, created_at, updated_at
+        )
+        SELECT
+          name, 'executor', domains_json, capabilities_json, input_types_json, output_types_json,
+          strengths_json, weaknesses_json, primary_use_cases_json, avoid_use_cases_json,
+          intent_affinity_json, risk_level, availability, historical_success,
+          runtime_command, runtime_args_json, runtime_check_command, project_url,
+          NULL, NULL, '[]', '[]', '[]', ?, ?
+        FROM executor_profiles
+      `).run(now, now);
+    },
+  },
 ];
 
 function columnExists(db: Database.Database, table: string, column: string): boolean {
@@ -518,4 +647,9 @@ export function runMigrations(db: Database.Database): void {
   addColumnIfMissing(db, 'executor_route_events', 'primary_intent', "TEXT NOT NULL DEFAULT 'general'");
   addColumnIfMissing(db, 'executor_route_events', 'matched_boundary_json', "TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, 'executor_route_events', 'rejected_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'agent_classes', 'harness', 'TEXT');
+  addColumnIfMissing(db, 'agent_classes', 'model', 'TEXT');
+  addColumnIfMissing(db, 'agent_classes', 'skills_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'agent_classes', 'mcp_servers_json', "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, 'agent_classes', 'plugins_json', "TEXT NOT NULL DEFAULT '[]'");
 }

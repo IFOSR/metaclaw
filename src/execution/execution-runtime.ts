@@ -1,4 +1,4 @@
-// Execution runtime module that resolves executor adapters and runs ExecutionPolicy decisions.
+// Execution runtime module that runs an already-claimed subtask on one executor work unit.
 import type Database from 'better-sqlite3';
 import type { ExecutorAdapter, ExecutorInput, ExecutorProgressEvent } from '../executor/adapter.js';
 import { ClaudeCodeAdapter } from '../executor/claude-code.js';
@@ -8,13 +8,10 @@ import { DeepSeekTuiAdapter } from '../executor/deepseek-tui.js';
 import { HermesAgentAdapter } from '../executor/hermes-agent.js';
 import { OpenClawAdapter } from '../executor/openclaw.js';
 import { PiAgentAdapter } from '../executor/pi-agent.js';
-import { ExecutorProfileRepo } from '../storage/executor-profile-repo.js';
-import type { Config, ExecutorResult } from '../core/types.js';
+import { AgentClassRepo } from '../storage/agent-class-repo.js';
+import type { AgentClass, Config, ExecutorResult, Subtask, WorkUnit } from '../core/types.js';
 import type { ExecutionResult } from '../core/execution-planning-service.js';
-import type { ExecutionPolicy } from '../core/execution-policy.js';
-import type { ExecutionStrategy } from '../core/execution-strategy-planner.js';
-import { MultiExecutorOrchestrator, type SubtaskResult } from './multi-executor-orchestrator.js';
-import { AgenticLoopController } from './agentic-loop-controller.js';
+import type { SubtaskResult } from './multi-executor-orchestrator.js';
 
 export interface ExecutorRegistryDeps {
   db: Database.Database;
@@ -104,16 +101,16 @@ export class ExecutorRegistry {
       return registered;
     }
 
-    const customProfile = new ExecutorProfileRepo(this.deps.db).findByName(name);
-    if (!customProfile?.runtimeCommand) {
+    const customAgentClass = new AgentClassRepo(this.deps.db).findByName(name);
+    if (!customAgentClass?.runtimeCommand) {
       return null;
     }
 
     return new CustomCliExecutorAdapter({
       name,
-      command: customProfile.runtimeCommand,
-      args: customProfile.runtimeArgs ?? [],
-      checkCommand: customProfile.runtimeCheckCommand,
+      command: customAgentClass.runtimeCommand,
+      args: customAgentClass.runtimeArgs ?? [],
+      checkCommand: customAgentClass.runtimeCheckCommand,
       timeout: this.deps.config.executor.timeout,
       maxDuration: this.deps.config.executor.max_duration,
       workspaceRoot: process.cwd(),
@@ -145,102 +142,39 @@ export function createDefaultExecutor(config: {
 export interface ExecutionRuntimeRunInput {
   taskId: string;
   executionId: string;
-  policy: ExecutionPolicy;
+  spec: SubtaskExecutionSpec;
   executorInput: Omit<ExecutorInput, 'onProgress'>;
   onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
 }
 
-interface ExecutorAttemptResult {
-  executor: ExecutorAdapter;
-  result: ExecutorResult;
-  attemptedExecutors: string[];
-  fallbackExecutors: string[];
-  fallbackReason: string | null;
-  fallbackLines: string[];
+export interface SubtaskExecutionSpec {
+  subtask: Subtask;
+  workUnit: WorkUnit;
+  agentClass: AgentClass;
+  acceptance: string[];
+  expectedOutput: Subtask['expectedOutput'];
 }
 
 export class ExecutionRuntime {
   constructor(
     private readonly registry: ExecutorRegistry,
     private readonly defaultExecutor: ExecutorAdapter,
-    private readonly multiExecutorOrchestrator = new MultiExecutorOrchestrator(),
-    private readonly agenticLoopController = new AgenticLoopController(),
   ) {}
 
   async run(input: ExecutionRuntimeRunInput): Promise<ExecutionResult> {
-    if (input.policy.mode === 'multi_executor') {
-      return this.runMultiExecutor(input);
-    }
-
-    const attempt = await this.executeWithFallbackChain(
-      unique([input.policy.primaryExecutor, ...input.policy.fallbackChain]),
+    const executor = this.registry.resolveRequired(input.spec.agentClass.name);
+    const result = await this.executeOnce(
+      executor,
       input.executorInput,
       input.onProgress,
     );
-
     return this.toExecutionResult({
       input,
-      executor: attempt.executor,
-      result: attempt.result,
+      executor,
+      result,
       subtaskResults: [],
       runtime: {
-        attemptedExecutors: attempt.attemptedExecutors,
-        fallbackExecutors: attempt.fallbackExecutors,
-        fallbackReason: attempt.fallbackReason,
-        fallbackLines: attempt.fallbackLines,
-      },
-    });
-  }
-
-  private async runMultiExecutor(input: ExecutionRuntimeRunInput): Promise<ExecutionResult> {
-    if (input.policy.strategy.mode !== 'multi_executor') {
-      const fallbackExecutor = this.registry.resolveRequired(input.policy.primaryExecutor);
-      const result: ExecutorResult = {
-        success: false,
-        output: '',
-        error: 'multi_executor policy is missing a multi-executor strategy',
-        exitCode: 1,
-        durationMs: 0,
-      };
-      return this.toExecutionResult({
-        input,
-        executor: fallbackExecutor,
-        result,
-        subtaskResults: [],
-        runtime: {
-          attemptedExecutors: [fallbackExecutor.name],
-          fallbackExecutors: [],
-          fallbackReason: null,
-          fallbackLines: [],
-        },
-      });
-    }
-
-    const startedAt = Date.now();
-    const executors = this.resolveSubtaskExecutors(input.policy.strategy);
-    const loopResult = await this.agenticLoopController.run({
-      strategy: input.policy.strategy,
-      task: input.executorInput.task,
-      userPrompt: input.executorInput.userPrompt,
-      executors,
-      defaultExecutor: this.defaultExecutor,
-      orchestrator: this.multiExecutorOrchestrator,
-    });
-    const result: ExecutorResult = {
-      success: loopResult.status === 'pass',
-      output: loopResult.aggregation.finalOutput,
-      error: loopResult.status === 'blocked' ? loopResult.blockedReason ?? 'multi-executor verification blocked' : undefined,
-      exitCode: loopResult.status === 'pass' ? 0 : 1,
-      durationMs: Date.now() - startedAt,
-    };
-
-    return this.toExecutionResult({
-      input,
-      executor: this.registry.resolveRequired(input.policy.primaryExecutor),
-      result,
-      subtaskResults: loopResult.results,
-      runtime: {
-        attemptedExecutors: Array.from(executors.values()).map(item => item.name),
+        attemptedExecutors: [executor.name],
         fallbackExecutors: [],
         fallbackReason: null,
         fallbackLines: [],
@@ -275,72 +209,6 @@ export class ExecutionRuntime {
         blockReason: input.result.error ?? null,
       },
       runtime: input.runtime,
-    };
-  }
-
-  private resolveSubtaskExecutors(strategy: Extract<ExecutionStrategy, { mode: 'multi_executor' }>): Map<string, ExecutorAdapter> {
-    const executors = new Map<string, ExecutorAdapter>();
-    for (const unit of strategy.subtasks) {
-      const executor = this.registry.resolve(unit.executorHint);
-      if (executor) {
-        executors.set(unit.executorHint, executor);
-      }
-    }
-    return executors;
-  }
-
-  private async executeWithFallbackChain(
-    executorNames: string[],
-    input: Omit<ExecutorInput, 'onProgress'>,
-    onProgress: (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void,
-  ): Promise<ExecutorAttemptResult> {
-    const chain = executorNames.length > 0 ? executorNames : [this.defaultExecutor.name];
-    const attemptedExecutors: string[] = [];
-    const fallbackExecutors: string[] = [];
-    const fallbackLines: string[] = [];
-    let fallbackReason: string | null = null;
-    let lastExecutor = this.defaultExecutor;
-    let lastResult: ExecutorResult = {
-      success: false,
-      output: '',
-      error: 'No executor was attempted',
-      exitCode: 1,
-      durationMs: 0,
-    };
-
-    for (const [index, executorName] of chain.entries()) {
-      const executor = this.registry.resolveRequired(executorName);
-      lastExecutor = executor;
-      attemptedExecutors.push(executor.name);
-      if (index > 0) {
-        fallbackExecutors.push(executor.name);
-      }
-
-      const result = await this.executeOnce(executor, input, onProgress);
-      lastResult = result;
-      if (result.success) {
-        return {
-          executor,
-          result,
-          attemptedExecutors,
-          fallbackExecutors,
-          fallbackReason,
-          fallbackLines,
-        };
-      }
-
-      const message = result.error || `executor ${executor.name} failed without an error message`;
-      fallbackReason ??= `${executor.name} failed; trying configured fallback chain`;
-      fallbackLines.push(`${executor.name} failed: ${message}`);
-    }
-
-    return {
-      executor: lastExecutor,
-      result: lastResult,
-      attemptedExecutors,
-      fallbackExecutors,
-      fallbackReason,
-      fallbackLines,
     };
   }
 

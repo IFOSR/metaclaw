@@ -9,17 +9,23 @@ function createDb(): Database.Database {
   return db;
 }
 
-describe('executor registry and route commands', () => {
-  it('lists, registers, and unregisters executor profiles from the command surface', async () => {
+function createContext(db: Database.Database) {
+  return {
+    db,
+    executor: { name: 'codex-cli' },
+  } as any;
+}
+
+describe('agent class and planner route commands', () => {
+  it('lists, registers, and unregisters executor AgentClasses from the command surface', async () => {
     const db = createDb();
-    const context = {
-      db,
-      executor: { name: 'codex-cli' },
-    } as any;
+    const context = createContext(db);
 
     const initial = await executorCommand.execute(['list'], context);
-    expect(initial.content).toContain('已注册 Executors');
+    expect(initial.content).toContain('Registered AgentClasses');
     expect(initial.content).toContain('codex-cli');
+    expect(initial.content).toContain('planner');
+    expect(initial.content).toContain('WorkUnits:');
 
     const register = await executorCommand.execute([
       'register',
@@ -43,7 +49,7 @@ describe('executor registry and route commands', () => {
       '--success',
       '0.8',
     ], context);
-    expect(register.content).toBe('已注册 Executor：research-bot');
+    expect(register.content).toBe('Registered Executor AgentClass: research-bot');
 
     const afterRegister = await executorCommand.execute(['list'], context);
     expect(afterRegister.content).toContain('research-bot');
@@ -52,19 +58,16 @@ describe('executor registry and route commands', () => {
     expect(afterRegister.content).toContain('runtime=research-bot run --prompt {prompt}');
 
     const unregister = await executorCommand.execute(['unregister', 'research-bot'], context);
-    expect(unregister.content).toBe('已反注册 Executor：research-bot');
+    expect(unregister.content).toBe('Unregistered Executor AgentClass: research-bot');
 
     const afterUnregister = await executorCommand.execute(['list'], context);
     expect(afterUnregister.content).toContain('research-bot');
     expect(afterUnregister.content).toContain('status=unavailable');
   });
 
-  it('does not route to an unregistered executor', async () => {
+  it('does not preview route candidates for unavailable AgentClasses', async () => {
     const db = createDb();
-    const context = {
-      db,
-      executor: { name: 'codex-cli' },
-    } as any;
+    const context = createContext(db);
 
     await executorCommand.execute([
       'register',
@@ -80,20 +83,19 @@ describe('executor registry and route commands', () => {
     ], context);
 
     const before = await executorCommand.execute(['route', '请审查合同条款并输出风险矩阵'], context);
-    expect(before.content).toContain('Route Decision：legal-contract');
+    expect(before.content).toContain('Planner Route Preview');
+    expect(before.content).toContain('candidateAgentClasses=legal-contract');
 
     await executorCommand.execute(['unregister', 'legal-contract'], context);
 
     const after = await executorCommand.execute(['route', '请审查合同条款并输出风险矩阵'], context);
-    expect(after.content).not.toContain('Route Decision：legal-contract');
+    expect(after.content).toContain('Planner Route Preview');
+    expect(after.content).not.toContain('candidateAgentClasses=legal-contract');
   });
 
-  it('upserts executor profiles, routes tasks, and records route feedback', async () => {
+  it('upserts AgentClasses and reports planner task events instead of route events', async () => {
     const db = createDb();
-    const context = {
-      db,
-      executor: { name: 'codex-cli' },
-    } as any;
+    const context = createContext(db);
 
     await executorCommand.execute([
       'profile',
@@ -114,11 +116,11 @@ describe('executor registry and route commands', () => {
     expect(profiles.content).toContain('legal');
 
     const route = await executorCommand.execute(['route', '请审查合同条款并输出风险矩阵'], context);
+    expect(route.content).toContain('Planner Route Preview');
     expect(route.content).toContain('legal-contract');
-    expect(route.content).toContain('ask_review');
 
     const feedback = await executorCommand.execute(['route-feedback'], context);
-    expect(feedback.content).toContain('legal-contract');
-    expect(feedback.content).toContain('请审查合同条款');
+    expect(feedback.content).toContain('No planner task events recorded yet');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM executor_route_events').get()).toEqual({ count: 0 });
   });
 });

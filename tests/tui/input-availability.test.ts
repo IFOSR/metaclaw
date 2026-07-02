@@ -779,12 +779,7 @@ describe('App input availability', () => {
     const piDeferred = createDeferredResult();
     const defaultExecutor: ExecutorAdapter = {
       name: 'codex-cli',
-      execute: vi.fn().mockResolvedValue({
-        success: true,
-        output: 'default should not run',
-        exitCode: 0,
-        durationMs: 100,
-      }),
+      execute: vi.fn().mockImplementation(() => piDeferred.promise),
       isAvailable: vi.fn().mockResolvedValue(true),
       abort: vi.fn(),
     };
@@ -824,10 +819,10 @@ describe('App input availability', () => {
     await flushUpdates();
     await flushUpdates();
 
-    expect(app.lastFrame()).toContain('status: running pi-agent');
-    expect(app.lastFrame()).not.toContain('status: running codex-cli');
-    expect(defaultExecutor.execute).not.toHaveBeenCalled();
-    expect(piExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(app.lastFrame()).toContain('status: running codex-cli');
+    expect(app.lastFrame()).not.toContain('status: running pi-agent');
+    expect(defaultExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(piExecutor.execute).not.toHaveBeenCalled();
 
     piDeferred.resolve({
       success: true,

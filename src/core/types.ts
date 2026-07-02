@@ -52,6 +52,115 @@ export interface Task {
   updatedAt: string;
 }
 
+export type AgentClassKind = 'planner' | 'executor';
+export type AgentClassAvailability = 'available' | 'unavailable';
+export type AgentClassRiskLevel = 'low' | 'medium' | 'high';
+
+export interface AgentClass {
+  name: string;
+  kind: AgentClassKind;
+  domains: string[];
+  capabilities: string[];
+  inputTypes: string[];
+  outputTypes: string[];
+  strengths: string[];
+  weaknesses: string[];
+  primaryUseCases: string[];
+  avoidUseCases: string[];
+  intentAffinity: Record<string, number>;
+  riskLevel: AgentClassRiskLevel;
+  availability: AgentClassAvailability;
+  historicalSuccess: number;
+  harness: string | null;
+  model: string | null;
+  skills: string[];
+  mcpServers: string[];
+  plugins: string[];
+  runtimeCommand: string | null;
+  runtimeArgs: string[];
+  runtimeCheckCommand: string | null;
+  projectUrl: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Subtask {
+  id: string;
+  taskId: string;
+  title: string;
+  goal: string;
+  status: TaskStatus;
+  dependsOn: string[];
+  requiredAgentClassKind: AgentClassKind;
+  agentClassHint: string | null;
+  candidateAgentClasses: string[];
+  expectedOutput: 'analysis' | 'patch' | 'artifact' | 'review' | 'summary';
+  acceptance: string[];
+  riskLevel: AgentClassRiskLevel;
+  result: string;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WorkUnitState =
+  | 'starting'
+  | 'idle'
+  | 'claimed'
+  | 'running'
+  | 'waiting'
+  | 'heartbeat_lost'
+  | 'failed'
+  | 'draining'
+  | 'stopped';
+
+export interface WorkUnit {
+  id: string;
+  agentClassName: string;
+  agentClassKind: AgentClassKind;
+  state: WorkUnitState;
+  claimedTaskId: string | null;
+  claimedSubtaskId: string | null;
+  heartbeatAt: string | null;
+  leaseExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  subtaskId: string | null;
+  eventType: string;
+  message: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WorkUnitEvent {
+  id: string;
+  workUnitId: string;
+  taskId: string | null;
+  subtaskId: string | null;
+  eventType: string;
+  state: WorkUnitState | null;
+  message: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WorktreeLease {
+  id: string;
+  worktreePath: string;
+  workUnitId: string;
+  taskId: string;
+  subtaskId: string;
+  heartbeatAt: string;
+  expiresAt: string;
+  releasedAt: string | null;
+  createdAt: string;
+}
+
 // ─── 阻塞依赖 ───
 export interface Dependency {
   taskId: string;
