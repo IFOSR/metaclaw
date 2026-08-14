@@ -15,7 +15,7 @@ import type { AgentClassLookupPort } from '../executor/agent-class-lookup-port.j
 import type { AttemptSandboxPort } from './attempt-sandbox.js';
 import { SandboxedExecutorAdapter } from '../executor/sandboxed-executor-adapter.js';
 import type { AttemptSandboxRepositoryPort } from './repositories.js';
-import type { ExecutorRegistrySnapshot } from '../executor/executor-registry-types.js';
+import type { ExecutorRegistrySnapshot, RuntimeExecutorBinding } from '../executor/executor-registry-types.js';
 
 // Shared normalized result of running a task's work graph. Previously exported by
 // the retired core/execution-planning-service module; kept here on the live path.
@@ -60,6 +60,10 @@ export class ExecutorRegistry {
     return agentClass && binding
       ? new SandboxedExecutorAdapter(agentClass, binding, this.deps.attemptSandbox, this.deps.attemptSandboxRepository)
       : null;
+  }
+
+  runtimeBinding(name: string): Readonly<RuntimeExecutorBinding> | null {
+    return this.deps.snapshot().runtime.get(name) ?? null;
   }
 
   inspect(name: string): ExecutorRegistrationInspection {
@@ -139,6 +143,10 @@ export class ExecutionRuntime implements ActiveExecutionControl {
 
   supportsContinuation(name: string): boolean {
     return this.registry.resolve(name)?.supportsContinuation === true;
+  }
+
+  runtimeBinding(name: string): Readonly<RuntimeExecutorBinding> | null {
+    return this.registry.runtimeBinding(name);
   }
 
   inspectExecutorRegistration(name: string): ExecutorRegistrationInspection {

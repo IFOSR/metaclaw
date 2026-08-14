@@ -68,6 +68,12 @@ Completion Protocol hard-upgrades to v4. A successful Executor response contains
 
 The persisted `contract_correction` name remains, but its execution semantics are a complete same-AgentClass retry rather than response-only formatting. The retry starts a new Executor session in the existing Subtask worktree with the ordinary permission profile, mounts, tools, evidence and capability request boundaries. Runtime recomputes the authoritative workspace delta from the retry attempt's own baseline and final state; it never reuses the source attempt delta as the candidate fact. The recovery packet is bounded, includes the source attempt's structured Completion violations and known workspace/progress facts, and excludes the malformed raw response as the primary task input.
 
+### Executor session-chain amendment (2026-08-14)
+
+A Kernel-authorized continuation is a new attempt identity but may reuse the source attempt's confirmed native Executor session chain. For Pi, Runtime pins one persistent locator before launch and binds it to Task, generation, Subtask, AgentClass, verified Runtime binding/config and the persistent worktree branch/HEAD. The chain remains Subtask-scoped and serial: at most one attempt may own an active writer for a locator, while unrelated Subtasks retain independent worktrees and session chains. A contract-correction attempt continues to start a fresh session as specified above.
+
+The Adapter reports the native header and execution facts but does not retry. Execution validates the locator and reports `resume`, `fresh`, or `blocked`; ControlKernel alone authorizes native continuation, the bounded recovery-packet path, fallback, replan or blocking. Attempt terminal receipt and publication semantics are unchanged.
+
 ## Consequences
 
 - Existing non-terminal v3 graphs cannot be executed under the new handoff contract and must be parked for natural-language replanning.

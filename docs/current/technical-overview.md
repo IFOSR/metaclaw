@@ -6,9 +6,9 @@ AnyFusion is a local AI Task OS for agentic work. It turns natural-language requ
 
 It is built for teams who need agents to do more than answer the current turn. AnyFusion gives long-running AI work a task state machine, memory boundary, unified ControlKernel decision plane, work-unit dispatch runtime, verification loop, local Gateway, Feishu delivery path, and real end-to-end smoke gate.
 
-> Current implementation baseline (2026-08-11): PlanningAgentPlan v7, Work
+> Current implementation baseline (2026-08-14): PlanningAgentPlan v7, Work
 > Graph v6, Kernel event/snapshot/decision contract v5, Completion Protocol v4,
-> fresh-only SQLite schema v35 with no pre-release upgrade path, one explicit
+> fresh-only SQLite schema v36 with no pre-release upgrade path, one explicit
 > Project repository, user-approved whole-branch publication, and one
 > digest-bound Executor Registry Snapshot sourced from
 > `$ANYFUSION_CONFIG_HOME/executors.yaml`.
@@ -63,7 +63,7 @@ flowchart LR
   Publication --> Delivery[Delivery and UI<br/>TUI progress, Feishu, files, preview links]
   Delivery --> User
 
-  Session <--> Store[(Local SQLite schema 35<br/>projects, tasks, approvals,<br/>work units, events, memory)]
+  Session <--> Store[(Local SQLite schema 36<br/>projects, tasks, approvals,<br/>work units, events, memory)]
   Loop --> Decisions[(kernel_decisions)]
   Graph <--> Store
   Attempt <--> Store
@@ -837,11 +837,12 @@ AnyFusion can represent complex requests as a work graph instead of a single und
 
 In the active session path, proposed nodes become persisted Work Graph v6
 `Subtask` records only after a durable `authorize_task_plan` application. The
-unreleased product uses fresh-only SQLite schema v35; every v34 or older
+unreleased product uses fresh-only SQLite schema v36; every v35 or older
 pre-release schema is rejected with its exact path, with no migration,
-automatic deletion or dual-read path. Schema 35 retains the Project,
-publication, Executor Registry, process-runtime and purge baseline while removing
-the obsolete Subtask delivery-kind column. It preserves the
+automatic deletion or dual-read path. Schema 36 retains the Project,
+publication, Executor Registry, process-runtime, purge and durable-workflow baseline while extending
+the existing attempt-runtime record with Pi session ownership, binding/config,
+workspace, locator/native ID, integrity and active-writer facts. It preserves the
 durable inbox/application/outbox, graph revisions,
 resource/workspace/permission/sandbox records, dispatch/publication/immutable
 merge audit, cancellation cleanup, lease revocation, generation replan,
@@ -853,6 +854,18 @@ is the only topology and typed handoff source. Downstream work becomes runnable
 only after direct dependencies are approved and merged into Project `main`,
 receives their immutable handoffs and starts its own worktree from that updated
 baseline.
+
+Recoverable Pi Executor sessions live under the Runtime data root, outside the
+attempt-private home. Runtime pins the expected locator and ownership/runtime/workspace
+identity before launch, confirms the real native JSONL header from streaming output,
+and only then treats that locator as continuation evidence. One partial unique writer
+gate serializes each session chain while independent Subtasks keep separate locators
+and may still run concurrently. Before a continuation, Execution reports normalized
+`resume`, `fresh`, or `blocked` facts after checking ownership, current binding/config,
+the persistent worktree/branch and an equal or descendant acceptable HEAD, JSONL
+integrity, and external-effect safety. ControlKernel alone selects native continuation,
+the retained bounded recovery packet/fallback, or blocking. Phase 1 deliberately keeps
+the existing workflow/event/application/outbox/checkpoint records and writers.
 
 `SubtaskExecutionContext` is the only production Executor input. Task title/goal are background, the current Subtask goal is the sole operational instruction, siblings expose only titles as out of scope, and Planner-selected evidence has deterministic per-reference and total preview budgets. Runtime keeps Task/Subtask/attempt/WorkUnit identities and acceptance/handoff keys outside the model-facing prompt and report. Ordinary assistant/Executor history never enters the context. Codex and Pi may access eligible Task evidence through the same attempt-bound read-only authorization; unsupported Adapters receive only selected previews.
 

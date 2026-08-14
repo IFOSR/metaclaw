@@ -95,6 +95,14 @@ trigger-blocked. A failure rolls back both audit and deletion. Only `done`,
 lease and WorkUnit resources may be purged; active Tasks must first pass
 through Kernel cancellation.
 
+### Session-first Executor recovery amendment (2026-08-14)
+
+Fresh-only SQLite schema v36 supersedes the storage baseline described by the earlier v32 amendment. It extends the existing `executor_attempt_runtime` record rather than adding a generic journal: the durable facts are Executor-session ownership, Runtime binding/config identity, Project/worktree/branch/HEAD identity, session-chain locator/native ID, integrity state and current active-writer ownership. Phase 1 retains every Kernel workflow, event, application, outbox and workspace-checkpoint table and write path; their simplification or removal requires the separately gated second phase.
+
+Runtime stores recoverable Pi session JSONL under the persistent Runtime data root, not the attempt-private home. It pins the expected locator before process launch and confirms the actual native header from streaming output before recording continuation evidence. Missing, unconfirmed, damaged or incompatible sessions become a normalized `fresh` fact; ownership, concurrent-writer or unsafe external-effect uncertainty becomes `blocked`; only a confirmed compatible chain becomes `resume`.
+
+Kernel snapshots carry that normalized fact. ControlKernel remains the sole authority that chooses native continuation, the existing bounded recovery packet, retry, fallback, replan or blocking. The Adapter performs one authorized invocation and contains no recovery loop. Heartbeat-loss and interrupted-pause reconciliation release session writer ownership only after terminal persistence succeeds, alongside existing claim and lease reconciliation. Existing commit, publication, permission and delivery receipts remain the authorities for completed or idempotent side effects.
+
 `system_smoke` Tasks carry a unique `smoke_run_id`, are hidden from normal Task
 lists, search and memory generation, and may be cleaned only by a smoke run
 whose ID exactly matches. Smoke cleanup formally cancels unfinished owned

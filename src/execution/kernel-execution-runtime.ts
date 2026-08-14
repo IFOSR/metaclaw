@@ -440,6 +440,7 @@ export class KernelExecutionRuntime {
     attempts: KernelAttemptFact[] = [],
     recoverySubtaskId: string | null = null,
     capacityProbeAgentClasses: Record<string, string[]> = {},
+    sessionContinuation: Extract<KernelSnapshot, { type: 'dispatch' }>['sessionContinuation'] = null,
   ): KernelSnapshot {
     const task = this.deps.taskRuntimeService.findTask(taskId);
     const activeRevision = this.deps.workGraphRevisionRepo.findActive(taskId);
@@ -531,6 +532,7 @@ export class KernelExecutionRuntime {
       capacityProbeAgentClasses,
       executorStatuses: stableFacts.executorStatuses,
       nativeContinuationAgentClasses: stableFacts.nativeContinuationAgentClasses,
+      sessionContinuation,
       attempts: attemptFacts,
       generationId: activeRevision?.generationId ?? `generation_${taskId}_1`,
       graphRevision: activeRevision?.revision ?? 1,
@@ -1157,8 +1159,16 @@ export class KernelExecutionRuntime {
           wakeAuthorized: this.isKernelWakeAuthorized(task, event.wakeKind),
           capacityBlockedAt: null,
           recheckAfterMs: 0,
-            capacityAgentClasses: [],
-            nativeContinuationAgentClasses: stableFacts.nativeContinuationAgentClasses,
+          capacityAgentClasses: [],
+          nativeContinuationAgentClasses: stableFacts.nativeContinuationAgentClasses,
+          sessionContinuation: event.wakeKind === 'retry' && event.retry && event.subtaskId
+            ? this.deps.attemptRunner.resolveSessionContinuation({
+                sourceAttemptId: event.retry.sourceAttemptId,
+                taskId: task.id,
+                subtaskId: event.subtaskId,
+                agentClassName: event.retry.agentClassName,
+              })
+            : null,
           executorStatuses: stableFacts.executorStatuses,
           defaultResourceGrant: defaultResourceGrant(task.id, `generation_${task.id}_1`, event.subtaskId ?? 'pending'),
         }
@@ -1173,6 +1183,14 @@ export class KernelExecutionRuntime {
           event.type === 'capacity_signal'
             ? this.capacityProbeFacts(event)
             : {},
+          event.type === 'merge_conflict_observed' && event.taskId && event.subtaskId
+            ? this.deps.attemptRunner.resolveSessionContinuation({
+                sourceAttemptId: event.sourceAttemptId,
+                taskId: event.taskId,
+                subtaskId: event.subtaskId,
+                agentClassName: event.agentClassName,
+              })
+            : null,
         );
     let workflow: KernelWorkflow;
     const supervisorContext: AttemptSupervisorContext = {
@@ -1434,6 +1452,7 @@ export class KernelExecutionRuntime {
             recheckAfterMs: input.recheckAfterMs,
             capacityAgentClasses: subtask.preferredAgentClassList,
             nativeContinuationAgentClasses: stableFacts.nativeContinuationAgentClasses,
+            sessionContinuation: null,
             executorStatuses: stableFacts.executorStatuses,
             defaultResourceGrant: defaultResourceGrant(task.id, subtask.generationId, subtask.id),
           }

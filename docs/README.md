@@ -53,8 +53,7 @@ replacing those semantics.
 ## Active Delivery
 
 - [飞书发布授权自动通过](plans/2026-08-13-feishu-auto-publication-approval.md)：仅在持久化飞书 Gateway 配置中短路用户审批展示，同时保留 Kernel 权限请求、决议、grant 与 publication 审计链。
-- [Session-first 持久化与恢复简化](plans/2026-08-13-session-first-persistence-simplification.md)：以 Agent 自有
-  session 历史作为对话恢复来源，缩减 Gateway 的 SQLite/快照/全量启动恢复逻辑；当前为待架构评审提案。
+- [Executor Session-first 持久化与恢复简化](plans/2026-08-14-executor-session-first-persistence-recovery-simplification.md)：第一阶段把 Pi Executor session 移入持久数据根目录，增加最小 locator/runtime/workspace/current-writer 事实并把 `resume | fresh | blocked` 交给现有 Kernel；第二阶段的删表、停写与通用 replay 缩减尚未开始。该计划取代 2026-08-11 与 2026-08-13 的旧提案。
 - [飞书持久化 Gateway 自动化](plans/2026-08-12-feishu-persistent-gateway-automation.md): adds a dedicated restartable Docker Gateway, strict Feishu WebSocket readiness, per-chat durable Planner sessions, mounted credentials, and a one-command rebuild workflow.
 - [Pi 持久 Session Continuation 与中断恢复](plans/2026-08-11-pi-durable-session-continuation-recovery.md): preserves immutable Pi session checkpoints across attempts so a Kernel-authorized new Executor process can continue an interrupted tool loop in the same Subtask worktree, while keeping format-only correction separate from execution recovery.
 - [Ubuntu Runtime and Executor Registry convergence](plans/2026-08-10-ubuntu-runtime-and-executor-registry-convergence.md): local Ubuntu acceptance is complete; it merges the remote Registry work, makes Planner/Kernel/Runtime consume one live snapshot, removes per-attempt Docker and legacy startup paths, and aligns native Ubuntu plus Windows-hosted Docker on one bootstrap and path contract. Real-server acceptance remains open.

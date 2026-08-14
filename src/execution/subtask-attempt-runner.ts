@@ -60,6 +60,13 @@ import {
 } from '../storage/workspace-publication-repo.js';
 import { AttemptTerminalService } from './attempt-terminal-service.js';
 import { SqliteAttemptSandboxRepository } from '../storage/attempt-sandbox-repo.js';
+import {
+  createPiExecutorSessionLocator,
+  resolvePiExecutorSession,
+  resolvePiExecutorSessionSync,
+  type PiExecutorSessionIdentity,
+} from './pi-executor-session-continuation.js';
+import type { KernelSessionContinuationFact } from '../kernel/control-kernel.js';
 
 export type ProgressCallback = (event: ExecutorProgressEvent, executor: ExecutorAdapter) => void;
 
@@ -89,6 +96,7 @@ export interface SubtaskAttemptRunnerDeps {
   kernelWorkflowStore: KernelWorkflowStore;
   workspaceRepository: WorkspaceRepositoryPort;
   sourceRoot: string;
+  executorSessionRoot: string;
   autoApproveRepositoryPromotions?: boolean;
 }
 
@@ -116,6 +124,49 @@ export class SubtaskAttemptRunner {
 
   supportsContinuation(agentClassName: string): boolean {
     return this.deps.executionRuntime.supportsContinuation(agentClassName);
+  }
+
+  resolveSessionContinuation(input: {
+    sourceAttemptId: string;
+    taskId: string;
+    subtaskId: string;
+    agentClassName: string;
+  }): KernelSessionContinuationFact {
+    const source = this.attemptRuntimeRepo.find(input.sourceAttemptId);
+    const binding = this.deps.executionRuntime.runtimeBinding(input.agentClassName);
+    if (binding?.driver !== 'pi') {
+      return source?.continuationToken && this.supportsContinuation(input.agentClassName)
+        ? { kind: 'resume', reason: 'Executor continuation token is available' }
+        : { kind: 'fresh', reason: 'Executor continuation token is unavailable' };
+    }
+    const task = this.deps.taskRuntimeService.findTask(input.taskId);
+    const subtask = this.deps.subtaskRepo.findById(input.subtaskId);
+    const workspace = subtask
+      ? this.deps.workspaceRepository.findByIdentity(input.taskId, subtask.generationId, input.subtaskId)
+      : null;
+    if (!task || !subtask || !workspace?.managedBranch || !workspace.headCommit || !source?.workspaceRoot) {
+      return { kind: 'fresh', reason: 'persistent Pi session identity is incomplete' };
+    }
+    const resolution = resolvePiExecutorSessionSync({
+      source,
+      expected: {
+        taskId: input.taskId,
+        generationId: subtask.generationId,
+        subtaskId: input.subtaskId,
+        agentClassName: input.agentClassName,
+        runtimeBindingId: binding.id,
+        runtimeDriver: binding.driver,
+        runtimeConfigDigest: binding.configDigest,
+        projectId: task.projectId,
+        workspaceId: workspace.id,
+        workspaceRoot: source.workspaceRoot,
+        workspaceBranch: workspace.managedBranch,
+        workspaceHead: workspace.headCommit,
+      },
+    });
+    return resolution.kind === 'resume'
+      ? { kind: 'resume', reason: 'confirmed native Pi session is compatible' }
+      : resolution;
   }
 
   reconcileInterruptedPause(attemptId: string): boolean {
@@ -177,6 +228,7 @@ export class SubtaskAttemptRunner {
       now,
     });
     this.deps.resourceLeaseService.releaseReconciledAttempt(attemptId, now);
+    this.attemptRuntimeRepo.releaseSession(attemptId, now);
     this.deps.workUnitClaimService.releaseReconciledClaim({
       workUnitId: sandbox.workUnitId,
       taskId: dispatch.taskId,
@@ -238,6 +290,14 @@ export class SubtaskAttemptRunner {
         failure,
       },
       now,
+    });
+    this.deps.resourceLeaseService.releaseReconciledAttempt(input.attemptId, now);
+    this.attemptRuntimeRepo.releaseSession(input.attemptId, now);
+    this.deps.workUnitClaimService.releaseReconciledClaim({
+      workUnitId: input.workUnitId,
+      taskId: input.taskId,
+      subtaskId: input.subtaskId,
+      attemptId: input.attemptId,
     });
   }
 
@@ -315,6 +375,7 @@ export class SubtaskAttemptRunner {
       filePolicy: Record<string, 'text' | 'binary'>;
     } | null = null;
     let capabilityToolServer: CapabilityRequestToolServer | null = null;
+    let sessionPinned = false;
     let finalCheckpointReason: 'success' | 'failure' | 'cancelled' = 'failure';
     const heartbeat = setInterval(() => {
       claim.heartbeat();
@@ -444,9 +505,7 @@ export class SubtaskAttemptRunner {
       const sourceReceipt = input.sourceAttemptId
         ? this.receiptRepo.findByAttemptId(input.sourceAttemptId)
         : null;
-      const recoveryMode: KernelRecoveryMode = input.recoveryMode === 'native_session' && !sourceRuntime?.continuationToken
-        ? 'recovery_packet'
-        : input.recoveryMode ?? 'fresh';
+      let recoveryMode: KernelRecoveryMode = input.recoveryMode ?? 'fresh';
       this.attemptRuntimeRepo.start({
         attemptId,
         sourceAttemptId: input.sourceAttemptId ?? null,
@@ -455,6 +514,64 @@ export class SubtaskAttemptRunner {
         recoverySafety: this.deps.agentClassService.deriveRecoverySafety(subtask.requiredCapabilities),
         now: startedAt,
       });
+      const runtimeBinding = this.deps.executionRuntime.runtimeBinding(input.agentClassName);
+      let sessionLocator: string | null = null;
+      if (runtimeBinding?.driver === 'pi') {
+        const workspaceHeadCompatible = sourceRuntime?.workspaceHead
+          && sourceRuntime.workspaceHead !== gitWorkspace.baselineCommit
+          ? await this.managedGitWorkspace.isHeadAtOrDescendsFrom(
+              gitWorkspace,
+              sourceRuntime.workspaceHead,
+            )
+          : false;
+        const sessionIdentity: PiExecutorSessionIdentity = {
+          taskId: task.id,
+          generationId: subtask.generationId,
+          subtaskId: subtask.id,
+          agentClassName: input.agentClassName,
+          runtimeBindingId: runtimeBinding.id,
+          runtimeDriver: runtimeBinding.driver,
+          runtimeConfigDigest: runtimeBinding.configDigest,
+          projectId: task.projectId,
+          workspaceId: workspace.id,
+          workspaceRoot: workspace.filesPath,
+          workspaceBranch: gitWorkspace.branch,
+          workspaceHead: gitWorkspace.baselineCommit,
+          workspaceHeadCompatible,
+        };
+        let sessionChainId = attemptId;
+        if (recoveryMode === 'native_session') {
+          const resolution = await resolvePiExecutorSession({ source: sourceRuntime, expected: sessionIdentity });
+          if (resolution.kind !== 'resume') {
+            throw new ExecutorSessionAdmissionError(resolution.kind, resolution.reason);
+          }
+          sessionChainId = resolution.sessionChainId;
+          sessionLocator = resolution.locator;
+        } else {
+          sessionLocator = createPiExecutorSessionLocator(
+            this.deps.executorSessionRoot,
+            sessionIdentity,
+            sessionChainId,
+          );
+        }
+        this.attemptRuntimeRepo.pinSession(attemptId, {
+          ...sessionIdentity,
+          sessionChainId,
+          sessionLocator,
+          now: startedAt,
+        });
+        try {
+          this.attemptRuntimeRepo.activateSession(attemptId, startedAt);
+        } catch (error) {
+          throw new ExecutorSessionAdmissionError(
+            'blocked',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        sessionPinned = true;
+      } else if (recoveryMode === 'native_session' && !sourceRuntime?.continuationToken) {
+        recoveryMode = 'recovery_packet';
+      }
       const evidenceToolsAvailable = this.deps.agentClassService.supportsExecutionEvidence(input.agentClassName);
       const attemptControlHost = this.deps.attemptSandbox.pathMode === 'native'
         ? '127.0.0.1'
@@ -584,6 +701,16 @@ export class SubtaskAttemptRunner {
           recovery: {
             mode: recoveryMode,
             continuationToken: sourceRuntime?.continuationToken ?? null,
+            sessionLocator,
+            onSessionConfirmed: session => this.attemptRuntimeRepo.confirmSession(attemptId, {
+              ...session,
+              now: new Date().toISOString(),
+            }),
+            onSessionUnavailable: reason => this.attemptRuntimeRepo.markSessionUnavailable(
+              attemptId,
+              reason,
+              new Date().toISOString(),
+            ),
             onContinuationToken: token => this.attemptRuntimeRepo.recordContinuationToken(
               attemptId, token, new Date().toISOString(),
             ),
@@ -943,6 +1070,9 @@ export class SubtaskAttemptRunner {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const failure: KernelFailure | undefined = error instanceof ExecutorSessionAdmissionError
+        ? error.failure
+        : undefined;
       if (mergeRepair) {
         this.publicationRepo.recordRepairFailure(
           mergeRepair.publicationId,
@@ -955,12 +1085,13 @@ export class SubtaskAttemptRunner {
           attemptId, executionId: input.executionId, taskId: input.taskId, subtaskId: input.subtaskId,
           workUnitId: claim.workUnit.id, agentClassName: input.agentClassName, startedAt,
           terminalState: 'executor_failed', rawResponse, errorCode: 'attempt_exception', errorDetail: message,
+          failure,
         });
       }
       claim.markFailed(message);
       return {
         outcome: 'executor_failed', attemptId, error: message,
-        failure: { kind: 'unknown', scope: 'attempt', code: 'attempt_exception', summary: message },
+        failure: failure ?? { kind: 'unknown', scope: 'attempt', code: 'attempt_exception', summary: message },
       };
     } finally {
       clearInterval(heartbeat);
@@ -999,6 +1130,7 @@ export class SubtaskAttemptRunner {
       evidenceCapability?.revoke();
       await evidenceToolServer?.close();
       await capabilityToolServer?.close();
+      if (sessionPinned) this.attemptRuntimeRepo.releaseSession(attemptId, new Date().toISOString());
       if (this.hasSealedTerminal(attemptId)) {
         this.deps.resourceLeaseService.release(attemptId, leaseToken);
         claim.release();
@@ -1256,6 +1388,28 @@ function deriveTopologyLayer(subtaskId: string, subtasks: Subtask[]): number {
     return layer;
   };
   return visit(subtaskId);
+}
+
+class ExecutorSessionAdmissionError extends Error {
+  readonly failure: KernelFailure;
+
+  constructor(kind: 'fresh' | 'blocked', reason: string) {
+    super(reason);
+    this.name = 'ExecutorSessionAdmissionError';
+    this.failure = kind === 'blocked'
+      ? {
+          kind: 'stale',
+          scope: 'attempt',
+          code: 'executor_session_blocked',
+          summary: reason,
+        }
+      : {
+          kind: 'infrastructure',
+          scope: 'attempt',
+          code: 'executor_session_unavailable',
+          summary: reason,
+        };
+  }
 }
 
 function buildMergeRepairGoal(

@@ -243,6 +243,14 @@ export class ManagedGitWorkspaceService {
     };
   }
 
+  async isHeadAtOrDescendsFrom(workspace: ManagedGitWorkspace, expectedHead: string): Promise<boolean> {
+    const branch = await git(['-C', workspace.filesPath, 'branch', '--show-current']);
+    if (branch !== workspace.branch) return false;
+    return git(['-C', workspace.filesPath, 'merge-base', '--is-ancestor', expectedHead, 'HEAD'])
+      .then(() => true)
+      .catch(() => false);
+  }
+
   async synchronizeCandidate(workspace: ManagedGitWorkspace, candidateCommit: string): Promise<{
     mainBaseCommit: string;
     candidateCommit: string;

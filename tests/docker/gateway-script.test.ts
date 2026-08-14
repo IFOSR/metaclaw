@@ -10,7 +10,7 @@ const gatewayConfig = readFileSync(resolve(repoRoot, 'docker', 'gateway-config.y
 describe('persistent Docker Gateway orchestration', () => {
   it('uses a foreground Gateway, stable volumes, restart policy, and no published port', () => {
     expect(gatewayScript).toContain("$container = 'anyfusion-gateway'");
-    expect(gatewayScript).toContain("$dataVolume = 'anyfusion-gateway-data-v35-anyfusion-planner'");
+    expect(gatewayScript).toContain("$dataVolume = 'anyfusion-gateway-data-v36-anyfusion-planner'");
     expect(gatewayScript).toContain("$workspaceVolume = 'anyfusion-gateway-workspace'");
     expect(gatewayScript).toContain('--restart unless-stopped');
     expect(gatewayScript).toContain("--health-cmd 'node /app/dist/index.js gateway health'");

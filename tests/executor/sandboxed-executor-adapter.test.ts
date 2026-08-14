@@ -123,6 +123,202 @@ describe('SandboxedExecutorAdapter provider isolation', () => {
     }
   });
 
+  it('keeps a Runtime-pinned Pi session after cleaning the attempt-private home', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'metaclaw-worktree-persistent-pi-session-'));
+    const envFile = join(directory, 'executor-pi.env');
+    const piHome = preparePiHome(directory);
+    writeFileSync(envFile, [
+      'OPENAI_API_KEY=provider-secret',
+      'OPENAI_BASE_URL=https://provider.invalid/v1',
+    ].join('\n'));
+    vi.stubEnv('METACLAW_PI_EXECUTOR_ENV_FILE', envFile);
+    vi.stubEnv('METACLAW_EXECUTOR_PI_HOME', piHome);
+    const sessionLocator = join(directory, 'runtime', 'executor-sessions', 'chain_1', 'session.jsonl');
+    const { sandbox, create } = sandboxPort('worktree');
+    let attemptHome = '';
+    create.mockImplementation(async (input: CreateAttemptSandboxInput) => {
+      attemptHome = input.environment.HOME;
+      mkdirSync(dirname(sessionLocator), { recursive: true });
+      writeFileSync(sessionLocator, '{"type":"session","version":3,"id":"native-session-1"}\n');
+      return sandboxRecord();
+    });
+    sandbox.logs = vi.fn().mockResolvedValue([
+      '{"type":"session","version":3,"id":"native-session-1"}',
+      'completed',
+    ].join('\n'));
+    const adapter = new SandboxedExecutorAdapter(agentClass(), testRuntimeBinding(agentClass(), sandbox.kind), sandbox);
+    const input = executorInput(directory);
+    input.recovery = {
+      mode: 'fresh',
+      continuationToken: null,
+      sessionLocator,
+    };
+
+    try {
+      const result = await adapter.execute(input);
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+      const attempt = create.mock.calls[0]![0];
+      expect(attempt.args).toEqual(expect.arrayContaining(['--session', sessionLocator]));
+      expect(attempt.environment.PI_CODING_AGENT_SESSION_DIR).toBe(dirname(sessionLocator));
+      expect(existsSync(attemptHome)).toBe(false);
+      expect(readFileSync(sessionLocator, 'utf8')).toContain('native-session-1');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('confirms a real Pi session header before the process exits', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'metaclaw-worktree-early-pi-session-'));
+    const envFile = join(directory, 'executor-pi.env');
+    const piHome = preparePiHome(directory);
+    writeFileSync(envFile, [
+      'OPENAI_API_KEY=provider-secret',
+      'OPENAI_BASE_URL=https://provider.invalid/v1',
+    ].join('\n'));
+    vi.stubEnv('METACLAW_PI_EXECUTOR_ENV_FILE', envFile);
+    vi.stubEnv('METACLAW_EXECUTOR_PI_HOME', piHome);
+    const sessionLocator = join(directory, 'runtime', 'executor-sessions', 'chain_1', 'session.jsonl');
+    const { sandbox, create } = sandboxPort('worktree');
+    let finishProcess!: (exitCode: number) => void;
+    const wait = new Promise<number>(resolve => { finishProcess = resolve; });
+    create.mockImplementation(async (input: CreateAttemptSandboxInput) => {
+      mkdirSync(dirname(sessionLocator), { recursive: true });
+      writeFileSync(sessionLocator, '{"type":"session","version":3,"id":"native-session-early"}\n');
+      return sandboxRecord();
+    });
+    sandbox.start = vi.fn(async runtimeHandle => {
+      const input = create.mock.calls[0]![0];
+      input.onOutput?.('{"type":"session","version":3,"id":"native-session-early"}\n');
+      return { ...sandboxRecord(), runtimeHandle, status: 'running' };
+    });
+    sandbox.wait = vi.fn(() => wait);
+    sandbox.logs = vi.fn().mockResolvedValue([
+      '{"type":"session","version":3,"id":"native-session-early"}',
+      'completed',
+    ].join('\n'));
+    const confirmed = vi.fn();
+    const adapter = new SandboxedExecutorAdapter(agentClass(), testRuntimeBinding(agentClass(), sandbox.kind), sandbox);
+    const input = executorInput(directory);
+    input.recovery = {
+      mode: 'fresh',
+      continuationToken: null,
+      sessionLocator,
+      onSessionConfirmed: confirmed,
+    };
+
+    try {
+      const execution = adapter.execute(input);
+      await vi.waitFor(() => expect(confirmed).toHaveBeenCalledWith({
+        locator: sessionLocator,
+        nativeSessionId: 'native-session-early',
+      }));
+      expect(sandbox.wait).toHaveBeenCalledOnce();
+
+      finishProcess(0);
+      await expect(execution).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('confirms an early Pi header when the session file flush follows the output chunk', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'metaclaw-worktree-delayed-pi-session-flush-'));
+    const envFile = join(directory, 'executor-pi.env');
+    const piHome = preparePiHome(directory);
+    writeFileSync(envFile, [
+      'OPENAI_API_KEY=provider-secret',
+      'OPENAI_BASE_URL=https://provider.invalid/v1',
+    ].join('\n'));
+    vi.stubEnv('METACLAW_PI_EXECUTOR_ENV_FILE', envFile);
+    vi.stubEnv('METACLAW_EXECUTOR_PI_HOME', piHome);
+    const sessionLocator = join(directory, 'runtime', 'executor-sessions', 'chain_1', 'session.jsonl');
+    const { sandbox, create } = sandboxPort('worktree');
+    let finishProcess!: (exitCode: number) => void;
+    const wait = new Promise<number>(resolve => { finishProcess = resolve; });
+    create.mockImplementation(async () => sandboxRecord());
+    sandbox.start = vi.fn(async runtimeHandle => {
+      const input = create.mock.calls[0]![0];
+      input.onOutput?.('{"type":"session","version":3,"id":"native-session-delayed"}\n');
+      setTimeout(() => {
+        mkdirSync(dirname(sessionLocator), { recursive: true });
+        writeFileSync(sessionLocator, '{"type":"session","version":3,"id":"native-session-delayed"}\n');
+      }, 20);
+      return { ...sandboxRecord(), runtimeHandle, status: 'running' };
+    });
+    sandbox.wait = vi.fn(() => wait);
+    sandbox.logs = vi.fn().mockResolvedValue([
+      '{"type":"session","version":3,"id":"native-session-delayed"}',
+      'completed',
+    ].join('\n'));
+    const confirmed = vi.fn();
+    const unavailable = vi.fn();
+    const adapter = new SandboxedExecutorAdapter(agentClass(), testRuntimeBinding(agentClass(), sandbox.kind), sandbox);
+    const input = executorInput(directory);
+    input.recovery = {
+      mode: 'fresh',
+      continuationToken: null,
+      sessionLocator,
+      onSessionConfirmed: confirmed,
+      onSessionUnavailable: unavailable,
+    };
+
+    try {
+      const execution = adapter.execute(input);
+      await vi.waitFor(() => expect(confirmed).toHaveBeenCalledWith({
+        locator: sessionLocator,
+        nativeSessionId: 'native-session-delayed',
+      }));
+      expect(unavailable).not.toHaveBeenCalled();
+      finishProcess(0);
+      await expect(execution).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reports fresh recovery facts without a continuation when Pi exits before creating a session', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'metaclaw-worktree-pi-session-not-created-'));
+    const envFile = join(directory, 'executor-pi.env');
+    const piHome = preparePiHome(directory);
+    writeFileSync(envFile, [
+      'OPENAI_API_KEY=provider-secret',
+      'OPENAI_BASE_URL=https://provider.invalid/v1',
+    ].join('\n'));
+    vi.stubEnv('METACLAW_PI_EXECUTOR_ENV_FILE', envFile);
+    vi.stubEnv('METACLAW_EXECUTOR_PI_HOME', piHome);
+    const sessionLocator = join(directory, 'runtime', 'executor-sessions', 'chain_1', 'session.jsonl');
+    const { sandbox } = sandboxPort('worktree');
+    sandbox.wait = vi.fn().mockResolvedValue(1);
+    sandbox.logs = vi.fn().mockResolvedValue('process crashed before session initialization');
+    const unavailable = vi.fn();
+    const continuation = vi.fn();
+    const adapter = new SandboxedExecutorAdapter(agentClass(), testRuntimeBinding(agentClass(), sandbox.kind), sandbox);
+    const input = executorInput(directory);
+    input.recovery = {
+      mode: 'fresh',
+      continuationToken: null,
+      sessionLocator,
+      onSessionUnavailable: unavailable,
+      onContinuationToken: continuation,
+    };
+
+    try {
+      await expect(adapter.execute(input)).resolves.toMatchObject({ success: false });
+      expect(unavailable).toHaveBeenCalledWith(
+        'Pi process exited before a valid persisted session header was confirmed',
+      );
+      expect(continuation).not.toHaveBeenCalled();
+      expect(existsSync(sessionLocator)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('runs a Pi recovery-packet retry with the full tool profile and completion contract', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'metaclaw-worktree-pi-extension-'));
     const envFile = join(directory, 'executor-pi.env');

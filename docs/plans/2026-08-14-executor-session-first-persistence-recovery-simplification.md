@@ -2,8 +2,9 @@
 
 ## 状态
 
-- 状态：提案，产品行为已确认，待实施
+- 状态：第一阶段已完成；第二阶段未开始
 - 计划日期：2026-08-14
+- 第一阶段完成日期：2026-08-14
 - 实施方式：两个阶段
 - 最终范围：所有用户入口统一；允许先在 Feishu Gateway 灰度验证
 - 取代：
@@ -319,6 +320,42 @@ decision event、application、workspace checkpoint 和历史 effect 来推断�
 - Gateway/session registry：用于第一批灰度和稳定 session 映射，不形成独立架构。
 
 具体表结构和类型名以实施前调用关系审计为准；计划固定的是事实边界，而不是预先锁死类名。
+
+## 6.1 第一阶段实施记录（2026-08-14）
+
+已交付：
+
+- fresh-only schema 升至 v36，只扩展现有 `executor_attempt_runtime`，保存 Pi session 的
+  ownership、Runtime binding/config、Project/worktree/branch/HEAD、chain locator/native ID、
+  confirmation/poison 与 active writer 事实；未新增通用 journal。
+- Pi session locator 位于 Runtime 数据根目录的 `executor-sessions/<project>/.../session.jsonl`，
+  与 attempt-private Home 分离。临时 Home 清理不会删除持久 session。
+- Runtime 在 launch 前 pin locator 并占用 active writer；Adapter 从流式 JSON output 尽早读取
+  native session header，并在 JSONL 文件可验证后确认。进程在确认前退出只报告 `fresh` 事实，
+  不生成 continuation token。
+- 恢复准入校验 Task/generation/Subtask/AgentClass ownership、当前 binding/config、持久 worktree/
+  branch、相同或同分支可接受后继 HEAD、JSONL header/格式、active writer 和外部副作用安全。
+  同 chain 由数据库唯一门禁串行，不同 Subtask 使用不同 locator，原有并发保持不变。
+- `KernelSnapshot` 接收规范化 `resume | fresh | blocked` 事实；`ControlKernel` 继续唯一决定 native
+  continuation、保留的 bounded recovery packet/fallback 或 block。Adapter 没有恢复重试循环。
+- 心跳丢失和中断 pause 只在终态事实成功落库后释放 session writer；既有 claim/lease、commit、
+  permission、publication 与 delivery receipt 语义保持不变。
+- Planner 已有持久 session 未重复改造；实现位于共享 Session/Execution 路径，不是 Gateway 专属。
+
+边界确认：第一阶段保留全部 Kernel workflow/event/application/outbox/checkpoint 表、Repository 与
+写入；没有实施第二阶段删表、停写、通用 workflow replay 删除或启动恢复重写。
+
+验收：
+
+- 针对性 Docker 测试通过：核心集合 12 个测试文件、95 个测试；最终资源释放补充验证
+  1 个测试文件、18 个测试；
+- `npm run lint` 通过；
+- `npm run build` 通过；
+- 完整 `npm test` 在 Node 22 Docker 测试镜像中通过：200 个测试文件中 197 个通过、3 个跳过，
+  852 个测试中 839 个通过、13 个跳过；
+- 真实 `npm run smoke:anyfusion` 通过，覆盖 AnyFusion-Pi 构建上下文、独立 Planner/Runtime 进程、
+  Planner RPC、Executor 注册验证和原生持久 Planner session；
+- 关闭提交：`feat: persist executor sessions for crash recovery`（本提交）。
 
 ## 7. 风险与控制
 

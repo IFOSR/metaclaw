@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { SubtaskRepo } from '../../src/storage/subtask-repo.js';
@@ -27,6 +27,8 @@ import type { AttemptSandboxPort } from '../../src/execution/attempt-sandbox.js'
 import { KernelDispatchItemRepo } from '../../src/storage/kernel-dispatch-item-repo.js';
 import { SqliteAttemptSandboxRepository } from '../../src/storage/attempt-sandbox-repo.js';
 import { ExecutorAttemptReceiptRepo } from '../../src/storage/executor-attempt-receipt-repo.js';
+import { ExecutorAttemptRuntimeRepo } from '../../src/storage/executor-attempt-runtime-repo.js';
+import type { RuntimeExecutorBinding } from '../../src/executor/executor-registry-types.js';
 
 function node(id: string, dependencies: Subtask['dependencies'] = []): Subtask {
   return {
@@ -40,7 +42,20 @@ function node(id: string, dependencies: Subtask['dependencies'] = []): Subtask {
   };
 }
 
-function setup(rawResponse: string) {
+interface TestRuntimeInvocation {
+  executorInput?: {
+    sandbox?: { attemptId?: string; workspacePath?: string };
+    recovery?: {
+      sessionLocator?: string | null;
+      onSessionConfirmed?: (session: { locator: string; nativeSessionId: string }) => void;
+    };
+  };
+}
+
+function setup(rawResponse: string, options: {
+  runtimeBinding?: RuntimeExecutorBinding | null;
+  onRun?: (invocation: TestRuntimeInvocation, db: Database.Database) => void;
+} = {}) {
   const db = new Database(':memory:');
   runMigrations(db);
   const taskRepo = new TaskRepo(db);
@@ -85,9 +100,10 @@ function setup(rawResponse: string) {
       output: rawResponse, error: null, artifacts: [], subtaskResults: [], durationMs: 10,
   });
   const runtimeForRunner = {
-    run: async (invocation: {
-      executorInput?: { sandbox?: { workspacePath?: string } };
-    }) => {
+    runtimeBinding: () => options.runtimeBinding ?? null,
+    supportsContinuation: () => options.runtimeBinding?.supportsSessionResume === true,
+    run: async (invocation: TestRuntimeInvocation) => {
+      options.onRun?.(invocation, db);
       const result = await run(invocation);
       if (result.status === 'success' && invocation.executorInput?.sandbox?.workspacePath) {
         prepareGitCandidate(invocation.executorInput.sandbox.workspacePath);
@@ -129,6 +145,7 @@ function setup(rawResponse: string) {
     kernelWorkflowStore: new KernelWorkflowRepo(db),
     workspaceRepository: new SqliteWorkspaceRepository(db),
     sourceRoot,
+    executorSessionRoot: join(fixtureRoot, 'executor-sessions'),
   });
   const defaultResourceGrant = buildDefaultResourceClaims({
     workspaceId: `workspace-task_phase2-${a.generationId}-${a.id}`,
@@ -138,7 +155,7 @@ function setup(rawResponse: string) {
   const dispatchItems = new KernelDispatchItemRepo(db);
   const authorize = (input: {
     attemptId: string;
-    attemptKind?: 'primary' | 'retry' | 'fallback' | 'contract_correction' | 'merge_repair';
+    attemptKind?: 'primary' | 'retry' | 'continuation' | 'fallback' | 'contract_correction' | 'merge_repair';
     sourceAttemptId?: string | null;
     recoveryMode?: 'fresh' | 'native_session' | 'recovery_packet';
     attemptPayload?: Parameters<SubtaskAttemptRunner['run']>[0]['attemptPayload'];
@@ -192,6 +209,7 @@ function setup(rawResponse: string) {
     a,
     b,
     defaultResourceGrant,
+    executorSessionRoot: join(fixtureRoot, 'executor-sessions'),
   };
 }
 
@@ -227,6 +245,25 @@ function authorizeRunningAttempt(
 
 function validResponse(): string {
   return `A completed.\n\n${COMPLETION_MARKER_V4}\n{}`;
+}
+
+function piRuntimeBinding(): RuntimeExecutorBinding {
+  return {
+    id: 'pi-executor',
+    configDigest: 'pi-config-digest',
+    driver: 'pi',
+    supportsSessionResume: true,
+    evidenceAffordance: 'metaclaw-tools',
+    resultCollector: 'stdout',
+    homeMaterializer: 'pi-config',
+    binaryPath: '/usr/bin/pi',
+    versionArgs: ['--version'],
+    runtimeHome: '/tmp/pi-runtime-home',
+    environmentFiles: [],
+    inheritEnvironment: [],
+    permissionProfileId: 'workspace-engineering',
+    sessionProtocol: null,
+  };
 }
 
 function prepareGitCandidate(workspacePath: string): void {
@@ -632,6 +669,181 @@ describe('SubtaskAttemptRunner', () => {
     expect(setupResult.subtaskRepo.findById(setupResult.a.id)).toMatchObject({
       status: 'awaiting_integration',
     });
+  });
+
+  it('pins a durable Pi session before launch and releases its writer after native confirmation', async () => {
+    let pinnedBeforeLaunch: ReturnType<ExecutorAttemptRuntimeRepo['find']> = null;
+    const setupResult = setup(validResponse(), {
+      runtimeBinding: piRuntimeBinding(),
+      onRun: (invocation, db) => {
+        pinnedBeforeLaunch = new ExecutorAttemptRuntimeRepo(db).find('attempt_pi_primary');
+        const locator = invocation.executorInput?.recovery?.sessionLocator;
+        expect(locator).toBe(pinnedBeforeLaunch?.sessionLocator);
+        expect(pinnedBeforeLaunch).toMatchObject({
+          taskId: 'task_phase2',
+          generationId: 'generation_phase2',
+          subtaskId: 'task_phase2_a',
+          agentClassName: 'codex-cli',
+          runtimeBindingId: 'pi-executor',
+          runtimeDriver: 'pi',
+          runtimeConfigDigest: 'pi-config-digest',
+          sessionState: 'pinned',
+          sessionActive: true,
+        });
+        mkdirSync(dirname(locator!), { recursive: true });
+        writeFileSync(locator!, `${JSON.stringify({ type: 'session', id: 'pi-native-session-1' })}\n`);
+        invocation.executorInput?.recovery?.onSessionConfirmed?.({
+          locator: locator!,
+          nativeSessionId: 'pi-native-session-1',
+        });
+      },
+    });
+
+    const outcome = await setupResult.runner.run({
+      attemptId: 'attempt_pi_primary',
+      executionId: 'exec_pi_primary',
+      taskId: 'task_phase2',
+      subtaskId: setupResult.a.id,
+      agentClassName: 'codex-cli',
+      executionMode: 'fresh',
+      defaultResourceGrant: setupResult.defaultResourceGrant,
+    });
+
+    expect(outcome).toMatchObject({ outcome: 'completed' });
+    const persisted = new ExecutorAttemptRuntimeRepo(setupResult.db).find('attempt_pi_primary');
+    expect(persisted).toMatchObject({
+      nativeSessionId: 'pi-native-session-1',
+      sessionState: 'confirmed',
+      sessionActive: false,
+    });
+    expect(persisted?.sessionLocator?.startsWith(setupResult.executorSessionRoot)).toBe(true);
+    expect(persisted?.sessionLocator?.startsWith(pinnedBeforeLaunch?.workspaceRoot ?? '')).toBe(false);
+  });
+
+  it('continues one durable Pi session chain after the source attempt commits work', async () => {
+    let sourceLocator: string | null = null;
+    const setupResult = setup('malformed source completion', {
+      runtimeBinding: piRuntimeBinding(),
+      onRun: invocation => {
+        const locator = invocation.executorInput?.recovery?.sessionLocator ?? null;
+        expect(locator).not.toBeNull();
+        if (invocation.executorInput?.sandbox?.attemptId === 'attempt_pi_source') {
+          sourceLocator = locator;
+          mkdirSync(dirname(locator!), { recursive: true });
+          writeFileSync(locator!, `${JSON.stringify({ type: 'session', id: 'pi-native-session-chain' })}\n`);
+        } else {
+          expect(locator).toBe(sourceLocator);
+        }
+        invocation.executorInput?.recovery?.onSessionConfirmed?.({
+          locator: locator!,
+          nativeSessionId: 'pi-native-session-chain',
+        });
+      },
+    });
+    const source = await setupResult.runner.run({
+      attemptId: 'attempt_pi_source',
+      executionId: 'exec_pi_source',
+      taskId: 'task_phase2',
+      subtaskId: setupResult.a.id,
+      agentClassName: 'codex-cli',
+      executionMode: 'fresh',
+      defaultResourceGrant: setupResult.defaultResourceGrant,
+    });
+    expect(source).toMatchObject({ outcome: 'contract_failed' });
+    setupResult.workUnitRepo.updateState('executor-codex', 'idle');
+    setupResult.executionRuntime.run.mockResolvedValueOnce({
+      taskId: 'task_phase2', executionId: 'exec_pi_continuation', status: 'success', executorName: 'codex-cli',
+      output: validResponse(), error: null, artifacts: [], subtaskResults: [], durationMs: 5,
+    });
+
+    const continuation = await setupResult.runner.run({
+      attemptId: 'attempt_pi_continuation',
+      sourceAttemptId: 'attempt_pi_source',
+      attemptKind: 'continuation',
+      recoveryMode: 'native_session',
+      executionId: 'exec_pi_continuation',
+      taskId: 'task_phase2',
+      subtaskId: setupResult.a.id,
+      agentClassName: 'codex-cli',
+      executionMode: 'follow-up',
+      defaultResourceGrant: setupResult.defaultResourceGrant,
+    });
+
+    expect(continuation).toMatchObject({ outcome: 'completed' });
+    expect(new ExecutorAttemptRuntimeRepo(setupResult.db).find('attempt_pi_continuation')).toMatchObject({
+      sessionChainId: 'attempt_pi_source',
+      sessionLocator: sourceLocator,
+      nativeSessionId: 'pi-native-session-chain',
+      sessionState: 'confirmed',
+      sessionActive: false,
+    });
+  });
+
+  it('releases the durable session writer, claim, and resource lease after heartbeat-loss terminal sealing', async () => {
+    const setupResult = setup(validResponse());
+    const attemptId = 'attempt_pi_heartbeat_lost';
+    authorizeRunningAttempt(setupResult, attemptId);
+    setupResult.subtaskRepo.updateStatus(setupResult.a.id, 'running');
+    const now = '2026-07-28T00:00:00.000Z';
+    const runtime = new ExecutorAttemptRuntimeRepo(setupResult.db);
+    runtime.start({
+      attemptId,
+      sourceAttemptId: null,
+      workspaceRoot: '/tmp/workspace/files',
+      recoverySafety: 'workspace_reconcilable',
+      now,
+    });
+    runtime.pinSession(attemptId, {
+      taskId: 'task_phase2',
+      generationId: setupResult.a.generationId,
+      subtaskId: setupResult.a.id,
+      agentClassName: 'codex-cli',
+      runtimeBindingId: 'pi-executor',
+      runtimeDriver: 'pi',
+      runtimeConfigDigest: 'pi-config-digest',
+      projectId: 'project_phase2',
+      workspaceId: `workspace-task_phase2-${setupResult.a.generationId}-${setupResult.a.id}`,
+      workspaceBranch: 'anyfusion/task/task_phase2/subtask/task_phase2_a',
+      workspaceHead: 'head-1',
+      sessionChainId: attemptId,
+      sessionLocator: '/tmp/executor-sessions/heartbeat/session.jsonl',
+      now,
+    });
+    runtime.activateSession(attemptId, now);
+    const leases = new SqliteResourceLeaseRepository(setupResult.db);
+    new ResourceLeaseService(leases).claim({
+      taskId: 'task_phase2',
+      generationId: setupResult.a.generationId,
+      subtaskId: setupResult.a.id,
+      attemptId,
+      workUnitId: 'executor-codex',
+      claims: setupResult.defaultResourceGrant,
+      leaseToken: 'lease-pi-heartbeat-lost',
+      now,
+    });
+    const workUnitClaim = await new WorkUnitClaimService(setupResult.workUnitRepo).claim({
+      taskId: 'task_phase2',
+      subtask: setupResult.a,
+      attemptId,
+    });
+    expect(workUnitClaim).not.toBeNull();
+
+    setupResult.attemptRunner.landHeartbeatLost({
+      attemptId,
+      executionId: 'exec_pi_heartbeat_lost',
+      taskId: 'task_phase2',
+      subtaskId: setupResult.a.id,
+      workUnitId: 'executor-codex',
+      agentClassName: 'codex-cli',
+    });
+
+    expect(runtime.find(attemptId)).toMatchObject({ sessionActive: false });
+    expect(leases.findActive(new Date().toISOString())).toHaveLength(0);
+    expect(setupResult.workUnitRepo.findById('executor-codex')).toMatchObject({
+      state: 'heartbeat_lost',
+      claimedAttemptId: null,
+    });
+    expect(new ExecutorAttemptReceiptRepo(setupResult.db).findByAttemptId(attemptId)).not.toBeNull();
   });
 
   it('does not start a stale fallback after the Task was cancelled', async () => {

@@ -10,7 +10,7 @@ describe('current SQLite baseline', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     expect(db.prepare('SELECT version FROM schema_version').all())
-      .toEqual([{ version: 35 }]);
+      .toEqual([{ version: 36 }]);
     for (const table of [
       'projects',
       'tasks',
@@ -87,6 +87,29 @@ describe('current SQLite baseline', () => {
           table: 'planner_proposal_turns', from: 'turn_id', to: 'turn_id', on_delete: 'CASCADE',
         }),
       ]));
+    expect((db.prepare('PRAGMA table_info(executor_attempt_runtime)').all() as Array<{ name: string }>)
+      .map(column => column.name)).toEqual(expect.arrayContaining([
+      'task_id',
+      'generation_id',
+      'subtask_id',
+      'agent_class_name',
+      'runtime_binding_id',
+      'runtime_driver',
+      'runtime_config_digest',
+      'project_id',
+      'workspace_id',
+      'workspace_branch',
+      'workspace_head',
+      'session_chain_id',
+      'session_locator',
+      'native_session_id',
+      'session_state',
+      'session_active',
+      'session_error',
+      'session_pinned_at',
+      'session_confirmed_at',
+      'session_last_used_at',
+    ]));
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
@@ -98,7 +121,7 @@ describe('current SQLite baseline', () => {
     `);
 
     expect(() => runMigrations(db)).toThrow(
-      'unsupported pre-release SQLite schema (30) at (unknown path); back up and create a fresh database for schema 35',
+      'unsupported pre-release SQLite schema (30) at (unknown path); back up and create a fresh database for schema 36',
     );
     expect(db.prepare('SELECT version FROM schema_version').all())
       .toEqual([{ version: 30 }]);

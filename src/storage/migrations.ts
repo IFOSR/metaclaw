@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-const CURRENT_SCHEMA_VERSION = 35;
+const CURRENT_SCHEMA_VERSION = 36;
 
 const CURRENT_SCHEMA_SQL = `
 CREATE TABLE projects (
@@ -449,9 +449,33 @@ CREATE TABLE executor_attempt_runtime (
             progress_json TEXT NOT NULL DEFAULT '{}',
             recovery_safety TEXT NOT NULL,
             external_idempotency_key TEXT,
+            task_id TEXT,
+            generation_id TEXT,
+            subtask_id TEXT,
+            agent_class_name TEXT,
+            runtime_binding_id TEXT,
+            runtime_driver TEXT,
+            runtime_config_digest TEXT,
+            project_id TEXT,
+            workspace_id TEXT,
+            workspace_branch TEXT,
+            workspace_head TEXT,
+            session_chain_id TEXT,
+            session_locator TEXT,
+            native_session_id TEXT,
+            session_state TEXT CHECK(session_state IN ('pinned', 'confirmed', 'unavailable', 'poisoned')),
+            session_active INTEGER NOT NULL DEFAULT 0 CHECK(session_active IN (0, 1)),
+            session_error TEXT,
+            session_pinned_at TEXT,
+            session_confirmed_at TEXT,
+            session_last_used_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
           );
+
+CREATE UNIQUE INDEX idx_executor_attempt_runtime_active_session
+          ON executor_attempt_runtime(session_locator)
+          WHERE session_active = 1 AND session_locator IS NOT NULL;
 
 CREATE TABLE work_graph_revisions (
             id TEXT PRIMARY KEY,

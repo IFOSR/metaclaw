@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AgentClass, ExecutorResult } from '../core/types.js';
 import type { AttemptSandboxPort } from '../execution/attempt-sandbox.js';
 import { DEFAULT_ATTEMPT_SANDBOX_LIMITS } from '../execution/attempt-sandbox.js';
@@ -92,6 +92,27 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
     );
     let modelGateway: AttemptModelGatewayServer | null = null;
     let nativeExecutorTemporaryRoot: string | null = null;
+    let sessionOutput = '';
+    let sessionConfirmation: Promise<void> | null = null;
+    let sessionConfirmed = false;
+    let sessionUnavailableReported = false;
+    const reportSessionUnavailable = (reason: string) => {
+      if (sessionUnavailableReported || sessionConfirmed) return;
+      sessionUnavailableReported = true;
+      input.recovery?.onSessionUnavailable?.(reason);
+    };
+    const observeSessionOutput = (chunk: string) => {
+      const locator = input.recovery?.sessionLocator;
+      if (this.runtimeBinding.driver !== 'pi' || !locator || sessionConfirmation || sessionConfirmed) return;
+      sessionOutput = `${sessionOutput}${chunk}`.slice(-64 * 1024);
+      const nativeSessionId = extractExecutorSessionId(this.runtimeBinding, sessionOutput);
+      if (!nativeSessionId) return;
+      sessionConfirmation = this.confirmPiSession(locator, nativeSessionId, input)
+        .then(() => { sessionConfirmed = true; })
+        .catch(error => {
+          reportSessionUnavailable(error instanceof Error ? error.message : String(error));
+        });
+    };
     try {
       const providerEnvironment = this.providerEnvironment();
       const upstreamBaseUrl = providerEnvironment.OPENAI_BASE_URL;
@@ -112,7 +133,11 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
       sandboxProviderEnvironment.OPENAI_BASE_URL = gateway.baseUrl;
       sandboxProviderEnvironment.OPENAI_API_KEY = gateway.apiKey;
       const nativeExecutor = nativePaths
-        ? await this.prepareNativeExecutorEnvironment(upstreamBaseUrl, gateway.baseUrl)
+        ? await this.prepareNativeExecutorEnvironment(
+            upstreamBaseUrl,
+            gateway.baseUrl,
+            input.recovery?.sessionLocator ?? null,
+          )
         : null;
       nativeExecutorTemporaryRoot = nativeExecutor?.temporaryRoot ?? null;
       const record = await this.sandbox.create({
@@ -153,6 +178,7 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
         ],
         egressMode: usesDockerProxy ? 'proxy' : 'disabled',
         nestedSandbox: !nativePaths && this.runtimeBinding.driver === 'codex' ? 'codex-workspace-write' : undefined,
+        onOutput: observeSessionOutput,
         limits: DEFAULT_ATTEMPT_SANDBOX_LIMITS,
       });
       const createdAt = new Date().toISOString();
@@ -187,13 +213,18 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
       this.repository?.update(binding.attemptId, {
         status: 'exited', exitCode, resultCollectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
-      this.captureContinuationToken(logs, input);
+      observeSessionOutput(logs);
+      await sessionConfirmation;
+      if (this.runtimeBinding.driver === 'pi' && input.recovery?.sessionLocator && !sessionConfirmed) {
+        reportSessionUnavailable('Pi process exited before a valid persisted session header was confirmed');
+      }
+      this.captureContinuationToken(logs, input, sessionConfirmed);
       let output = logs.trim();
       if (this.runtimeBinding.resultCollector === 'result-file' && exitCode === 0) {
         output = (await readFile(resultPath, 'utf8').catch(() => logs)).trim();
       }
       output = this.extractFinalOutput(output);
-      if (output !== logs.trim()) this.captureContinuationToken(output, input);
+      if (output !== logs.trim()) this.captureContinuationToken(output, input, sessionConfirmed);
       if (output && !nativePaths) {
         const runtimeWorkspacePath = binding.workspacePath.replaceAll('\\', '/');
         output = output.replaceAll(/\/workspace(?=\/|[\s`"')\]}]|$)/gu, runtimeWorkspacePath);
@@ -206,6 +237,9 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
         : failedExecution(logs.trim() || `sandbox exited with code ${exitCode}`, startedAt, exitCode);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (this.runtimeBinding.driver === 'pi' && input.recovery?.sessionLocator && !sessionConfirmed) {
+        reportSessionUnavailable(`Pi session was not established: ${message}`);
+      }
       let cleanupError: string | null = null;
       const activeRuntimeHandle = this.activeRuntimes.get(binding.attemptId) ?? null;
       if (activeRuntimeHandle) {
@@ -324,12 +358,15 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
       const extensionPath = process.env.METACLAW_PI_ATTEMPT_EXTENSION?.trim()
         || '/opt/metaclaw/pi-attempt-tools.ts';
       const continuationToken = input.recovery?.continuationToken;
+      const sessionLocator = input.recovery?.sessionLocator;
       return {
         command,
         args: [
           '--mode', 'json',
-          ...(continuationToken && input.recovery?.mode === 'native_session'
-            ? ['--session', continuationToken]
+          ...(sessionLocator
+            ? ['--session', sessionLocator]
+            : continuationToken && input.recovery?.mode === 'native_session'
+              ? ['--session', continuationToken]
             : []),
           '--no-extensions', '--extension', extensionPath, '--tools',
           'web_search,web_fetch,evidence_list,evidence_search,evidence_get,bash,read,write,edit,grep,find,ls',
@@ -364,6 +401,7 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
   private async prepareNativeExecutorEnvironment(
     upstreamBaseUrl: string,
     gatewayBaseUrl: string,
+    sessionLocator: string | null,
   ): Promise<NativeExecutorEnvironment> {
     const temporaryRoot = await mkdtemp(join(tmpdir(), 'metaclaw-executor-attempt-'));
     try {
@@ -421,8 +459,11 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
       }
       const attemptHome = join(temporaryRoot, 'pi');
       const attemptAgentHome = join(attemptHome, '.pi', 'agent');
-      const attemptSessionHome = join(attemptAgentHome, 'sessions');
-      await mkdir(attemptSessionHome, { recursive: true });
+      const sessionHome = sessionLocator ? dirname(sessionLocator) : join(attemptAgentHome, 'sessions');
+      await Promise.all([
+        mkdir(attemptAgentHome, { recursive: true, mode: 0o700 }),
+        mkdir(sessionHome, { recursive: true, mode: 0o700 }),
+      ]);
       await Promise.all([
         writeFile(join(attemptAgentHome, 'models.json'), `${JSON.stringify(models, null, 2)}\n`, { mode: 0o600 }),
         writeFile(join(attemptAgentHome, 'settings.json'), settingsSource, { mode: 0o600 }),
@@ -431,7 +472,7 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
         environment: {
           HOME: attemptHome,
           PI_CODING_AGENT_DIR: attemptAgentHome,
-          PI_CODING_AGENT_SESSION_DIR: attemptSessionHome,
+          PI_CODING_AGENT_SESSION_DIR: sessionHome,
         },
         temporaryRoot,
       };
@@ -461,10 +502,36 @@ export class SandboxedExecutorAdapter implements ExecutorAdapter {
     return extractExecutorFinalOutput(this.runtimeBinding, output);
   }
 
-  private captureContinuationToken(output: string, input: ExecutorInput): void {
+  private captureContinuationToken(output: string, input: ExecutorInput, sessionConfirmed = false): void {
     if (!input.recovery?.onContinuationToken) return;
+    if (this.runtimeBinding.driver === 'pi' && input.recovery.sessionLocator) {
+      if (sessionConfirmed) input.recovery.onContinuationToken(input.recovery.sessionLocator);
+      return;
+    }
     const token = extractExecutorSessionId(this.runtimeBinding, output);
     if (token) input.recovery.onContinuationToken(token);
+  }
+
+  private async confirmPiSession(
+    locator: string,
+    nativeSessionId: string,
+    input: ExecutorInput,
+  ): Promise<void> {
+    let persistedSessionId: string | null = null;
+    for (let observation = 0; observation < 10; observation += 1) {
+      const persisted = await readFile(locator, 'utf8').catch(() => null);
+      persistedSessionId = persisted
+        ? extractExecutorSessionId(this.runtimeBinding, persisted)
+        : null;
+      if (persistedSessionId === nativeSessionId) break;
+      if (observation < 9) {
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+      }
+    }
+    if (persistedSessionId !== nativeSessionId) {
+      throw new Error('Pi session locator is empty, damaged, or does not match the native session header');
+    }
+    input.recovery?.onSessionConfirmed?.({ locator, nativeSessionId });
   }
 }
 

@@ -588,6 +588,54 @@ describe('ControlKernel', () => {
     }).action).toEqual({ type: 'no_op' });
   });
 
+  it('uses normalized session facts to authorize resume, bounded fresh fallback, or block', () => {
+    const kernel = new ControlKernel();
+    const timer = runtimeEvent({
+      type: 'timer_tick',
+      occurredAt: '2026-07-20T00:01:00.000Z',
+      wakeKind: 'retry',
+      sourceDecisionId: 'decision_retry',
+      scheduledFor: '2026-07-20T00:01:00.000Z',
+      retry: {
+        sourceAttemptId: 'attempt_source',
+        agentClassName: 'codex-cli',
+      },
+    });
+    const base: Extract<KernelSnapshot, { type: 'timer' }> = {
+      schemaVersion: 5,
+      type: 'timer',
+      task: { id: 'task_1', status: 'blocked' },
+      wakeAuthorized: true,
+      capacityBlockedAt: null,
+      recheckAfterMs: 0,
+      capacityAgentClasses: [],
+      nativeContinuationAgentClasses: ['codex-cli'],
+      executorStatuses: [],
+      defaultResourceGrant: [],
+      sessionContinuation: { kind: 'resume', reason: 'confirmed native session' },
+    };
+
+    expect(kernel.decide(timer, base).action).toMatchObject({
+      type: 'dispatch_batch',
+      items: [expect.objectContaining({ recoveryMode: 'native_session' })],
+    });
+    expect(kernel.decide({ ...timer, id: 'timer_fresh' }, {
+      ...base,
+      sessionContinuation: { kind: 'fresh', reason: 'session header missing' },
+    }).action).toMatchObject({
+      type: 'dispatch_batch',
+      items: [expect.objectContaining({ recoveryMode: 'recovery_packet' })],
+    });
+    expect(kernel.decide({ ...timer, id: 'timer_blocked' }, {
+      ...base,
+      sessionContinuation: { kind: 'blocked', reason: 'session ownership mismatch' },
+    }).action).toEqual({
+      type: 'block_work',
+      taskId: 'task_1',
+      subtaskId: 'subtask_1',
+    });
+  });
+
   it('rejects an execution request for a second active Task and fails closed on mismatched facts', () => {
     const kernel = new ControlKernel();
     expect(kernel.decide(runtimeEvent({ type: 'dispatch_requested', reason: 'start' }), {

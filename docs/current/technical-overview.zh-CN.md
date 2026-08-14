@@ -2,9 +2,9 @@
 
 [English Technical Overview](technical-overview.md) | [中文首页](../../README.zh-CN.md)
 
-> 当前实现基线（2026-08-11）：PlanningAgentPlan v7、Work Graph
+> 当前实现基线（2026-08-14）：PlanningAgentPlan v7、Work Graph
 > v6、Kernel event/snapshot/decision contract v5、Completion Protocol v4，
-> fresh-only SQLite schema v35、一个显式 Project 仓库、用户审批后的整分支
+> fresh-only SQLite schema v36、一个显式 Project 仓库、用户审批后的整分支
 > 发布，以及来自
 > `$ANYFUSION_CONFIG_HOME/executors.yaml` 的 digest-bound Executor Registry
 > Snapshot。`KernelWorkflow` 串行完成
@@ -74,7 +74,7 @@ flowchart LR
   Stop --> Delivery
   Delivery --> User
 
-  Session <--> Store[(本地 SQLite schema 35<br/>Project、任务、审批、<br/>work units、events、memory)]
+  Session <--> Store[(本地 SQLite schema 36<br/>Project、任务、审批、<br/>work units、events、memory)]
   Workflow -. audit .-> Decisions[(kernel_decisions)]
   TaskOS <--> Store
   Graph <--> Store
@@ -883,10 +883,11 @@ AnyFusion 可以把复杂需求表示成 work graph，而不是把整段需求�
 
 在 active session path 中，proposal 只有在 `ControlKernel` 授权并创建 durable
 application 后才会成为持久化 Work Graph v6 `Subtask` revision。未发布产品
-使用 fresh-only SQLite schema v35；所有 v34 或更早预发布 schema 都会带
-精确路径拒绝，不提供迁移、自动删除或双读。Schema 35 保留 Project、
-publication、Executor Registry、process runtime 与 purge 基线，并删除过时的
-Subtask delivery-kind 列；同时保留
+使用 fresh-only SQLite schema v36；所有 v35 或更早预发布 schema 都会带
+精确路径拒绝，不提供迁移、自动删除或双读。Schema 36 保留 Project、
+publication、Executor Registry、process runtime、purge 与 durable workflow 基线，
+并在现有 attempt runtime 记录上增加最小 Pi session ownership、binding/config、
+workspace、locator/native ID、完整性和 active writer 事实；同时保留
 Planner proposal、durable workflow、graph revision、
 resource/workspace/permission/sandbox、dispatch/publication/immutable merge
 audit、cancellation cleanup、lease revocation、generation replan、deferred
@@ -900,6 +901,16 @@ Kernel 与 Task 事件保留完整历史；Skill 过程事件只保留为 attemp
 审批通过后完整分支合并到 `main` 并删除 worktree/branch；拒绝则阻塞并保留。
 若审批期间 `main` 已变化，Runtime 保留 worktree，让 Executor 重新同步后再
 生成新的审批。当前不执行 remote Git 操作，也不做按文件选择性发布。
+
+可恢复的 Pi Executor session 位于 Runtime 数据根目录，不属于 attempt-private Home。
+Runtime 在启动前 pin 预期 locator 以及 ownership/runtime/workspace identity，并从流式
+输出尽早确认真实 native JSONL header；只有确认后 locator 才能成为 continuation 证据。
+每个 session chain 通过 active writer 唯一门禁串行，不同 Subtask 使用独立 locator，仍可
+并行。Continuation 前，Execution 校验 ownership、当前 binding/config、持久 worktree/branch、
+相同或可接受后继 HEAD、JSONL 完整性和外部副作用安全，并只向 Kernel 提交 `resume`、
+`fresh` 或 `blocked` 三态事实。ControlKernel 继续唯一决定 native continuation、保留的 bounded
+recovery packet/fallback 或阻塞。第一阶段明确保留现有 workflow/event/application/outbox/checkpoint
+记录与写入。
 
 已经脱离生产链路的 `ExecutionStrategyPlanner`、`ExecutionPolicy`、`MultiExecutorOrchestrator` 和 `AgenticLoopController` 实现已删除。work graph 与 work unit dispatch 成为权威路径后，这些旧实现不再参与运行时。`ExecutionAggregator` 继续供验证流水线执行结构化的多结果证据检查。
 

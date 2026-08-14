@@ -35,6 +35,7 @@ export interface CreateAttemptSandboxInput {
   mounts: AttemptSandboxMount[];
   egressMode: 'disabled' | 'proxy';
   nestedSandbox?: 'codex-workspace-write';
+  onOutput?(chunk: string): void;
   limits: AttemptSandboxLimits;
 }
 

@@ -95,7 +95,9 @@ export class WorktreeAttemptSandboxAdapter implements AttemptSandboxPort {
     const append = (chunk: Buffer | string) => {
       if (attempt.logs.length >= MAX_LOG_BYTES) return;
       const remaining = MAX_LOG_BYTES - Buffer.byteLength(attempt.logs, 'utf8');
-      attempt.logs += Buffer.from(chunk).toString('utf8').slice(0, remaining);
+      const text = Buffer.from(chunk).toString('utf8').slice(0, remaining);
+      attempt.logs += text;
+      attempt.input.onOutput?.(text);
     };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);

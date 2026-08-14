@@ -385,6 +385,9 @@ export class MetaclawSession {
     const workspaceStoreRoot = process.env.NODE_ENV === 'test' && !deps.project
       ? resolve(`${sourceRoot}.anyfusion-runtime`, 'project-worktrees', projectId)
       : resolve(resolveMetaclawDir(), 'project-worktrees', projectId);
+    const executorSessionRoot = process.env.NODE_ENV === 'test' && !deps.project
+      ? resolve(`${sourceRoot}.anyfusion-runtime`, 'executor-sessions', projectId)
+      : resolve(resolveMetaclawDir(), 'executor-sessions', projectId);
     this.notifier = deps.notifier ?? new NoopNotificationService();
     this.sessionStateRepo = new SessionStateRepo(deps.db);
     this.plannerProposalRepo = new PlannerProposalRepo(deps.db);
@@ -526,6 +529,7 @@ export class MetaclawSession {
       kernelWorkflowStore: this.kernelWorkflowRepo,
       workspaceRepository: this.workspaceRepository,
       sourceRoot,
+      executorSessionRoot,
       autoApproveRepositoryPromotions: usingTestProjectFallback,
     });
     this.publicationWorker = new WorkspacePublicationWorker({

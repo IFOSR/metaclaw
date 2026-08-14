@@ -10,7 +10,10 @@ export interface ExecutorInput {
   recovery?: {
     mode: 'native_session' | 'recovery_packet' | 'fresh';
     continuationToken: string | null;
+    sessionLocator?: string | null;
     onContinuationToken?(token: string): void;
+    onSessionConfirmed?(session: { locator: string; nativeSessionId: string }): void;
+    onSessionUnavailable?(reason: string): void;
   };
   sandbox?: {
     attemptId: string;

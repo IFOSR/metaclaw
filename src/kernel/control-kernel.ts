@@ -214,6 +214,11 @@ export interface KernelAttemptFact {
   completedAt: string;
 }
 
+export interface KernelSessionContinuationFact {
+  kind: 'resume' | 'fresh' | 'blocked';
+  reason: string;
+}
+
 export interface KernelCancellationSubtaskFact extends KernelSubtaskFact {
   dependencySubtaskIds: string[];
 }
@@ -252,6 +257,7 @@ export type KernelSnapshot =
       capacityProbeAgentClasses: Record<string, string[]>;
       executorStatuses: KernelExecutorStatusProjection[];
       nativeContinuationAgentClasses: string[];
+      sessionContinuation?: KernelSessionContinuationFact | null;
       attempts: KernelAttemptFact[];
       generationId: string;
       graphRevision: number;
@@ -285,6 +291,7 @@ export type KernelSnapshot =
       recheckAfterMs: number;
       capacityAgentClasses: string[];
       nativeContinuationAgentClasses: string[];
+      sessionContinuation?: KernelSessionContinuationFact | null;
       executorStatuses: KernelExecutorStatusProjection[];
       defaultResourceGrant: ResourceClaim[];
     }
@@ -1006,6 +1013,13 @@ export class ControlKernel {
       if (!event.taskId || !event.subtaskId || !event.retry || Date.parse(event.occurredAt) < Date.parse(event.scheduledFor)) {
         return decision(event, { type: 'no_op' }, 'retry wake is incomplete or early');
       }
+      if (snapshot.sessionContinuation?.kind === 'blocked') {
+        return decision(
+          event,
+          { type: 'block_work', taskId: event.taskId, subtaskId: event.subtaskId },
+          `native session continuation is unsafe: ${snapshot.sessionContinuation.reason}`,
+        );
+      }
       return decision(event, singleDispatchBatch(
         event,
         event.taskId,
@@ -1013,9 +1027,11 @@ export class ControlKernel {
         event.retry.agentClassName,
         'continuation',
         event.retry.sourceAttemptId,
-        snapshot.nativeContinuationAgentClasses.includes(event.retry.agentClassName)
-          ? 'native_session'
-          : 'recovery_packet',
+        snapshot.sessionContinuation
+          ? snapshot.sessionContinuation.kind === 'resume' ? 'native_session' : 'recovery_packet'
+          : snapshot.nativeContinuationAgentClasses.includes(event.retry.agentClassName)
+            ? 'native_session'
+            : 'recovery_packet',
         snapshot.defaultResourceGrant,
         null,
       ), 'preferred AgentClass continuation wake authorized');
@@ -1191,6 +1207,13 @@ export class ControlKernel {
         type: 'block_work', taskId: event.taskId ?? '', subtaskId: event.subtaskId ?? null,
       }, 'merge conflict facts are incomplete');
     }
+    if (snapshot.sessionContinuation?.kind === 'blocked') {
+      return decision(
+        event,
+        { type: 'block_work', taskId: event.taskId, subtaskId: event.subtaskId },
+        `merge repair cannot safely continue the source session: ${snapshot.sessionContinuation.reason}`,
+      );
+    }
     if (event.repairAttemptsUsed < 3) {
       if (snapshot.availableSlots <= 0) {
         return decision(event, {
@@ -1204,9 +1227,11 @@ export class ControlKernel {
         event.agentClassName,
         'merge_repair',
         event.sourceAttemptId,
-        snapshot.nativeContinuationAgentClasses.includes(event.agentClassName)
-          ? 'native_session'
-          : 'recovery_packet',
+        snapshot.sessionContinuation
+          ? snapshot.sessionContinuation.kind === 'resume' ? 'native_session' : 'recovery_packet'
+          : snapshot.nativeContinuationAgentClasses.includes(event.agentClassName)
+            ? 'native_session'
+            : 'recovery_packet',
         resourceGrantForSubtask(snapshot, event.subtaskId),
         {
           protocol: 'metaclaw:merge-repair:v1',
