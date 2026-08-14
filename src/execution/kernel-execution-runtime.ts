@@ -24,7 +24,12 @@ import {
   type KernelEvent,
   type KernelSnapshot,
 } from '../kernel/control-kernel.js';
-import { DurableKernelWorkflow, type KernelWorkflow, type KernelWorkflowStore } from '../kernel/kernel-workflow.js';
+import {
+  KernelWorkflowRunner,
+  type KernelDecisionLedgerRecord,
+  type KernelWorkflow,
+  type KernelWorkflowStore,
+} from '../kernel/kernel-workflow.js';
 import type { WorkGraphRevisionRepo } from '../storage/work-graph-revision-repo.js';
 import type { KernelEffectOutboxRepo } from '../storage/kernel-effect-outbox-repo.js';
 import type { ExecutorAttemptReceiptRepo } from '../storage/executor-attempt-receipt-repo.js';
@@ -67,6 +72,8 @@ export interface KernelExecutionRuntimeInput {
   taskId: string;
   request: QueuedExecutionRequest;
   recoveryOnly?: boolean;
+  recoveryEvents?: KernelEvent[];
+  recoveryNow?: string;
 }
 
 export interface PreparedKernelExecutionInput extends KernelExecutionRuntimeInput {
@@ -94,6 +101,9 @@ export interface KernelExecutionRuntimeDeps {
       taskId: string,
       cycleId: string,
     ): Array<Extract<KernelEvent, { type: 'capacity_signal' }>>;
+    listCurrentByAction?(
+      action: KernelDecision['action']['type'],
+    ): KernelDecisionLedgerRecord[];
   };
   dispatchItemRepo: KernelDispatchItemRepo;
   maxConcurrentAttempts: number;
@@ -211,7 +221,7 @@ export class KernelExecutionRuntime {
         agentClassName,
         recoveryCheckId,
       };
-      const workflow = new DurableKernelWorkflow({
+      const workflow = new KernelWorkflowRunner({
         kernel: this.deps.controlKernel,
         buildSnapshot: () => ({
           schemaVersion: 5,
@@ -276,7 +286,7 @@ export class KernelExecutionRuntime {
   ): Promise<CancellationReceipt> {
     let receipt: CancellationReceipt | null = null;
     let controlError: string | null = null;
-    const workflow = new DurableKernelWorkflow({
+    const workflow = new KernelWorkflowRunner({
       kernel: this.deps.controlKernel,
       buildSnapshot: () => this.deps.cancellationCoordinator.buildSnapshot(event.taskId!),
       store: this.deps.kernelWorkflowStore,
@@ -296,7 +306,6 @@ export class KernelExecutionRuntime {
             const blocked = this.deps.cancellationCoordinator.completionBlockedReasons(
               action.taskId,
               action.generationId,
-              decision.id,
             );
             if (
               !revision
@@ -415,7 +424,12 @@ export class KernelExecutionRuntime {
     this.cancellationRetryTimers.delete(taskId);
   }
 
-  async recoverDue(taskId: string, reason = 'durable workflow recovery'): Promise<boolean> {
+  async recoverDue(
+    taskId: string,
+    reason = 'current-fact recovery',
+    recoveryEvents: KernelEvent[] = [],
+    now = new Date().toISOString(),
+  ): Promise<boolean> {
     const task = this.deps.taskRuntimeService.findTask(taskId);
     if (!task) return false;
     const before = task.updatedAt;
@@ -429,6 +443,8 @@ export class KernelExecutionRuntime {
         schedulingReason: reason,
       },
       recoveryOnly: true,
+      recoveryEvents,
+      recoveryNow: now,
     }));
     return this.deps.taskRuntimeService.findTask(taskId)?.updatedAt !== before;
   }
@@ -729,7 +745,6 @@ export class KernelExecutionRuntime {
         .completionBlockedReasons(
           action.taskId,
           activeRevision?.generationId ?? null,
-          decision.id,
         );
       if (completionBlockedReasons.length > 0) {
         await this.blockTask(
@@ -793,7 +808,6 @@ export class KernelExecutionRuntime {
         if (!this.deps.generationReplanRepo.submitPlan(
           request.id,
           token,
-          event,
           new Date().toISOString(),
         )) {
           return null;
@@ -1198,7 +1212,7 @@ export class KernelExecutionRuntime {
       submit: event => workflow.submit(event),
       onLaunchError: async (item, error) => this.launchFailureEvent(item, error),
     };
-    workflow = new DurableKernelWorkflow({
+    workflow = new KernelWorkflowRunner({
       kernel: this.deps.controlKernel,
       buildSnapshot,
       store: this.deps.kernelWorkflowStore,
@@ -1237,8 +1251,17 @@ export class KernelExecutionRuntime {
     }
     this.attemptSupervisor.recover(taskId, supervisorContext);
     await this.recoverExpiredAttempts(workflow, attemptFacts);
-    if (input.recoveryOnly) await workflow.recover();
-    else await workflow.submit(initialEvent);
+    if (input.recoveryOnly) {
+      for (const event of this.currentRecoveryEvents(
+        taskId,
+        input.recoveryEvents ?? [],
+        input.recoveryNow ?? new Date().toISOString(),
+      )) {
+        await workflow.submit(event);
+      }
+    } else {
+      await workflow.submit(initialEvent);
+    }
     await this.attemptSupervisor.drain(taskId);
     await this.drainPublications({
       taskId,
@@ -1247,6 +1270,88 @@ export class KernelExecutionRuntime {
     });
     await this.deps.cancellationCoordinator.recover(taskId);
     this.deps.cancellationCoordinator.settlePartialCancellation(taskId);
+  }
+
+  private currentRecoveryEvents(taskId: string, supplied: KernelEvent[], now: string): KernelEvent[] {
+    const task = this.deps.taskRuntimeService.findTask(taskId);
+    if (!task) return supplied;
+    const retryDecision = this.deps.kernelWorkflowStore.listCurrentByAction?.('wait_for_retry')
+      .find(record => record.taskId === taskId && record.decision.action.type === 'wait_for_retry');
+    if (retryDecision?.decision.action.type === 'wait_for_retry'
+      && task.status === 'blocked'
+      && Date.parse(now) >= Date.parse(retryDecision.decision.action.resumeAt)) {
+      const action = retryDecision.decision.action;
+      return [...supplied, {
+        schemaVersion: 5,
+        type: 'timer_tick',
+        id: `event_${retryDecision.id}_timer_tick`,
+        correlationId: retryDecision.eventId,
+        causationId: retryDecision.id,
+        occurredAt: now,
+        sessionId: this.deps.sessionId,
+        taskId,
+        subtaskId: action.subtaskId,
+        wakeKind: 'retry',
+        sourceDecisionId: retryDecision.id,
+        scheduledFor: action.resumeAt,
+        retry: {
+          agentClassName: action.agentClassName,
+          sourceAttemptId: action.sourceAttemptId,
+        },
+      }];
+    }
+
+    const events = [...supplied];
+    const seenSubtasks = new Set<string>();
+    for (const receipt of this.deps.attemptReceiptRepo.listByTask(taskId)) {
+      if (seenSubtasks.has(receipt.subtaskId)) continue;
+      seenSubtasks.add(receipt.subtaskId);
+      const subtask = this.deps.subtaskRepo.findById(receipt.subtaskId);
+      const dispatch = this.deps.dispatchItemRepo.find(receipt.attemptId);
+      if (!subtask || subtask.status !== 'awaiting_decision' || !dispatch) continue;
+      if (receipt.terminalState === 'contract_blocked') {
+        events.push({
+          schemaVersion: 5,
+          type: 'handoff_contract_failed',
+          id: `event_${dispatch.attemptId}_handoff_contract_failed`,
+          correlationId: dispatch.decisionId,
+          causationId: dispatch.decisionId,
+          occurredAt: receipt.completedAt,
+          sessionId: this.deps.sessionId,
+          taskId: dispatch.taskId,
+          subtaskId: dispatch.subtaskId,
+          attemptId: dispatch.attemptId,
+          workUnitId: receipt.workUnitId,
+          agentClassName: receipt.agentClassName,
+          contract: (receipt.parsing.completionContract ?? {}) as never,
+          violations: receipt.verification.violations,
+          receiptCount: this.deps.attemptReceiptRepo.countByTerminal(
+            taskId,
+            receipt.subtaskId,
+            'contract_blocked',
+          ),
+          responseBytes: Buffer.byteLength(receipt.rawResponse, 'utf8'),
+        });
+        continue;
+      }
+      events.push(this.eventFromDispatchItem(dispatch, {
+        type: 'execution_outcome',
+        occurredAt: receipt.completedAt,
+        terminalKind: receipt.terminalState === 'completed' ? 'completed' : 'failed',
+        agentClassName: receipt.agentClassName,
+        attemptKind: receipt.attemptKind,
+        sourceAttemptId: receipt.sourceAttemptId,
+        failure: receipt.terminalState === 'completed'
+          ? null
+          : receipt.failure ?? {
+              kind: receipt.terminalState === 'heartbeat_lost' ? 'heartbeat_lost' : 'unknown',
+              scope: 'attempt',
+              code: receipt.errorCode ?? 'recovered_attempt_failure',
+              summary: receipt.errorDetail ?? 'Recovered terminal attempt receipt',
+            },
+      }));
+    }
+    return events;
   }
 
   private async drainPublications(input: {
@@ -1424,7 +1529,7 @@ export class KernelExecutionRuntime {
       submit: event => workflow.submit(event),
       onLaunchError: async (item, error) => this.launchFailureEvent(item, error),
     };
-    workflow = new DurableKernelWorkflow({
+    workflow = new KernelWorkflowRunner({
       kernel: this.deps.controlKernel,
       buildSnapshot: event => event.type === 'plan_proposed'
         ? this.deps.callbacks.buildPlanAdmissionSnapshot(event)

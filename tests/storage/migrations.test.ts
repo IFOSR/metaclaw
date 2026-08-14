@@ -10,15 +10,13 @@ describe('current SQLite baseline', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     expect(db.prepare('SELECT version FROM schema_version').all())
-      .toEqual([{ version: 36 }]);
+      .toEqual([{ version: 37 }]);
     for (const table of [
       'projects',
       'tasks',
       'subtasks',
       'work_graph_revisions',
-      'kernel_events',
       'kernel_decisions',
-      'kernel_decision_applications',
       'kernel_effect_outbox',
       'kernel_dispatch_items',
       'executor_attempt_receipts',
@@ -47,6 +45,8 @@ describe('current SQLite baseline', () => {
       'guidance_events',
       'reflection_events',
       'agent_classes',
+      'kernel_events',
+      'kernel_decision_applications',
     ]) {
       expect(db.prepare(`PRAGMA table_info(${removed})`).all(), removed).toEqual([]);
     }
@@ -110,6 +110,12 @@ describe('current SQLite baseline', () => {
       'session_confirmed_at',
       'session_last_used_at',
     ]));
+    expect((db.prepare('PRAGMA table_info(executor_attempt_runtime)').all() as Array<{ name: string }>)
+      .map(column => column.name)).not.toEqual(expect.arrayContaining([
+      'workspace_baseline_json',
+      'workspace_delta_json',
+      'progress_json',
+    ]));
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
@@ -121,7 +127,7 @@ describe('current SQLite baseline', () => {
     `);
 
     expect(() => runMigrations(db)).toThrow(
-      'unsupported pre-release SQLite schema (30) at (unknown path); back up and create a fresh database for schema 36',
+      'unsupported pre-release SQLite schema (30) at (unknown path); back up and create a fresh database for schema 37',
     );
     expect(db.prepare('SELECT version FROM schema_version').all())
       .toEqual([{ version: 30 }]);

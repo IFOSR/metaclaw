@@ -23,9 +23,9 @@ Start with the user-visible Task and follow its durable ownership chain:
 | --- | --- |
 | What did the user request and when? | `tasks`, `task_events`, `interactions` |
 | Which graph work was active? | `work_graph_revisions`, `subtasks`, `subtask_handoffs` |
-| What did the Kernel observe and authorize? | `kernel_events`, `kernel_decisions`, `kernel_decision_applications` |
+| What did the Kernel authorize, and which current fact caused it? | `kernel_decisions` (including the embedded normalized event) plus the owning current domain row |
 | Was work actually dispatched? | `kernel_dispatch_items` |
-| Did the attempt reach an immutable terminal fact? | `executor_attempt_receipts`, `executor_attempt_runtime` |
+| Did the attempt reach an immutable terminal fact or retain a recoverable native session? | `executor_attempt_receipts`, `executor_attempt_runtime` |
 | Which Executor still owned work? | `work_units`, `work_unit_events` |
 | Were partitions still reserved or waiting? | `resource_leases`, `resource_waits` |
 | Was the sandbox alive, exited, lost, or removed? | `attempt_sandboxes` plus live process/container inspection |

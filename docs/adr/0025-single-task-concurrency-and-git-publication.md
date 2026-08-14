@@ -25,9 +25,9 @@ ControlKernel contract v4 receives a scheduling snapshot containing the frontier
 
 Only the active Task is a scheduling candidate. ADR-0011 remains in force. Multi-Task admission, priority, fairness and starvation protection are deliberately deferred to a future independent roadmap without changing the v4 batch/apply/supervisor seam.
 
-### Durable asynchronous application
+### Asynchronous execution after serial authorization
 
-`DurableKernelWorkflow` remains the sole serial authorization/application workflow. Applying `dispatch_batch` transactionally inserts durable child items and returns without awaiting execution. An Execution-owned supervisor claims child items by attempt ID, launches them independently and submits normalized events back through the same workflow.
+`KernelWorkflowRunner` remains the sole serial authorization seam. Applying `dispatch_batch` transactionally inserts durable child items and returns without awaiting execution. An Execution-owned supervisor claims child items by attempt ID, launches them independently and submits normalized events back through the same runner. The current child rows and immutable terminal receipts, rather than a generic application cursor, are the recovery facts.
 
 A partial capacity, partition or launch race affects only that child. A partial unique index guarantees that one Subtask cannot have more than one pending or active attempt. Startup reconciles child rows, sandbox records and Docker labels before new work is accepted.
 
@@ -71,4 +71,4 @@ Database-aware semantic snapshots, active databases and WAL/journal/log/cache/da
 
 Concurrency authorization remains pure and auditable while attempt execution becomes asynchronous. Completion facts cannot race ahead of Git publication, result order is independent from executor timing, and conflicts become bounded recovery chains rather than silent overwrites or new semantic work items.
 
-The hard cut requires coordinated Kernel v4, SQLite v26, Runtime, Executor, workspace and projection changes. Legacy v3 applied decisions remain audit records; pending/processing legacy applications fail closed during startup reconciliation rather than running a second contract.
+The original hard cut required coordinated Kernel v4, SQLite v26, Runtime, Executor, workspace and projection changes. The later fresh-only schema v37 retains immutable decisions as audit while removing generic decision-application rows; startup now reconciles current dispatch, receipt, sandbox, session, claim and lease facts.

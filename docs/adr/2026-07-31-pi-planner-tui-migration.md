@@ -148,7 +148,7 @@ AnyFusion-Pi 不可以：
 
 - `ControlKernel.decide(event, snapshot)` Interface；
 - Kernel event/snapshot/decision v5 语义；
-- `DurableKernelWorkflow` 的 inbox、ledger、application、apply、replay 和幂等语义；
+- `KernelWorkflowRunner` 的串行 authorization、immutable ledger、apply 和确定性幂等语义；
 - Task admission、dispatch、retry、fallback、replan、availability、permission 和 cancellation policy；
 - Work Graph v5 状态机、图规则、handoff、completion 和 publication contract。
 
@@ -207,7 +207,7 @@ D:\Internships\AnyInt\MetaClaw
 - Session 到 Pi session identity 的映射与单 writer 协调；
 - Planner-safe snapshot projection；
 - PlanningAgentPlan v6 authoritative validation；
-- `plan_proposed -> DurableKernelWorkflow -> ControlKernel`；
+- `plan_proposed -> KernelWorkflowRunner -> ControlKernel`；
 - Docker runtime 装配、版本 pin 和集成测试。
 
 MetaClaw 不保存 Pi 源码，不 import Pi package，不依赖 Pi 的 TypeScript 类型作为内部编译依赖。
@@ -267,7 +267,7 @@ MetaClaw Application Shell (Node 20)
   - single-writer/session coordination
         |
         v
-plan_proposed -> DurableKernelWorkflow -> ControlKernel
+plan_proposed -> KernelWorkflowRunner -> ControlKernel
         |
         v
 Execution -> Executor attempts -> publication

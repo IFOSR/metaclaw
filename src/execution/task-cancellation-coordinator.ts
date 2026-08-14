@@ -266,7 +266,6 @@ export class TaskCancellationCoordinator {
   completionBlockedReasons(
     taskId: string,
     generationId: string | null,
-    excludedDecisionId?: string,
   ): string[] {
     const reasons: string[] = [];
     const generation = generationId ? ' AND generation_id = ?' : '';
@@ -296,21 +295,6 @@ export class TaskCancellationCoordinator {
         AND status IN ('pending_quiescence', 'planning', 'submitted')
       LIMIT 1
     `).get(...parameters)) reasons.push('generation_replan');
-    const applicationParameters: unknown[] = [taskId];
-    let decisionFilter = '';
-    if (excludedDecisionId) {
-      decisionFilter = ' AND application.decision_id <> ?';
-      applicationParameters.push(excludedDecisionId);
-    }
-    if (this.deps.db.prepare(`
-      SELECT 1
-      FROM kernel_decision_applications AS application
-      INNER JOIN kernel_events AS event ON event.id = application.event_id
-      WHERE event.task_id = ?
-        AND application.status IN ('pending', 'applying', 'uncertain')
-        ${decisionFilter}
-      LIMIT 1
-    `).get(...applicationParameters)) reasons.push('kernel_application');
     if (this.deps.db.prepare(`
       SELECT 1
       FROM kernel_dispatch_items AS dispatch

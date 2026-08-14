@@ -32,13 +32,6 @@ import type {
   KernelAttemptPayload,
   KernelRecoveryMode,
 } from '../kernel/control-kernel.js';
-import {
-  captureWorkspaceState,
-  deriveWorkspaceDelta,
-  deriveGitCommitDelta,
-  type WorkspaceDelta,
-  type WorkspaceState,
-} from './workspace-change-tracker.js';
 import type { WorkspaceStore, WorkspaceHandle, StoredWorkspaceCheckpoint } from './workspace-store.js';
 import type { AttemptSandboxPort } from './attempt-sandbox.js';
 import {
@@ -364,8 +357,6 @@ export class SubtaskAttemptRunner {
     let rawResponse = '';
     let evidenceCapability: { revoke(): void } | null = null;
     let evidenceToolServer: ExecutionEvidenceToolServer | null = null;
-    let workspaceBaseline: WorkspaceState | null = null;
-    let workspaceDelta: WorkspaceDelta | null = null;
     let workspace: WorkspaceHandle | null = null;
     let gitWorkspace: ManagedGitWorkspace | null = null;
     let mergeRepair: {
@@ -498,7 +489,6 @@ export class SubtaskAttemptRunner {
         objects: checkpointObjects(startCheckpoint),
       });
       const targetPath = workspace.filesPath;
-      workspaceBaseline = captureWorkspaceState(workspace.filesPath);
       const sourceRuntime = input.sourceAttemptId
         ? this.attemptRuntimeRepo.find(input.sourceAttemptId)
         : null;
@@ -510,7 +500,6 @@ export class SubtaskAttemptRunner {
         attemptId,
         sourceAttemptId: input.sourceAttemptId ?? null,
         workspaceRoot: workspace.filesPath,
-        workspaceBaseline: { ...workspaceBaseline },
         recoverySafety: this.deps.agentClassService.deriveRecoverySafety(subtask.requiredCapabilities),
         now: startedAt,
       });
@@ -717,10 +706,6 @@ export class SubtaskAttemptRunner {
           },
         },
         onProgress: (event, executor) => {
-          this.attemptRuntimeRepo.recordProgress(attemptId, {
-            kind: event.kind,
-            text: event.text.slice(0, 2_000),
-          }, new Date().toISOString());
           input.onProgress?.(event, executor);
         },
       });
@@ -762,15 +747,6 @@ export class SubtaskAttemptRunner {
       const candidate = mergeRepair
         ? null
         : await this.managedGitWorkspace.validateExecutorCandidate(gitWorkspace);
-      workspaceDelta = candidate
-        ? deriveGitCommitDelta(gitWorkspace.filesPath, candidate.mainCommit, candidate.candidateCommit)
-        : deriveWorkspaceDelta(workspaceBaseline, captureWorkspaceState(workspace.filesPath));
-      this.attemptRuntimeRepo.recordWorkspaceDelta(
-        attemptId,
-        workspaceDelta,
-        new Date().toISOString(),
-      );
-
       if (mergeRepair) {
         const report = parseMergeRepairReport(rawResponse);
         const repairedCommit = await this.managedGitWorkspace.commitMergeRepair({
@@ -1116,17 +1092,6 @@ export class SubtaskAttemptRunner {
           // The terminal receipt remains authoritative; checkpoint recovery is best effort here.
         }
       }
-      if (!workspaceDelta && workspaceBaseline && workspace) {
-        try {
-          this.attemptRuntimeRepo.recordWorkspaceDelta(
-            attemptId,
-            deriveWorkspaceDelta(workspaceBaseline, captureWorkspaceState(workspace.filesPath)),
-            new Date().toISOString(),
-          );
-        } catch {
-          // Failed attempts retain their terminal receipt even when best-effort delta capture fails.
-        }
-      }
       evidenceCapability?.revoke();
       await evidenceToolServer?.close();
       await capabilityToolServer?.close();
@@ -1257,6 +1222,7 @@ export class SubtaskAttemptRunner {
       receipt: buildReceipt({
         ...input,
         terminalState: 'contract_blocked',
+        parsing: { completionContract: input.completionContract },
       }, now),
       expectedSubtaskStatus: 'running',
       nextSubtaskStatus: 'awaiting_decision',
@@ -1492,6 +1458,7 @@ function buildReceipt(input: {
   errorCode?: string | null;
   errorDetail?: string | null;
   failure?: KernelFailure | null;
+  parsing?: Record<string, unknown>;
 }, completedAt = new Date().toISOString()): ExecutorAttemptReceiptInsert {
   return {
     attemptId: input.attemptId,
@@ -1505,7 +1472,10 @@ function buildReceipt(input: {
     terminalState: input.terminalState,
     rawResponse: input.rawResponse,
     completionSchemaVersion: input.completionSchemaVersion ?? null,
-    parsing: { completionMarker: input.completionSchemaVersion ? 'parsed' : 'unavailable' },
+    parsing: {
+      completionMarker: input.completionSchemaVersion ? 'parsed' : 'unavailable',
+      ...(input.parsing ?? {}),
+    },
     verification: { warnings: input.warnings ?? [], violations: input.violations ?? [] },
     errorCode: input.errorCode ?? null,
     errorDetail: input.errorDetail ?? null,
@@ -1541,14 +1511,10 @@ function boundedRecoveryPacket(
       code: receipt.errorCode,
       summary: receipt.errorDetail?.slice(0, 1_000) ?? null,
     } : null,
-    knownProgress: runtime?.progress ?? {},
-    workspaceDelta: runtime?.workspaceDelta ?? {},
     confirmedCompleted: [] as string[],
     unknownItems: ['Verify the current workspace and remaining acceptance criteria before making changes.'],
     completionRetry,
   };
   const serialized = JSON.stringify(packet);
-  return serialized.length <= 16_000
-    ? packet
-    : { ...packet, knownProgress: {}, workspaceDelta: {}, truncated: true };
+  return serialized.length <= 16_000 ? packet : { ...packet, truncated: true };
 }

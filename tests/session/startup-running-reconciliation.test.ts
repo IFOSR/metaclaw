@@ -361,8 +361,7 @@ describe('session startup running-task reconciliation', () => {
       await currentSession.submit(`/task resume ${task.id}`, { awaitAsyncWork: true });
 
       const reviews = new KernelDecisionRepo(db).listByCorrelation(requested.requestId)
-        .filter(decision => decision.action === 'escalate_capability'
-          && new KernelWorkflowRepo(db).isDecisionApplied(decision.id));
+        .filter(decision => decision.action === 'escalate_capability');
       expect(reviews).toHaveLength(2);
       expect(reviews[1]).toMatchObject({
         sessionId: `sess_reissue_${failureMode}`,

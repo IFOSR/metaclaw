@@ -4,17 +4,17 @@
 
 > 当前实现基线（2026-08-14）：PlanningAgentPlan v7、Work Graph
 > v6、Kernel event/snapshot/decision contract v5、Completion Protocol v4，
-> fresh-only SQLite schema v36、一个显式 Project 仓库、用户审批后的整分支
+> fresh-only SQLite schema v37、一个显式 Project 仓库、用户审批后的整分支
 > 发布，以及来自
 > `$ANYFUSION_CONFIG_HOME/executors.yaml` 的 digest-bound Executor Registry
-> Snapshot。`KernelWorkflow` 串行完成
-> event、Decision 和 application，attempt supervisor 在单一活跃顶层 Task
+> Snapshot。`KernelWorkflowRunner` 串行完成
+> event、Decision 和即时 apply，attempt supervisor 在单一活跃顶层 Task
 > 内并行启动最多四个隔离 attempt。ADR-0011 保持有效；多顶层 Task 调度
 > 属于未来独立路线图。
 
 AnyFusion 是一个本地优先的 AI Task OS。它把自然语言需求变成可持久化、可检索、可调度、可验收的任务，让 AI 工作不再只是“回答这一轮”，而是可以跨中断继续执行、恢复上下文、规划子任务、claim executor work unit，并把最终产物交付到用户真正查看的地方。
 
-它适合需要 AI Agent 长时间可靠工作的团队：任务有状态机，记忆有边界，自然语言主路径采用 PlanningAgent / ControlKernel / Durable KernelWorkflow / work-unit runtime，复杂任务有拆解和验收，文件产物有记录，飞书交付有后端，真实端到端烟测可以验证用户路径是否跑通。
+它适合需要 AI Agent 长时间可靠工作的团队：任务有状态机，记忆有边界，自然语言主路径采用 PlanningAgent / ControlKernel / KernelWorkflowRunner / work-unit runtime，复杂任务有拆解和验收，文件产物有记录，飞书交付有后端，真实端到端烟测可以验证用户路径是否跑通。
 
 ## 核心能力
 
@@ -47,7 +47,7 @@ flowchart LR
   Session --> Planning[Planner Work Unit<br/>PlanningAgent]
   Planning --> Plan[PlanningAgentPlan v7<br/>意图、目标、候选、<br/>v6 graph 或授权确认]
   Plan --> Event[KernelEvent<br/>plan_proposed]
-  Event --> Workflow[Durable KernelWorkflow v5<br/>inbox、snapshot、decision、application]
+  Event --> Workflow[KernelWorkflowRunner v5<br/>snapshot、decision、apply]
   Workflow --> Kernel[ControlKernel<br/>frontier、batch、资源、<br/>permission 与恢复]
   Kernel --> Decision{KernelDecision}
   Decision -->|direct_reply| Conversation[KernelDecisionApplier<br/>交付 plan.response.directReply，不调 executor]
@@ -74,7 +74,7 @@ flowchart LR
   Stop --> Delivery
   Delivery --> User
 
-  Session <--> Store[(本地 SQLite schema 36<br/>Project、任务、审批、<br/>work units、events、memory)]
+  Session <--> Store[(本地 SQLite schema 37<br/>Project、任务、审批、<br/>work units、decisions、memory)]
   Workflow -. audit .-> Decisions[(kernel_decisions)]
   TaskOS <--> Store
   Graph <--> Store
@@ -187,7 +187,7 @@ claiming、汇总与验收都已实现并有针对性测试覆盖。本地主机
 discovery、注册和验证已经实现；远程 Registry、弹性 work-unit spawn 和
 大规模多客户端 Gateway 扩展仍然明确不在当前范围。
 
-重要边界：PlanningAgent → Durable KernelWorkflow → ControlKernel →
+重要边界：PlanningAgent → KernelWorkflowRunner → ControlKernel →
 Runtime 是唯一生产策略主链。已移除的 Agentic Loop/ExecutionPolicy
 实现不得重新成为第二套路由、retry、fallback、replan 或 recovery 权威。
 
@@ -844,7 +844,7 @@ AnyFusion 会用本地 SQLite FTS5 建立任务检索索引，让历史工作可
 
 ## 单 Task 并发调度模型
 
-AnyFusion 当前只调度一个活跃顶层 Task。Work Graph 纯函数从依赖、Subtask 生命周期和 pending/active item 推导稳定 runnable frontier；Kernel v5 在全局上限四个 slot 内一次授权 batch。`KernelWorkflow` 仍串行决定和落应用，attempt supervisor 才异步 claim/run child item，因此 sibling 的启动 race、容量不足或失败不会取消其余 item。
+AnyFusion 当前只调度一个活跃顶层 Task。Work Graph 纯函数从依赖、Subtask 生命周期和 pending/active item 推导稳定 runnable frontier；Kernel v5 在全局上限四个 slot 内一次授权 batch。`KernelWorkflowRunner` 仍串行决定和即时应用，attempt supervisor 才异步 claim/run child item，因此 sibling 的启动 race、容量不足或失败不会取消其余 item。
 
 当一个顶层任务正在运行时，`ControlKernel` 会拒绝新的无关自然语言 durable task，以及针对其他任务的执行请求。它仍允许普通问答、澄清、状态查询、清理任务命令，以及明确指向当前活跃任务的请求。Slash command 和确定性执行入口也进入统一 Kernel seam。第二个顶层任务的排队、紧急抢占和自动恢复在当前范围内刻意关闭；ADR-0011 把这记录为一个可逆决策。
 
@@ -869,7 +869,7 @@ scheduling snapshot，也唯一决定 batch dispatch、Task/Subtask 取消、显
 retry/fallback、permission
 grant/deny/escalate、partition wait 和 sandbox recovery。
 
-`DurableKernelWorkflow` 负责 event inbox、Decision/application 原子 issuance、幂等 Runtime apply 和 observation drain。`WorkGraphRuntimeService` 只持久化或投影 Kernel 授权的 v6 Work Graph revision。`KernelExecutionRuntime` 构造快照并应用授权；`AttemptSupervisor` 管理 durable child launch；`SubtaskAttemptRunner` 负责 attempt-aware claim、唯一 context、Completion Protocol、receipt 和精确 candidate commit；`WorkspacePublicationWorker` 负责应用用户审批的 Project `main` promotion 并原子发布 completion facts。
+`KernelWorkflowRunner` 串行处理单个 event，查找或签发不可变 Decision，调用 Runtime handler，并把即时稳定 observation 重新交给同一入口；确定性重复 event 复用既有 Decision。启动时不再回放 inbox 或 reconcile 通用 application，而是读取当前 Task/Subtask、dispatch、不可变 receipt、native session/worktree、claim/lease、permission/publication 与未决 Decision，归一化后交给 Kernel。`WorkGraphRuntimeService` 只持久化或投影 Kernel 授权的 v6 Work Graph revision。`KernelExecutionRuntime` 构造快照并应用授权；`AttemptSupervisor` 管理 durable child launch；`SubtaskAttemptRunner` 原子落地 receipt 与当前 attempt/publication 事实；`WorkspacePublicationWorker` 负责应用用户审批的 Project `main` promotion 并原子发布 completion facts。
 
 旧版 `ExecutorRouter`、`ExecutorRoutingCoordinator`、`ExecutionPolicyPlanner` 以及 `IntentOrchestrator` 路由子系统已整体删除——不再有独立的 executor-selection 层。`repo_execution`、`research_workflow` 等旧 route intent 名称仅作为 agent class 排序的 affinity key 保留。
 
@@ -877,22 +877,22 @@ grant/deny/escalate、partition wait 和 sandbox recovery。
 
 AnyFusion 可以把复杂需求表示成 work graph，而不是把整段需求一次性塞给一个 executor。图没有 single/multi execution mode；Planner 只在受控能力交接或必要交付边界建立多个 Subtasks。每条 `dependencies` 边同时是拓扑与 keyed `text`/`artifact` handoff contract。
 
-`SubtaskExecutionContext` 是唯一生产 Executor 输入。Task 标题/目标仅作背景，当前 Subtask 目标是唯一操作指令，越界 sibling 只暴露标题。Runtime 不把 Task/Subtask/attempt/WorkUnit 身份及 acceptance/handoff key 交给模型复制。Completion Protocol v4 要求 marker 前有非空 Markdown 结果说明；成功时严格 JSON 为 `{}` 或只包含可选 `resultFilePaths`，失败时使用受控 `failure`。Runtime 校验声明的结果文件确实存在且位于工作区内，用结果说明生成 acceptance evidence 和文本 handoff，用结果文件生成 artifact handoff。Subtask 可以修改工作区，也可以不修改；workspace delta 仍由 Runtime 独立记录并用于 Git 发布校验。若修改了文件，Executor 必须提交并同步本地 `main`；未修改文件时只需保持工作树干净。随后 Runtime 根据绑定 Subtask 与 outgoing contract 生成权威内部 envelope，并执行预算和直接边汇总校验。
+`SubtaskExecutionContext` 是唯一生产 Executor 输入。Task 标题/目标仅作背景，当前 Subtask 目标是唯一操作指令，越界 sibling 只暴露标题。Runtime 不把 Task/Subtask/attempt/WorkUnit 身份及 acceptance/handoff key 交给模型复制。Completion Protocol v4 要求 marker 前有非空 Markdown 结果说明；成功时严格 JSON 为 `{}` 或只包含可选 `resultFilePaths`，失败时使用受控 `failure`。Runtime 校验声明的结果文件确实存在且位于工作区内，用结果说明生成 acceptance evidence 和文本 handoff，用结果文件生成 artifact handoff。Subtask 可以修改工作区，也可以不修改；workspace delta 仍由 Runtime 独立计算并用于 Git 发布校验，但不再重复保存到 attempt-runtime 恢复记录。若修改了文件，Executor 必须提交并同步本地 `main`；未修改文件时只需保持工作树干净。随后 Runtime 根据绑定 Subtask 与 outgoing contract 生成权威内部 envelope，并执行预算和直接边汇总校验。
 
 第一次 Completion Protocol 失败后，Kernel 可以授权一次持久化名称仍为 `contract_correction` 的完整重试。它不再是无工具格式修复：新 Executor session 复用原 Subtask worktree，重新建立同 AgentClass 的 permission profile、mount、resource lease、evidence/capability MCP、完整工具与网络策略，并接收原目标、acceptance 和包含本次 violations 的 bounded recovery packet。新 attempt 不继承来源 attempt 的一次性 capability grant，也不把错误提取的原始中间响应作为主要任务输入。Runtime 按新 attempt 的基线和最终状态重新计算权威 workspace delta，并正常执行 Completion 与 publication 验收；第二次 contract failure 直接 blocked。Pi terminal event 提取和 correction 额度按 source attempt 统计仍是独立技术债。
 
-在 active session path 中，proposal 只有在 `ControlKernel` 授权并创建 durable
-application 后才会成为持久化 Work Graph v6 `Subtask` revision。未发布产品
-使用 fresh-only SQLite schema v36；所有 v35 或更早预发布 schema 都会带
-精确路径拒绝，不提供迁移、自动删除或双读。Schema 36 保留 Project、
-publication、Executor Registry、process runtime、purge 与 durable workflow 基线，
-并在现有 attempt runtime 记录上增加最小 Pi session ownership、binding/config、
-workspace、locator/native ID、完整性和 active writer 事实；同时保留
-Planner proposal、durable workflow、graph revision、
-resource/workspace/permission/sandbox、dispatch/publication/immutable merge
-audit、cancellation cleanup、lease revocation、generation replan、deferred
-availability、bounded recovery 和 partial completion 事实。普通运行期间
-Kernel 与 Task 事件保留完整历史；Skill 过程事件只保留为 attempt 生命周期
+在 active session path 中，proposal 只有在 `ControlKernel` 的
+`authorize_task_plan` Decision 被应用后才会成为持久化 Work Graph v6
+`Subtask` revision。未发布产品使用 fresh-only SQLite schema v37；所有 v36
+或更早预发布 schema 都会带精确路径拒绝，不提供迁移、自动删除或双读。
+Schema 37 保留 Project、publication、Executor Registry、process runtime、purge、
+不可变 Kernel Decision、graph revision、resource/workspace/permission/sandbox、
+dispatch/publication/immutable merge audit、cancellation cleanup、lease revocation、
+generation replan、deferred availability、bounded recovery 和 partial completion
+事实。现有 attempt runtime 只保存当前 Pi session ownership、binding/config、
+workspace、locator/native ID、完整性和 active writer 事实；通用 Kernel
+event/application replay 及 recovery-packet workspace baseline/delta/progress
+字段已删除，专用 completion delivery outbox 和 Task event 历史保留。Skill 过程事件只保留为 attempt 生命周期
 内的 verifier evidence，只有终态事件落库并原子更新 effect summary。下游
 只有在直接依赖获得审批并合并到 Project `main` 后才进入 frontier，并从更新
 后的 `main` 创建自己的 worktree。Executor 只有在修改文件时才必须提交全部改动、
@@ -909,8 +909,9 @@ Runtime 在启动前 pin 预期 locator 以及 ownership/runtime/workspace ident
 并行。Continuation 前，Execution 校验 ownership、当前 binding/config、持久 worktree/branch、
 相同或可接受后继 HEAD、JSONL 完整性和外部副作用安全，并只向 Kernel 提交 `resume`、
 `fresh` 或 `blocked` 三态事实。ControlKernel 继续唯一决定 native continuation、保留的 bounded
-recovery packet/fallback 或阻塞。第一阶段明确保留现有 workflow/event/application/outbox/checkpoint
-记录与写入。
+recovery packet/fallback 或阻塞。启动恢复只重建当前恢复事实；通用 workflow
+event/application replay 已删除，专用 delivery、publication、permission 和仍有消费者的
+workspace checkpoint 记录继续保留。
 
 已经脱离生产链路的 `ExecutionStrategyPlanner`、`ExecutionPolicy`、`MultiExecutorOrchestrator` 和 `AgenticLoopController` 实现已删除。work graph 与 work unit dispatch 成为权威路径后，这些旧实现不再参与运行时。`ExecutionAggregator` 继续供验证流水线执行结构化的多结果证据检查。
 

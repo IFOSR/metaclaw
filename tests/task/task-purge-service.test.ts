@@ -196,15 +196,6 @@ describe('TaskPurgeService', () => {
       )
     `).run(now);
     db.prepare(`
-      INSERT INTO kernel_events (
-        id, schema_version, event_type, correlation_id, session_id, task_id,
-        event_json, available_at, status, created_at, updated_at
-      ) VALUES (
-        'event_1', 5, 'plan_proposed', 'correlation_1', 'session_1', NULL,
-        '{}', ?, 'processed', ?, ?
-      )
-    `).run(now, now, now);
-    db.prepare(`
       INSERT INTO kernel_decisions (
         id, schema_version, event_id, event_type, correlation_id, session_id,
         task_id, event_json, snapshot_json, decision_json, action, reason, created_at
@@ -213,11 +204,6 @@ describe('TaskPurgeService', () => {
         ?, '{}', '{}', '{}', 'authorize_task_plan', 'test', ?
       )
     `).run(taskId, now);
-    db.prepare(`
-      INSERT INTO kernel_decision_applications (
-        id, decision_id, event_id, idempotency_key, status, created_at, updated_at
-      ) VALUES ('application_1', 'decision_1', 'event_1', 'application_key', 'applied', ?, ?)
-    `).run(now, now);
     db.prepare(`
       INSERT INTO kernel_effect_outbox (
         id, decision_id, task_id, effect_type, idempotency_key, payload_json,
@@ -276,10 +262,8 @@ describe('TaskPurgeService', () => {
       'workspace_checkpoint_objects',
       'workspace_checkpoints',
       'workspace_records',
-      'kernel_decision_applications',
       'kernel_effect_outbox',
       'kernel_decisions',
-      'kernel_events',
       'planner_proposal_submissions',
       'planner_proposal_turns',
     ]) {

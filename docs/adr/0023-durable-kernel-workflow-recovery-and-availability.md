@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-21
-- **Scope**: Phase 4 durable workflow, application recovery, structured failure, retry/fallback, availability, continuation, replan revisions, outbox and manual recovery
+- **Scope**: Kernel decision sequencing, current-fact recovery, structured failure, retry/fallback, availability, continuation, replan revisions, specialized external effects and manual recovery
 - **Amends**: ADR-0017, ADR-0018, ADR-0021, ADR-0022
 - **Governed by**: ADR-0020
 
@@ -103,6 +103,16 @@ Runtime stores recoverable Pi session JSONL under the persistent Runtime data ro
 
 Kernel snapshots carry that normalized fact. ControlKernel remains the sole authority that chooses native continuation, the existing bounded recovery packet, retry, fallback, replan or blocking. The Adapter performs one authorized invocation and contains no recovery loop. Heartbeat-loss and interrupted-pause reconciliation release session writer ownership only after terminal persistence succeeds, alongside existing claim and lease reconciliation. Existing commit, publication, permission and delivery receipts remain the authorities for completed or idempotent side effects.
 
+### Current-fact recovery amendment (2026-08-14)
+
+Fresh-only SQLite schema v37 supersedes v36 and completes the separately gated second phase. Generic `kernel_events` and `kernel_decision_applications` are removed, along with the recovery-packet-only workspace baseline/delta/progress columns on `executor_attempt_runtime`. There is no migration, dual read or compatibility write for pre-release v36 databases.
+
+`KernelWorkflowRunner` is the one serial Application seam. It obtains one immutable Decision for a deterministic event identity, applies that authorization once in the current process, and immediately submits stable observations back through the same runner. Repeated submission reuses the existing Decision; there is no durable application cursor, replay queue, startup application reconciliation or Runtime-owned retry loop. `ControlKernel.decide` remains the only policy authority.
+
+Startup recovery reads the minimum current projection: Task/Subtask and generation, dispatch and immutable terminal receipts, attempt runtime plus persistent native session/worktree, claim/lease, permission/publication, and the current Kernel Decision where a retry timer or review is outstanding. Those facts become normalized interrupted/recovery events for the existing Kernel. An `awaiting_decision` receipt and a due `wait_for_retry` Decision therefore converge without replaying historical workflow events. Terminal receipt, Subtask, dispatch and publication current facts remain transactionally landed before session-writer, claim or lease ownership is released.
+
+The immutable `kernel_decisions` ledger remains the authorization audit and embeds its normalized source event. `task_events` remain domain history. `kernel_effect_outbox` remains the specialized task-completion delivery/provider-receipt boundary, and publication/permission receipts remain authoritative. Workspace checkpoints remain only where permission suspension or non-Git workspace restoration still consumes them; startup no longer creates or replays a checkpoint merely to reconstruct a Git-backed attempt recovery packet.
+
 `system_smoke` Tasks carry a unique `smoke_run_id`, are hidden from normal Task
 lists, search and memory generation, and may be cleaned only by a smoke run
 whose ID exactly matches. Smoke cleanup formally cancels unfinished owned
@@ -110,16 +120,16 @@ Tasks, waits for quiescence, invokes Task purge, removes workspace/artifact/home
 residue and retains only bounded Executor verification/health facts, the latest
 20 smoke audits and minimal purge audits.
 
-The Phase 4 gated evaluation closed on 2026-07-21 without adoption. The replaceable drain/apply loop was materially smaller than the required MetaClaw inbox/application/outbox recovery layer, while Functional API integration would add a second SQLite cursor and replay glue. It could not produce the required 30% net removal. `DurableKernelWorkflow` is therefore the sole production workflow implementation and no LangGraph dependency or compatibility path is retained.
+The Phase 4 gated evaluation closed on 2026-07-21 without adoption. Its rejection remains final: no LangGraph dependency or compatibility path is retained. Session-first Phase 2 later removed the generic inbox/application replay layer directly; `KernelWorkflowRunner` is now the sole production decision sequencing seam and introduces no second cursor or checkpoint store.
 
 ## Ownership And Dependencies
 
 - Kernel owns pure decisions and may depend only on pure domain/routing/work-graph facts.
-- Workflow is a deep Application module owning durable sequencing, recovery and handler orchestration, not policy.
+- `KernelWorkflowRunner` is a deep Application module owning serial decision sequencing and handler orchestration, not policy or a second recovery state machine.
 - Runtime owns idempotent effects, attempt execution and normalized observations.
 - Storage implements transactional repositories; tables do not define policy.
 - Session, Gateway and commands only submit events, call startup recovery and project results.
 
 ## Consequences
 
-Crashes no longer create an uninspectable ledger/apply gap, and repeated submission resumes the same application instead of duplicating authorization. Retry, fallback, replan, availability, permission, partition waiting and sandbox recovery are auditable Kernel actions. The hard schema cuts require coordinated migration and replacement of every manual issue/apply path. Phase 5 remains serial; multi-Task and concurrent-frontier scheduling remain Phase 6.
+Crashes converge from current domain facts, immutable terminal receipts, persistent Executor sessions/worktrees and specialized external-effect receipts. Repeated deterministic event submission reuses the same authorization without a generic application record. Retry, fallback, replan, availability, permission, partition waiting and sandbox recovery remain auditable Kernel actions. The pre-release schema cut is fresh-only. ADR-0011's single-active-Task product boundary remains unchanged while independent Subtasks may execute concurrently.

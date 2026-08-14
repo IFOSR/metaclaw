@@ -6,7 +6,6 @@ import {
   type ExecutorAttemptReceiptInsert,
 } from '../storage/executor-attempt-receipt-repo.js';
 import { KernelDispatchItemRepo } from '../storage/kernel-dispatch-item-repo.js';
-import { KernelWorkflowRepo } from '../storage/kernel-workflow-repo.js';
 import { WorkspacePublicationRepo } from '../storage/workspace-publication-repo.js';
 
 export interface AttemptTerminalLanding {
@@ -36,13 +35,11 @@ export interface AttemptTerminalLandingResult {
 export class AttemptTerminalService {
   private readonly receipts: ExecutorAttemptReceiptRepo;
   private readonly dispatchItems: KernelDispatchItemRepo;
-  private readonly workflow: KernelWorkflowRepo;
   private readonly publications: WorkspacePublicationRepo;
 
   constructor(private readonly db: Database.Database) {
     this.receipts = new ExecutorAttemptReceiptRepo(db);
     this.dispatchItems = new KernelDispatchItemRepo(db);
-    this.workflow = new KernelWorkflowRepo(db);
     this.publications = new WorkspacePublicationRepo(db);
   }
 
@@ -159,15 +156,6 @@ export class AttemptTerminalService {
       if (!terminalDispatch || !['terminal', 'cancelled'].includes(terminalDispatch.status)) {
         throw new Error(`dispatch item did not become terminal: ${input.receipt.attemptId}`);
       }
-      const event = pauseWon
-        ? pauseOutcome(input.event, dispatch, input.now)
-        : cancellationWon
-          ? cancellationOutcome(input.event, dispatch, input.now)
-          : input.event;
-      this.workflow.enqueue(event, event.occurredAt);
-      if (!this.workflow.findEvent(event.id)) {
-        throw new Error(`attempt outcome inbox was not persisted: ${event.id}`);
-      }
       return { cancellationWon, pauseWon };
     })();
   }
@@ -185,64 +173,6 @@ function pausedReceipt(receipt: ExecutorAttemptReceiptInsert): ExecutorAttemptRe
       scope: 'attempt',
       code: 'task_paused',
       summary,
-    },
-  };
-}
-
-function pauseOutcome(
-  event: KernelEvent,
-  dispatch: NonNullable<ReturnType<KernelDispatchItemRepo['find']>>,
-  now: string,
-): KernelEvent {
-  return {
-    schemaVersion: 5,
-    type: 'execution_outcome',
-    id: event.id,
-    correlationId: dispatch.decisionId,
-    causationId: dispatch.decisionId,
-    occurredAt: now,
-    sessionId: event.sessionId,
-    taskId: dispatch.taskId,
-    subtaskId: dispatch.subtaskId,
-    attemptId: dispatch.attemptId,
-    terminalKind: 'failed',
-    agentClassName: dispatch.agentClassName,
-    attemptKind: dispatch.attemptKind,
-    sourceAttemptId: dispatch.sourceAttemptId,
-    failure: {
-      kind: 'cancelled',
-      scope: 'attempt',
-      code: 'task_paused',
-      summary: 'Task pause fence won before attempt terminal landing',
-    },
-  };
-}
-
-function cancellationOutcome(
-  event: KernelEvent,
-  dispatch: NonNullable<ReturnType<KernelDispatchItemRepo['find']>>,
-  now: string,
-): KernelEvent {
-  return {
-    schemaVersion: 5,
-    type: 'execution_outcome',
-    id: event.id,
-    correlationId: dispatch.decisionId,
-    causationId: dispatch.decisionId,
-    occurredAt: now,
-    sessionId: event.sessionId,
-    taskId: dispatch.taskId,
-    subtaskId: dispatch.subtaskId,
-    attemptId: dispatch.attemptId,
-    terminalKind: 'failed',
-    agentClassName: dispatch.agentClassName,
-    attemptKind: dispatch.attemptKind,
-    sourceAttemptId: dispatch.sourceAttemptId,
-    failure: {
-      kind: 'stale',
-      scope: 'attempt',
-      code: 'cancelled_or_stale',
-      summary: 'Cancellation fence won before attempt terminal landing',
     },
   };
 }

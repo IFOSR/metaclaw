@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { KernelDecisionApplicationRecord, KernelWorkflowStore } from '../../src/kernel/kernel-workflow.js';
+import type { KernelDecisionLedgerRecord, KernelWorkflowStore } from '../../src/kernel/kernel-workflow.js';
 import type { KernelEvent } from '../../src/kernel/control-kernel.js';
 import { PermissionWorkflowService } from '../../src/execution/permission-workflow-service.js';
 import type { NormalizedCapabilityRequest, PermissionRequestRecord } from '../../src/resource/index.js';
@@ -166,8 +166,23 @@ describe('PermissionWorkflowService', () => {
       context: context(),
       repository: {
         findRequest: vi.fn().mockReturnValue(record(request, 'escalated', '2026-08-01T00:00:00.000Z')),
+        listGrants: vi.fn().mockReturnValue([]),
+        listApprovedFingerprints: vi.fn().mockReturnValue([]),
+        listDeniedFingerprints: vi.fn().mockReturnValue([]),
+        deny: vi.fn(),
       },
       workflowStore: captureOnlyWorkflowStore(events),
+      kernel: {
+        decide: vi.fn().mockImplementation((event: KernelEvent) => ({
+          schemaVersion: 1,
+          id: `decision_${event.id}`,
+          eventId: event.id,
+          action: { type: 'deny_capability', requestId: request.id, authorization: null },
+          reason: 'test decision',
+          createdAt: event.occurredAt,
+        })),
+      },
+      sandbox: { inspect: vi.fn().mockResolvedValue(null), resume: vi.fn() },
       reviewIssuedAt: '2026-08-03T00:00:00.000Z',
       clock: { now: () => '2026-08-03T01:00:00.000Z' },
     } as never);
@@ -239,52 +254,21 @@ function normalizedRequest(): NormalizedCapabilityRequest {
 }
 
 function captureOnlyWorkflowStore(events: KernelEvent[]): KernelWorkflowStore {
+  const decisions = new Map<string, KernelDecisionLedgerRecord>();
   return {
-    enqueue(event) { events.push(event); return true; },
-    claimNext() { return null; },
-    issue() { throw new Error('not reached'); },
-    listRecoverableApplications() { return []; },
-    markApplying() { throw new Error('not reached'); },
-    markApplied() {}, markApplicationFailed() {}, reconcileProcessing() { return 0; },
-    countByApplicationStatus() {
-      return { pending: 0, applying: 0, applied: 0, uncertain: 0, failed: 0 };
+    findDecisionByEventId(eventId) { return decisions.get(eventId) ?? null; },
+    issue(record) {
+      events.push(record.event);
+      decisions.set(record.eventId, record);
+      return true;
     },
   };
 }
 
 function inMemoryWorkflowStore(): KernelWorkflowStore {
-  let event: KernelEvent | null = null;
-  let application: KernelDecisionApplicationRecord | null = null;
+  const decisions = new Map<string, KernelDecisionLedgerRecord>();
   return {
-    enqueue(next) { event ??= next; return true; },
-    claimNext() { const next = event; event = null; return next; },
-    issue(_eventId, decision) {
-      application = {
-        id: 'application_1', decisionId: decision.id, eventId: decision.eventId,
-        idempotencyKey: 'decision:' + decision.id, status: 'pending', applyAttempts: 0,
-        observationEvent: null, errorSummary: null, createdAt: decision.createdAt,
-        updatedAt: decision.createdAt, decision: decision.decision,
-      };
-      return application;
-    },
-    listRecoverableApplications() {
-      return application && (application.status === 'pending' || application.status === 'applying') ? [application] : [];
-    },
-    markApplying() {
-      if (!application) throw new Error('missing application');
-      application = { ...application, status: 'applying', applyAttempts: application.applyAttempts + 1 };
-      return application;
-    },
-    markApplied(_decisionId, observation) {
-      if (!application) throw new Error('missing application');
-      application = { ...application, status: 'applied', observationEvent: observation };
-      if (observation) event = observation;
-    },
-    markApplicationFailed() {}, reconcileProcessing() { return 0; },
-    countByApplicationStatus() {
-      const counts = { pending: 0, applying: 0, applied: 0, uncertain: 0, failed: 0 };
-      if (application) counts[application.status] += 1;
-      return counts;
-    },
+    findDecisionByEventId(eventId) { return decisions.get(eventId) ?? null; },
+    issue(record) { decisions.set(record.eventId, record); return true; },
   };
 }

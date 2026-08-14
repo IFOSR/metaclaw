@@ -5,7 +5,6 @@ import type { KernelEvent } from '../../src/kernel/control-kernel.js';
 import { runMigrations } from '../../src/storage/migrations.js';
 import { ExecutorAttemptReceiptRepo } from '../../src/storage/executor-attempt-receipt-repo.js';
 import { KernelDispatchItemRepo } from '../../src/storage/kernel-dispatch-item-repo.js';
-import { KernelWorkflowRepo } from '../../src/storage/kernel-workflow-repo.js';
 import { SubtaskRepo } from '../../src/storage/subtask-repo.js';
 import { TaskRepo } from '../../src/storage/task-repo.js';
 import { WorkUnitRepo } from '../../src/storage/work-unit-repo.js';
@@ -82,7 +81,6 @@ function setup() {
     subtasks,
     dispatch: new KernelDispatchItemRepo(db),
     receipts: new ExecutorAttemptReceiptRepo(db),
-    workflow: new KernelWorkflowRepo(db),
     publications: new WorkspacePublicationRepo(db),
   };
 }
@@ -156,21 +154,16 @@ describe('AttemptTerminalService', () => {
       errorCode: 'task_paused',
       failure: { kind: 'cancelled', code: 'task_paused' },
     });
-    expect(setupResult.workflow.findEvent('event_attempt-terminal_execution_outcome')).toMatchObject({
-      type: 'execution_outcome',
-      terminalKind: 'failed',
-      failure: { kind: 'cancelled', code: 'task_paused' },
-    });
   });
 
-  it('rolls back receipt, Subtask, dispatch and outcome inbox together when landing fails', () => {
+  it('rolls back receipt, Subtask and dispatch together when terminal fencing fails', () => {
     const setupResult = setup();
     setupResult.db.exec(`
-      CREATE TRIGGER reject_terminal_outcome
-      BEFORE INSERT ON kernel_events
-      WHEN NEW.id = 'event_attempt-terminal_execution_outcome'
+      CREATE TRIGGER reject_terminal_dispatch
+      BEFORE UPDATE ON kernel_dispatch_items
+      WHEN NEW.attempt_id = 'attempt-terminal' AND NEW.status = 'terminal'
       BEGIN
-        SELECT RAISE(ABORT, 'injected terminal inbox failure');
+        SELECT RAISE(ABORT, 'injected terminal fence failure');
       END
     `);
 
@@ -200,13 +193,12 @@ describe('AttemptTerminalService', () => {
       subtaskError: 'executor failed',
       event: outcomeEvent(setupResult.now),
       now: setupResult.now,
-    })).toThrow('injected terminal inbox failure');
+    })).toThrow('injected terminal fence failure');
 
     expect(setupResult.tasks.findById('task-terminal')?.status).toBe('running');
     expect(setupResult.subtasks.findById('subtask-terminal')?.status).toBe('running');
     expect(setupResult.dispatch.find('attempt-terminal')?.status).toBe('running');
     expect(setupResult.receipts.findByAttemptId('attempt-terminal')).toBeNull();
-    expect(setupResult.workflow.findEvent('event_attempt-terminal_execution_outcome')).toBeNull();
   });
 
   it('resolves a reconciled uncertain dispatch when its immutable terminal facts are known', () => {
@@ -247,7 +239,6 @@ describe('AttemptTerminalService', () => {
 
     expect(setupResult.dispatch.find('attempt-terminal')?.status).toBe('terminal');
     expect(setupResult.receipts.findByAttemptId('attempt-terminal')).not.toBeNull();
-    expect(setupResult.workflow.findEvent('event_attempt-terminal_execution_outcome')).not.toBeNull();
   });
 
   it('lands a repaired candidate with the merge-repair terminal facts', () => {
@@ -343,11 +334,11 @@ describe('AttemptTerminalService', () => {
       WHERE id = 'publication-terminal'
     `).run();
     setupResult.db.exec(`
-      CREATE TRIGGER reject_merge_repair_outcome
-      BEFORE INSERT ON kernel_events
-      WHEN NEW.id = 'event_attempt-terminal_execution_outcome'
+      CREATE TRIGGER reject_merge_repair_dispatch
+      BEFORE UPDATE ON kernel_dispatch_items
+      WHEN NEW.attempt_id = 'attempt-terminal' AND NEW.status = 'terminal'
       BEGIN
-        SELECT RAISE(ABORT, 'injected merge repair inbox failure');
+        SELECT RAISE(ABORT, 'injected merge repair fence failure');
       END
     `);
 
@@ -383,7 +374,7 @@ describe('AttemptTerminalService', () => {
         failure: undefined,
       },
       now: setupResult.now,
-    })).toThrow('injected merge repair inbox failure');
+    })).toThrow('injected merge repair fence failure');
 
     expect(setupResult.subtasks.findById('subtask-terminal')?.status).toBe('running');
     expect(setupResult.dispatch.find('attempt-terminal')?.status).toBe('running');

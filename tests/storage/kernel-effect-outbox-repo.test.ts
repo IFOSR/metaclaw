@@ -51,15 +51,6 @@ describe('KernelEffectOutboxRepo', () => {
 
 function seedDecision(db: Database.Database): void {
   db.prepare(`
-    INSERT INTO kernel_events (
-      id, schema_version, event_type, correlation_id, causation_id, session_id,
-      task_id, subtask_id, attempt_id, event_json, available_at, status,
-      created_at, updated_at
-    ) VALUES ('event_1', 2, 'timer_tick', 'correlation_1', NULL, 'session_1',
-      NULL, NULL, NULL, '{}', '2026-07-21T00:00:00.000Z', 'processed',
-      '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z')
-  `).run();
-  db.prepare(`
     INSERT INTO kernel_decisions (
       id, schema_version, event_id, event_type, correlation_id, causation_id,
       session_id, task_id, subtask_id, attempt_id, event_json, snapshot_json,
@@ -74,15 +65,6 @@ function seedTaskCompletion(db: Database.Database): void {
   const tasks = new TaskEngine(new TaskRepo(db), '/tmp/kernel-effect-outbox');
   tasks.create({ id: 'task_1', title: 'Task', goal: 'Goal' });
   tasks.transition('task_1', 'ready');
-  db.prepare(`
-    INSERT INTO kernel_events (
-      id, schema_version, event_type, correlation_id, causation_id, session_id,
-      task_id, subtask_id, attempt_id, event_json, available_at, status,
-      created_at, updated_at
-    ) VALUES ('event_completion', 5, 'dispatch_requested', 'task_1', NULL, 'sess_feishu_1',
-      'task_1', NULL, NULL, '{}', '2026-07-21T00:00:00.000Z', 'processed',
-      '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z')
-  `).run();
   db.prepare(`
     INSERT INTO kernel_decisions (
       id, schema_version, event_id, event_type, correlation_id, causation_id,

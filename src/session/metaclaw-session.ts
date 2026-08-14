@@ -79,7 +79,7 @@ import { normalizePlanningAgentPlanInput } from '../planning/planning-agent-plan
 import type { PlanningAgentPlan, PlanningContext } from '../planning/planning-types.js';
 import type { KernelExecutorStatusProjection } from '../kernel/executor-status-projection.js';
 import { ControlKernel, type KernelDecision, type KernelEvent, type KernelSnapshot } from '../kernel/control-kernel.js';
-import { DurableKernelWorkflow } from '../kernel/kernel-workflow.js';
+import { KernelWorkflowRunner } from '../kernel/kernel-workflow.js';
 import { KernelDecisionRepo, type KernelDecisionLedgerRecord } from '../storage/kernel-decision-repo.js';
 import { KernelWorkflowRepo } from '../storage/kernel-workflow-repo.js';
 import { KernelDispatchItemRepo } from '../storage/kernel-dispatch-item-repo.js';
@@ -794,8 +794,7 @@ export class MetaclawSession {
 
   private findActiveAppliedPermissionEscalation(requestId: string): KernelDecisionLedgerRecord | null {
     const escalations = this.kernelDecisionRepo.listByCorrelation(requestId)
-      .filter(record => record.action === 'escalate_capability'
-        && this.kernelWorkflowRepo.isDecisionApplied(record.id));
+      .filter(record => record.action === 'escalate_capability');
     const supersededDecisionIds = new Set(escalations
       .map(record => record.causationId)
       .filter((id): id is string => Boolean(id)));
@@ -813,9 +812,6 @@ export class MetaclawSession {
       .filter((item): item is typeof item & { escalation: KernelDecisionLedgerRecord } => (
         item.escalation?.sessionId === this.deps.sessionId
       ))
-      .filter(item => !this.kernelDecisionRepo.listByCorrelation(item.record.request.id)
-        .some(decision => decision.event.type === 'permission_resolution_received'
-          && this.kernelWorkflowRepo.isDecisionApplied(decision.id)))
       .filter(item => isPermissionRequestActive(item.escalation.createdAt, now))
       .map(({ record, escalation }) => {
         const publication = record.request.capability === 'repository_promotion'
@@ -860,17 +856,17 @@ export class MetaclawSession {
     if (escalation?.sessionId !== this.deps.sessionId) {
       return { status: 'conflict', resolution: null, message: 'Permission request does not belong to this session.' };
     }
-    const appliedResolution = decisions.find(record => record.event.type === 'permission_resolution_received'
-      && this.kernelWorkflowRepo.isDecisionApplied(record.id));
-    if (appliedResolution?.event.type === 'permission_resolution_received') {
-      if (appliedResolution.sessionId === this.deps.sessionId
-        && appliedResolution.event.resolution === resolution
-        && appliedResolution.event.source === 'button') {
+    const recordedResolution = decisions.find(record => record.event.type === 'permission_resolution_received');
+    const record = this.permissionRepository.findRequest(permissionRequestId);
+    if (recordedResolution?.event.type === 'permission_resolution_received'
+      && record && !['pending', 'escalated'].includes(record.status)) {
+      if (recordedResolution.sessionId === this.deps.sessionId
+        && recordedResolution.event.resolution === resolution
+        && recordedResolution.event.source === 'button') {
         return { status: 'replayed', resolution, message: 'Permission resolution was already recorded.' };
       }
       return { status: 'conflict', resolution: null, message: 'Permission request was already resolved.' };
     }
-    const record = this.permissionRepository.findRequest(permissionRequestId);
     if (!record || record.status !== 'escalated') {
       return { status: 'conflict', resolution: null, message: 'Permission request is no longer escalated.' };
     }
@@ -905,7 +901,7 @@ export class MetaclawSession {
   /**
    * Accepts a Planner proposal emitted by the AnyFusion-Pi host protocol. The Planner
    * remains untrusted with respect to state: schema and semantic validation happen
-   * here, then the existing plan_proposed -> DurableKernelWorkflow path remains the
+   * here, then the existing plan_proposed -> KernelWorkflowRunner path remains the
    * only state-changing route.
    */
   async submitPlannerProposal(
@@ -1071,10 +1067,7 @@ export class MetaclawSession {
       const kernelResult = await this.submitValidatedPlanningAgentPlan(
         normalizedInput, plan, context, eventId!,
       );
-      const application = kernelResult.decision
-        ? this.kernelWorkflowRepo.findApplicationByDecisionId(kernelResult.decision.id)
-        : null;
-      if (!kernelResult.decision || application?.status !== 'applied') {
+      if (!kernelResult.decision) {
         this.plannerProposalRepo.markUncertain(
           normalizedSessionId, normalizedTurnId, submission.submissionId,
         );
@@ -1349,7 +1342,12 @@ export class MetaclawSession {
 
   async maybeReviewTaskPoolOnTimer(nowMs = Date.now()): Promise<boolean> {
     for (const task of this.taskRuntimeService.listTasksByStatus('blocked')) {
-      if (await this.kernelExecutionRuntime.recoverDue(task.id, 'timer durable recovery drain')) return true;
+      if (await this.kernelExecutionRuntime.recoverDue(
+        task.id,
+        'timer current-fact recovery',
+        [],
+        new Date(nowMs).toISOString(),
+      )) return true;
     }
     if (await this.maybeReconcileBlockedTasksOnTimer(nowMs)) {
       return true;
@@ -1528,7 +1526,7 @@ export class MetaclawSession {
       targetGraphRevision: 1,
     };
     const snapshot = this.buildPlanAdmissionSnapshot(event, context.executorCatalog, userInput);
-    const workflow = new DurableKernelWorkflow({
+    const workflow = new KernelWorkflowRunner({
       kernel: this.controlKernel,
       buildSnapshot: () => snapshot,
       store: this.kernelWorkflowRepo,
@@ -2099,8 +2097,8 @@ export class MetaclawSession {
       return;
     }
     const decisions = this.kernelDecisionRepo.listByCorrelation(permissionRequestId);
-    if (decisions.some(decision => decision.event.type === 'permission_resolution_received'
-      && this.kernelWorkflowRepo.isDecisionApplied(decision.id))) {
+    const currentRequest = this.permissionRepository.findRequest(permissionRequestId);
+    if (currentRequest && !['pending', 'escalated', 'expired'].includes(currentRequest.status)) {
       this.appendOutput(`仓库发布审批 ${permissionRequestId} 已处理，不能再次签发。`);
       this.refreshRuntimeState();
       return;
@@ -2273,15 +2271,11 @@ export class MetaclawSession {
   }
 
   private formatTaskRecovery(taskId: string): string {
-    const applications = this.kernelWorkflowRepo.listRecoveryItems(taskId).map(item =>
-      `- ${item.id} [application/${item.status}] ${item.decision.action.type}: ${item.errorSummary ?? 'no error summary'}`
-    );
     const effects = this.effectOutboxRepo.listRecoveryItems(taskId).map(item =>
       `- ${item.id} [effect/${item.status}] ${item.effectType}: ${item.errorSummary ?? 'no error summary'}`
     );
-    const items = [...applications, ...effects];
-    return items.length > 0
-      ? `Task #${taskId} recovery items:\n${items.join('\n')}`
+    return effects.length > 0
+      ? `Task #${taskId} recovery items:\n${effects.join('\n')}`
       : `Task #${taskId} has no uncertain or failed recovery items.`;
   }
 
@@ -2302,7 +2296,7 @@ export class MetaclawSession {
       recoveryItemId: input.recoveryItemId,
       resolution: input.resolution,
     };
-    const workflow = new DurableKernelWorkflow({
+    const workflow = new KernelWorkflowRunner({
       kernel: this.controlKernel,
       buildSnapshot: () => this.buildRecoverySnapshot(input.taskId, input.recoveryItemId),
       store: this.kernelWorkflowRepo,
@@ -2311,15 +2305,9 @@ export class MetaclawSession {
         apply: async decision => {
           if (decision.action.type === 'resolve_recovery') {
             const now = new Date().toISOString();
-            if (this.kernelWorkflowRepo.findRecoveryItem(decision.action.recoveryItemId)) {
-              this.kernelWorkflowRepo.resolveRecoveryItem(
-                decision.action.recoveryItemId, decision.action.resolution, now,
-              );
-            } else {
-              this.effectOutboxRepo.resolve(
-                decision.action.recoveryItemId, decision.action.resolution, now,
-              );
-            }
+            this.effectOutboxRepo.resolve(
+              decision.action.recoveryItemId, decision.action.resolution, now,
+            );
             return null;
           }
           if (decision.action.type === 'block_work') {
@@ -2342,15 +2330,12 @@ export class MetaclawSession {
     recoveryItemId: string,
   ): Extract<KernelSnapshot, { type: 'recovery' }> {
     const task = this.taskRuntimeService.findTask(taskId);
-    const application = this.kernelWorkflowRepo.findRecoveryItem(recoveryItemId);
     const effect = this.effectOutboxRepo.find(recoveryItemId);
     return {
       schemaVersion: 5,
       type: 'recovery',
       task: task ? { id: task.id, status: task.status } : null,
-      item: application
-        ? { id: application.id, kind: 'application', status: application.status as 'uncertain' | 'failed', retrySafe: true }
-        : effect && (effect.status === 'uncertain' || effect.status === 'failed')
+      item: effect && (effect.status === 'uncertain' || effect.status === 'failed')
           ? { id: effect.id, kind: 'effect', status: effect.status, retrySafe: false }
           : null,
     };
@@ -2518,6 +2503,11 @@ export class MetaclawSession {
   private async recoverDurableStartup(): Promise<Task[]> {
     const now = new Date().toISOString();
     const sandboxLossAttemptIds = new Set<string>();
+    const recoveryEvents = new Map<string, KernelEvent[]>();
+    const addRecoveryEvent = (event: KernelEvent) => {
+      if (!event.taskId) return;
+      recoveryEvents.set(event.taskId, [...(recoveryEvents.get(event.taskId) ?? []), event]);
+    };
     const claimedOrphans = this.workUnitClaimService.listOrphanedClaims();
     const dispatchItems = new KernelDispatchItemRepo(this.deps.db);
     const requiresAttemptReconciliation = claimedOrphans.length > 0
@@ -2530,42 +2520,11 @@ export class MetaclawSession {
     let recoveryBlockedReason: string | null = null;
     try {
       if (requiresAttemptReconciliation) {
-        const checkpointIds = new Map<string, string | null>();
         const reconciliation = await new AttemptSandboxReconciler(
           this.attemptSandbox,
           this.attemptSandboxRepository,
         ).reconcile({
-          checkpoint: async record => {
-            const persisted = this.workspaceRepository.find(record.workspaceId);
-            if (!persisted) {
-              checkpointIds.set(record.attemptId, null);
-              return;
-            }
-            const workspace = await this.workspaceStore.ensureWorkspace({
-              taskId: persisted.taskId,
-              generationId: persisted.generationId,
-              subtaskId: persisted.subtaskId,
-            }, persisted.kind);
-            const checkpoint = await this.workspaceStore.createCheckpoint(workspace, {
-              reason: 'failure', attemptId: record.attemptId, now,
-            });
-            this.workspaceRepository.recordCheckpoint({
-              id: checkpoint.id,
-              workspaceId: workspace.id,
-              attemptId: record.attemptId,
-              reason: 'failure',
-              manifestUri: checkpoint.manifestUri,
-              manifestHash: checkpoint.manifestHash,
-              manifestSize: checkpoint.manifestSize,
-              createdAt: checkpoint.manifest.createdAt,
-              objects: checkpoint.manifest.entries.flatMap(entry => (
-                entry.type === 'file' && entry.hash && entry.objectUri
-                  ? [{ hash: entry.hash, uri: entry.objectUri, size: entry.size, mediaType: null }]
-                  : []
-              )),
-            });
-            checkpointIds.set(record.attemptId, checkpoint.id);
-          },
+          checkpoint: async () => undefined,
         });
         for (const record of [...reconciliation.lostAttempts, ...reconciliation.exitedAttempts]) {
           if (sandboxLossAttemptIds.has(record.attemptId)) continue;
@@ -2579,7 +2538,7 @@ export class MetaclawSession {
             `runtime ${record.runtimeHandle} was reconciled during startup`,
             now,
           );
-          this.kernelWorkflowRepo.enqueue({
+          addRecoveryEvent({
             schemaVersion: 5,
             type: 'sandbox_lost',
             id: `sandbox_lost_${record.attemptId}`,
@@ -2592,7 +2551,7 @@ export class MetaclawSession {
             attemptId: record.attemptId,
             runtimeHandle: record.runtimeHandle,
             workspaceId: record.workspaceId,
-            checkpointId: checkpointIds.get(record.attemptId) ?? null,
+            checkpointId: null,
           });
         }
       }
@@ -2623,7 +2582,6 @@ export class MetaclawSession {
       return blocked;
     }
     this.effectOutboxRepo.reconcileSending(now);
-    this.kernelWorkflowRepo.reconcileProcessing();
     for (const taskId of this.effectOutboxRepo.listIncompleteCompletionTaskIds()) {
       this.taskRuntimeService.completeTask(taskId);
     }
@@ -2639,22 +2597,6 @@ export class MetaclawSession {
         return effect.id;
       }, () => new Date().toISOString());
     }
-
-    const planningWorkflow = new DurableKernelWorkflow({
-      kernel: this.controlKernel,
-      buildSnapshot: event => this.buildPlanAdmissionSnapshot(
-        event as Extract<KernelEvent, { type: 'plan_proposed' }>,
-      ),
-      store: this.kernelWorkflowRepo,
-      runtime: this.sessionKernelRuntime.forInput(),
-      clock: { now: () => new Date().toISOString() },
-      acceptedEventTypes: ['plan_proposed'],
-      acceptedActions: [
-        'reject_request', 'request_clarification', 'deliver_direct_reply', 'no_op',
-        'authorize_task_plan', 'authorize_task_control', 'block_work', 'park_for_replan',
-      ],
-    });
-    await planningWorkflow.recover();
 
     const reconciledLeases = new ResourceLeaseService(
       new SqliteResourceLeaseRepository(this.deps.db),
@@ -2682,21 +2624,23 @@ export class MetaclawSession {
           subtaskId: workUnit.claimedSubtaskId,
           attemptId: workUnit.claimedAttemptId,
         });
-        if (!sandboxLossAttemptIds.has(workUnit.claimedAttemptId)) {
-          this.kernelWorkflowRepo.enqueue(startupOrphanEvent({
-            sessionId: this.deps.sessionId,
-            task,
-            subtaskId: workUnit.claimedSubtaskId,
-            attemptId: workUnit.claimedAttemptId,
-            agentClassName: workUnit.agentClassName,
-            occurredAt: now,
-          }));
-        }
       }
-      if (taskClaims.length === 0 && !this.kernelWorkflowRepo.hasRecoverableWork(task.id)) {
+      const taskDispatchItems = dispatchItems.listByTask(task.id);
+      const hasPendingLaunch = taskDispatchItems.some(item =>
+        ['pending_launch', 'launching'].includes(item.status)
+      );
+      const hasAwaitingDecisionReceipt = this.attemptReceiptRepo.listByTask(task.id).some(receipt =>
+        subtasks.some(subtask => subtask.id === receipt.subtaskId && subtask.status === 'awaiting_decision')
+      );
+      if (
+        taskClaims.length === 0
+        && !hasPendingLaunch
+        && !hasAwaitingDecisionReceipt
+        && (recoveryEvents.get(task.id)?.length ?? 0) === 0
+      ) {
         const orphan = subtasks.find(subtask => !['done', 'cancelled'].includes(subtask.status));
         if (orphan) {
-          this.kernelWorkflowRepo.enqueue(startupOrphanEvent({
+          addRecoveryEvent(startupOrphanEvent({
             sessionId: this.deps.sessionId,
             task,
             subtaskId: orphan.id,
@@ -2706,7 +2650,11 @@ export class MetaclawSession {
           }));
         }
       }
-      await this.kernelExecutionRuntime.recoverDue(task.id, 'startup durable recovery');
+      await this.kernelExecutionRuntime.recoverDue(
+        task.id,
+        'startup current-fact recovery',
+        recoveryEvents.get(task.id) ?? [],
+      );
       const current = this.taskRuntimeService.findTask(task.id);
       if (current) recovered.push(current);
       }
@@ -2750,11 +2698,6 @@ export class MetaclawSession {
         );
         continue;
       }
-      const decisions = this.kernelDecisionRepo.listByCorrelation(record.request.id);
-      if (decisions.some(decision => decision.event.type === 'permission_resolution_received'
-        && this.kernelWorkflowRepo.isDecisionApplied(decision.id))) {
-        continue;
-      }
       const activeReview = this.findActiveAppliedPermissionEscalation(record.request.id);
       if (!activeReview || !isPermissionRequestActive(activeReview.createdAt, now)) {
         this.appendOutput(
@@ -2764,8 +2707,6 @@ export class MetaclawSession {
         continue;
       }
       const task = this.taskRuntimeService.findTask(record.request.taskId);
-      const workflow = this.createPermissionWorkflow(record, publication, task);
-      await workflow.recover();
       const recoveredRecord = this.permissionRepository.findRequest(record.request.id);
       if (recoveredRecord?.status !== 'escalated') continue;
       const activeEscalation = this.findActiveAppliedPermissionEscalation(record.request.id);

@@ -293,12 +293,6 @@ describe('smoke-metaclaw-real-task helpers', () => {
         ) VALUES (?, ?, 'system_smoke', ?, 'done', ?, ?)
       `).run(taskId, `Task ${index}`, `smoke-${index}`, now, now);
       db.prepare(`
-        INSERT INTO kernel_events (
-          id, schema_version, event_type, correlation_id, session_id, task_id,
-          event_json, available_at, status, created_at, updated_at
-        ) VALUES (?, 5, 'plan_proposed', ?, ?, NULL, '{}', ?, 'processed', ?, ?)
-      `).run(eventId, `correlation-${index}`, `session-${index}`, now, now, now);
-      db.prepare(`
         INSERT INTO kernel_decisions (
           id, schema_version, event_id, event_type, correlation_id, session_id,
           task_id, event_json, snapshot_json, decision_json, action, reason, created_at

@@ -2,9 +2,10 @@
 
 ## 状态
 
-- 状态：第一阶段已完成；第二阶段未开始
+- 状态：第一、第二阶段均已完成
 - 计划日期：2026-08-14
 - 第一阶段完成日期：2026-08-14
+- 第二阶段完成日期：2026-08-14
 - 实施方式：两个阶段
 - 最终范围：所有用户入口统一；允许先在 Feishu Gateway 灰度验证
 - 取代：
@@ -355,7 +356,45 @@ decision event、application、workspace checkpoint 和历史 effect 来推断�
   852 个测试中 839 个通过、13 个跳过；
 - 真实 `npm run smoke:anyfusion` 通过，覆盖 AnyFusion-Pi 构建上下文、独立 Planner/Runtime 进程、
   Planner RPC、Executor 注册验证和原生持久 Planner session；
-- 关闭提交：`feat: persist executor sessions for crash recovery`（本提交）。
+- 关闭提交：`36f37b7 feat: persist executor sessions for crash recovery`。
+
+## 6.2 第二阶段实施记录（2026-08-14）
+
+已交付：
+
+- fresh-only schema 升至 v37；删除只服务通用重放的 `kernel_events`、
+  `kernel_decision_applications`，以及 `executor_attempt_runtime` 中重复的
+  workspace baseline/delta/progress JSON。v36 及更早预发布数据库继续按既有策略拒绝，
+  没有迁移、双读或兼容写入。
+- `KernelWorkflowRunner` 保留单一串行授权入口和不可变 `kernel_decisions` 审计；同一确定性
+  event identity 复用既有 Decision，Runtime 在当前进程内应用 Decision 和即时 observation，
+  不再维护通用 inbox/application cursor、恢复队列或隐藏重试循环。
+- 启动恢复直接读取 Task/Subtask、dispatch、terminal receipt、attempt runtime、持久 session/
+  worktree、claim/lease、permission/publication 和当前 Kernel Decision，归一化为 interrupted/
+  recovery facts 后交给现有 Kernel。到期 retry 从当前 `wait_for_retry` Decision 重建；
+  `awaiting_decision` 从不可变 terminal receipt 收敛。
+- attempt terminal receipt、Subtask/dispatch/publication 当前状态仍在一个事务中落地；只有终态
+  事实成功后才释放 session writer、claim 和 lease。无法证明完成或安全重试的副作用继续进入
+  现有 blocked/用户确认路径。
+- 保留 `kernel_decisions` 审计、Task events、专用 `kernel_effect_outbox` delivery/provider receipt、
+  publication/permission 记录，以及仍服务权限暂停和非 Git workspace 恢复的 checkpoint；没有
+  把第二阶段扩大成 outbox、checkpoint 或领域审计删除。
+- Planner 持久 session、Kernel retry/fallback/replan/block/publication 策略，以及 TUI、RPC、
+  Gateway/飞书入口行为保持不变。
+
+验收：
+
+- 最终针对性 Docker 回归通过：13 个测试文件、59 个测试；
+- `npm run lint` 与 `npm run build` 通过；
+- 最终完整 `npm test` 在 Node 22 Docker 测试镜像中通过：200 个测试文件中
+  197 个通过、3 个跳过，848 个测试中 835 个通过、13 个跳过；
+- 真实 `npm run smoke:anyfusion` 通过，注册并验证 Codex/Pi Executor，完成独立
+  AnyFusion-Pi Planner/Runtime 的持久 native Planner session smoke；
+- 独立飞书/Gateway 测试通过：20 个测试文件、124 个测试；`docker/gateway.ps1 -Rebuild`
+  使用 v37 数据卷成功重建，容器 `healthy`、restart policy 为 `unless-stopped`，真实飞书
+  WebSocket 与 Gateway socket 均已就绪；`-Doctor` 通过，fresh 数据卷仅报告未配置 home channel、
+  尚无 pairing/audit 文件的预期非阻塞警告；
+- 关闭提交：`refactor: recover sessions from current runtime facts`（本提交）。
 
 ## 7. 风险与控制
 

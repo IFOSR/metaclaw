@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-const CURRENT_SCHEMA_VERSION = 36;
+const CURRENT_SCHEMA_VERSION = 37;
 
 const CURRENT_SCHEMA_SQL = `
 CREATE TABLE projects (
@@ -384,44 +384,6 @@ CREATE TABLE kernel_decisions (
           created_at TEXT NOT NULL
         );
 
-CREATE TABLE kernel_events (
-            id TEXT PRIMARY KEY,
-            schema_version INTEGER NOT NULL,
-            event_type TEXT NOT NULL,
-            correlation_id TEXT NOT NULL,
-            causation_id TEXT,
-            session_id TEXT NOT NULL,
-            task_id TEXT,
-            subtask_id TEXT,
-            attempt_id TEXT,
-            event_json TEXT NOT NULL,
-            available_at TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            processing_started_at TEXT,
-            processed_at TEXT,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );
-
-CREATE TABLE kernel_decision_applications (
-            id TEXT PRIMARY KEY,
-            decision_id TEXT NOT NULL UNIQUE,
-            event_id TEXT NOT NULL UNIQUE,
-            idempotency_key TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            apply_attempts INTEGER NOT NULL DEFAULT 0,
-            observation_event_id TEXT,
-            observation_event_json TEXT,
-            error_summary TEXT,
-            applying_at TEXT,
-            applied_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (decision_id) REFERENCES kernel_decisions(id),
-            FOREIGN KEY (event_id) REFERENCES kernel_events(id)
-          );
-
 CREATE TABLE kernel_effect_outbox (
             id TEXT PRIMARY KEY,
             decision_id TEXT NOT NULL,
@@ -444,9 +406,6 @@ CREATE TABLE executor_attempt_runtime (
             source_attempt_id TEXT,
             continuation_token TEXT,
             workspace_root TEXT,
-            workspace_baseline_json TEXT NOT NULL DEFAULT '{}',
-            workspace_delta_json TEXT NOT NULL DEFAULT '{}',
-            progress_json TEXT NOT NULL DEFAULT '{}',
             recovery_safety TEXT NOT NULL,
             external_idempotency_key TEXT,
             task_id TEXT,
@@ -861,15 +820,6 @@ CREATE INDEX idx_kernel_decisions_task
 
 CREATE INDEX idx_kernel_decisions_correlation
           ON kernel_decisions(correlation_id, created_at, id);
-
-CREATE INDEX idx_kernel_events_drain
-            ON kernel_events(status, available_at, created_at, id);
-
-CREATE INDEX idx_kernel_events_task
-            ON kernel_events(task_id, created_at, id);
-
-CREATE INDEX idx_kernel_decision_applications_status
-            ON kernel_decision_applications(status, created_at, id);
 
 CREATE INDEX idx_kernel_effect_outbox_drain
             ON kernel_effect_outbox(status, available_at, created_at, id);

@@ -567,7 +567,6 @@ export function finalizeSmokeTask(input) {
       'subtasks',
       'task_events',
       'executor_attempt_receipts',
-      'kernel_events',
       'kernel_decisions',
       'kernel_dispatch_items',
       'workspace_records',

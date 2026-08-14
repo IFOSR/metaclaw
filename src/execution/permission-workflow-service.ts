@@ -17,7 +17,7 @@ import {
   type KernelEvent,
   type KernelSnapshot,
 } from '../kernel/control-kernel.js';
-import { DurableKernelWorkflow, type KernelWorkflowStore } from '../kernel/kernel-workflow.js';
+import { KernelWorkflowRunner, type KernelWorkflowStore } from '../kernel/kernel-workflow.js';
 
 export interface PermissionAttemptContext {
   sessionId: string;
@@ -154,10 +154,6 @@ export class PermissionWorkflowService {
     });
   }
 
-  async recover(): Promise<void> {
-    await this.workflow().recover();
-  }
-
   use(input: CapabilityUseInput): CapabilityUseResult {
     const bytes = Buffer.byteLength(input.payload, 'utf8');
     const grant = this.deps.repository.consumeGrant(
@@ -215,8 +211,8 @@ export class PermissionWorkflowService {
     });
   }
 
-  private workflow(): DurableKernelWorkflow {
-    return new DurableKernelWorkflow({
+  private workflow(): KernelWorkflowRunner {
+    return new KernelWorkflowRunner({
       kernel: this.deps.kernel ?? new ControlKernel(),
       buildSnapshot: event => this.buildSnapshot(event),
       store: this.deps.workflowStore,

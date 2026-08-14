@@ -199,7 +199,6 @@ export class TaskPurgeService {
       'subtasks',
       'task_events',
       'executor_attempt_receipts',
-      'kernel_events',
       'kernel_decisions',
       'kernel_dispatch_items',
       'workspace_records',
@@ -247,10 +246,8 @@ export class TaskPurgeService {
       'SELECT id FROM kernel_decisions WHERE task_id = ?',
     ).all(taskId) as Array<{ id: string }>;
     const eventIds = this.db.prepare(
-      `SELECT id FROM kernel_events WHERE task_id = ?
-       UNION
-       SELECT event_id AS id FROM kernel_decisions WHERE task_id = ?`,
-    ).all(taskId, taskId) as Array<{ id: string }>;
+      'SELECT event_id AS id FROM kernel_decisions WHERE task_id = ?',
+    ).all(taskId) as Array<{ id: string }>;
     const proposalTurns = eventIds.length === 0
       ? []
       : this.db.prepare(`
@@ -312,8 +309,6 @@ export class TaskPurgeService {
     this.db.prepare('DELETE FROM generation_replan_requests WHERE task_id = ?').run(taskId);
     this.db.prepare('DELETE FROM work_graph_revisions WHERE task_id = ?').run(taskId);
     deleteByIds(this.db, 'kernel_effect_outbox', 'decision_id', decisionIds);
-    deleteByIds(this.db, 'kernel_decision_applications', 'decision_id', decisionIds);
-    deleteByIds(this.db, 'kernel_decision_applications', 'event_id', eventIds);
     deleteByIds(this.db, 'planner_proposal_submissions', 'event_id', eventIds);
     for (const turn of proposalTurns) {
       this.db.prepare(`
@@ -327,7 +322,6 @@ export class TaskPurgeService {
       `).run(turn.sessionId, turn.turnId);
     }
     this.db.prepare('DELETE FROM kernel_decisions WHERE task_id = ?').run(taskId);
-    deleteByIds(this.db, 'kernel_events', 'id', eventIds);
     this.db.prepare('DELETE FROM work_unit_events WHERE task_id = ?').run(taskId);
     this.db.prepare('DELETE FROM task_events WHERE task_id = ?').run(taskId);
     this.db.prepare('DELETE FROM subtasks WHERE task_id = ?').run(taskId);

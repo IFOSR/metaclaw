@@ -27,61 +27,27 @@ export interface KernelRuntime {
   apply(decision: KernelDecision): Promise<KernelEvent | null>;
 }
 
-export type KernelApplicationStatus = 'pending' | 'applying' | 'applied' | 'uncertain' | 'failed';
-
-export interface KernelDecisionApplicationRecord {
-  id: string;
-  decisionId: string;
-  eventId: string;
-  idempotencyKey: string;
-  status: KernelApplicationStatus;
-  applyAttempts: number;
-  observationEvent: KernelEvent | null;
-  errorSummary: string | null;
-  createdAt: string;
-  updatedAt: string;
-  decision: KernelDecision;
-}
-
 export interface KernelWorkflowResult {
   decisions: KernelDecision[];
   quiescent: boolean;
   pendingRecovery: number;
 }
 
-export interface KernelRecoveryReport extends KernelWorkflowResult {
-  reconciledProcessingEvents: number;
-  applicationCounts: Record<KernelApplicationStatus, number>;
-}
-
 export interface KernelWorkflow {
   submit(event: KernelEvent): Promise<KernelWorkflowResult>;
-  recover(): Promise<KernelRecoveryReport>;
 }
 
-/** Transactional persistence port. Implementations atomically issue a Decision and create its application. */
+/** Audit-only persistence port. Runtime recovery is rebuilt from current domain facts. */
 export interface KernelWorkflowStore {
-  enqueue(event: KernelEvent, availableAt?: string): boolean;
-  claimNext(now: string, eventTypes?: KernelEvent['type'][], taskId?: string): KernelEvent | null;
-  issue(eventId: string, record: KernelDecisionLedgerRecord): KernelDecisionApplicationRecord;
-  listRecoverableApplications(actions?: KernelDecisionAction['type'][], taskId?: string): KernelDecisionApplicationRecord[];
-  markApplying(decisionId: string, now: string): KernelDecisionApplicationRecord;
-  markApplied(decisionId: string, observation: KernelEvent | null, now: string): void;
-  markApplicationFailed(
-    decisionId: string,
-    status: Extract<KernelApplicationStatus, 'uncertain' | 'failed'>,
-    errorSummary: string,
-    now: string,
-  ): void;
-  reconcileProcessing(): number;
-  countByApplicationStatus(): Record<KernelApplicationStatus, number>;
+  findDecisionByEventId(eventId: string): KernelDecisionLedgerRecord | null;
+  issue(record: KernelDecisionLedgerRecord): boolean;
 }
 
 export interface KernelWorkflowClock {
   now(): string;
 }
 
-export interface DurableKernelWorkflowDeps {
+export interface KernelWorkflowRunnerDeps {
   kernel: KernelDecider;
   buildSnapshot(event: KernelEvent): KernelSnapshot;
   store: KernelWorkflowStore;
@@ -92,91 +58,58 @@ export interface DurableKernelWorkflowDeps {
   taskId?: string;
 }
 
-const MAX_DECISIONS_PER_DRAIN = 100;
+const MAX_DECISIONS_PER_SUBMISSION = 100;
 
 /**
- * Durable Application module. It owns sequencing and crash recovery, while the
- * pure ControlKernel owns policy and Runtime owns idempotent side effects.
+ * Serial Kernel decision runner. Decisions remain durable for audit and
+ * idempotent request replay; startup recovery comes from current Task,
+ * attempt, session, worktree and specialized side-effect facts.
  */
-export class DurableKernelWorkflow implements KernelWorkflow {
-  private draining: Promise<KernelWorkflowResult> | null = null;
+export class KernelWorkflowRunner implements KernelWorkflow {
+  private serial: Promise<void> = Promise.resolve();
 
-  constructor(private readonly deps: DurableKernelWorkflowDeps) {}
+  constructor(private readonly deps: KernelWorkflowRunnerDeps) {}
 
-  async submit(event: KernelEvent): Promise<KernelWorkflowResult> {
-    // submit() is called after the trigger boundary has been reached. Delayed
-    // observations retain their future availability when markApplied inserts them.
-    this.deps.store.enqueue(event, this.deps.clock.now());
-    return this.drainSerially();
+  submit(event: KernelEvent): Promise<KernelWorkflowResult> {
+    const work = this.serial.then(() => this.process(event));
+    this.serial = work.then(() => undefined, () => undefined);
+    return work;
   }
 
-  async recover(): Promise<KernelRecoveryReport> {
-    const reconciledProcessingEvents = this.deps.store.reconcileProcessing();
-    const result = await this.drainSerially();
-    return {
-      ...result,
-      reconciledProcessingEvents,
-      applicationCounts: this.deps.store.countByApplicationStatus(),
-    };
-  }
-
-  private drainSerially(): Promise<KernelWorkflowResult> {
-    if (this.draining) return this.draining;
-    this.draining = this.drain().finally(() => {
-      this.draining = null;
-    });
-    return this.draining;
-  }
-
-  private async drain(): Promise<KernelWorkflowResult> {
+  private async process(initialEvent: KernelEvent): Promise<KernelWorkflowResult> {
     const decisions: KernelDecision[] = [];
-    let handled = 0;
-    while (handled < MAX_DECISIONS_PER_DRAIN) {
-      const application = this.deps.store.listRecoverableApplications(
-        this.deps.acceptedActions, this.deps.taskId,
-      )[0];
-      if (application) {
-        decisions.push(application.decision);
-        handled += 1;
-        const continued = await this.apply(application);
-        if (!continued) break;
-        continue;
+    let event: KernelEvent | null = initialEvent;
+    while (event) {
+      if (decisions.length >= MAX_DECISIONS_PER_SUBMISSION) {
+        throw new Error('Kernel workflow did not reach quiescence');
+      }
+      if (this.deps.acceptedEventTypes && !this.deps.acceptedEventTypes.includes(event.type)) {
+        throw new Error(`Kernel workflow does not accept event ${event.type}`);
+      }
+      if (this.deps.taskId && event.taskId && event.taskId !== this.deps.taskId) {
+        throw new Error(`Kernel workflow event belongs to another Task: ${event.taskId}`);
       }
 
-      const event = this.deps.store.claimNext(
-        this.deps.clock.now(), this.deps.acceptedEventTypes, this.deps.taskId,
-      );
-      if (!event) break;
-      const snapshot = this.deps.buildSnapshot(event);
-      const nextDecision = this.deps.kernel.decide(event, snapshot);
-      this.deps.store.issue(event.id, ledgerRecord(event, snapshot, nextDecision));
-    }
-    if (handled >= MAX_DECISIONS_PER_DRAIN) {
-      throw new Error('Kernel workflow did not reach quiescence');
-    }
-    const counts = this.deps.store.countByApplicationStatus();
-    return {
-      decisions,
-      quiescent: counts.pending === 0 && counts.applying === 0,
-      pendingRecovery: counts.uncertain + counts.failed,
-    };
-  }
+      let record = this.deps.store.findDecisionByEventId(event.id);
+      if (!record) {
+        const snapshot = this.deps.buildSnapshot(event);
+        const decision = this.deps.kernel.decide(event, snapshot);
+        const candidate = ledgerRecord(event, snapshot, decision);
+        if (this.deps.store.issue(candidate)) record = candidate;
+        else record = this.deps.store.findDecisionByEventId(event.id);
+      }
+      if (!record) throw new Error(`Kernel decision was not persisted: ${event.id}`);
+      if (this.deps.acceptedActions && !this.deps.acceptedActions.includes(record.action)) {
+        throw new Error(`Kernel workflow cannot apply action ${record.action}`);
+      }
 
-  private async apply(application: KernelDecisionApplicationRecord): Promise<boolean> {
-    const applying = this.deps.store.markApplying(application.decisionId, this.deps.clock.now());
-    try {
-      const observation = await this.deps.runtime.apply(applying.decision);
-      this.deps.store.markApplied(applying.decisionId, observation, this.deps.clock.now());
-      return true;
-    } catch (error) {
-      this.deps.store.markApplicationFailed(
-        applying.decisionId,
-        'uncertain',
-        boundedError(error),
-        this.deps.clock.now(),
-      );
-      return false;
+      decisions.push(record.decision);
+      const observation = await this.deps.runtime.apply(record.decision);
+      event = observation && observation.occurredAt <= this.deps.clock.now()
+        ? observation
+        : null;
     }
+    return { decisions, quiescent: true, pendingRecovery: 0 };
   }
 }
 
@@ -217,9 +150,4 @@ function decisionAttemptId(decision: KernelDecision): string | null {
   return decision.action.type === 'dispatch_batch' && decision.action.items.length === 1
     ? decision.action.items[0]!.attemptId
     : null;
-}
-
-function boundedError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/[\r\n]+/g, ' ').slice(0, 320);
 }

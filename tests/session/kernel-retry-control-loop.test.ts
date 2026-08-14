@@ -13,7 +13,7 @@ import { stubPlanningAgent, workGraphPlan } from '../support/planning-agent-plan
 import { FakeAttemptSandbox } from '../support/fake-attempt-sandbox.js';
 
 describe('Kernel durable retry control loop', () => {
-  it('drains a persisted retry wake into one sandbox recovery-packet attempt and completion', async () => {
+  it('rebuilds a due retry wake from the current Kernel decision and completes once', async () => {
     const db = new Database(':memory:');
     runMigrations(db);
     const taskRepo = new TaskRepo(db);
@@ -59,11 +59,7 @@ describe('Kernel durable retry control loop', () => {
     expect(db.prepare(`SELECT action FROM kernel_decisions WHERE task_id = ? ORDER BY rowid`).all(task.id))
       .toEqual(expect.arrayContaining([{ action: 'wait_for_retry' }]));
 
-    db.prepare(`
-      UPDATE kernel_events SET available_at = '2000-01-01T00:00:00.000Z'
-      WHERE task_id = ? AND event_type = 'timer_tick' AND status = 'pending'
-    `).run(task.id);
-    const handled = await session.maybeReviewTaskPoolOnTimer();
+    const handled = await session.maybeReviewTaskPoolOnTimer(Date.now() + 60_000);
 
     expect(handled).toBe(true);
     expect(taskRepo.findById(task.id)?.status).toBe('done');

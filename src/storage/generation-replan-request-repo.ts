@@ -152,53 +152,17 @@ export class GenerationReplanRequestRepo {
   submitPlan(
     id: string,
     quiescenceToken: string,
-    event: KernelEvent,
     now: string,
   ): boolean {
-    return this.db.transaction(() => {
-      const current = this.find(id);
-      if (
-        current?.status === 'submitted'
-        && current.quiescenceToken === quiescenceToken
-      ) {
-        return Boolean(this.db.prepare(
-          'SELECT 1 FROM kernel_events WHERE id = ?',
-        ).get(event.id));
-      }
-      if (
-        current?.status !== 'planning'
-        || current.quiescenceToken !== quiescenceToken
-      ) {
-        return false;
-      }
-      this.db.prepare(`
-        INSERT OR IGNORE INTO kernel_events (
-          id, schema_version, event_type, correlation_id, causation_id,
-          session_id, task_id, subtask_id, attempt_id, event_json,
-          available_at, status, processing_started_at, processed_at,
-          last_error, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?)
-      `).run(
-        event.id,
-        event.schemaVersion,
-        event.type,
-        event.correlationId,
-        event.causationId,
-        event.sessionId,
-        event.taskId ?? null,
-        event.subtaskId ?? null,
-        event.attemptId ?? null,
-        JSON.stringify(event),
-        event.occurredAt,
-        event.occurredAt,
-        event.occurredAt,
-      );
-      return this.db.prepare(`
-        UPDATE generation_replan_requests
-        SET status = 'submitted', submitted_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'planning' AND quiescence_token = ?
-      `).run(now, now, id, quiescenceToken).changes === 1;
-    })();
+    const current = this.find(id);
+    if (current?.status === 'submitted' && current.quiescenceToken === quiescenceToken) {
+      return true;
+    }
+    return this.db.prepare(`
+      UPDATE generation_replan_requests
+      SET status = 'submitted', submitted_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'planning' AND quiescence_token = ?
+    `).run(now, now, id, quiescenceToken).changes === 1;
   }
 
   resolve(id: string, now: string): void {

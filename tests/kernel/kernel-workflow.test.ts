@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { ControlKernel, type KernelDecision, type KernelEvent, type KernelSnapshot } from '../../src/kernel/control-kernel.js';
 import {
-  DurableKernelWorkflow,
-  type KernelDecisionApplicationRecord,
+  KernelWorkflowRunner,
   type KernelWorkflowStore,
 } from '../../src/kernel/kernel-workflow.js';
 import { testPlannerExecutorCatalog } from '../support/executor-registry.js';
 import type { KernelDecisionLedgerRecord } from '../../src/kernel/kernel-workflow.js';
 
-describe('DurableKernelWorkflow', () => {
-  it('persists input, issuance, and application before apply', async () => {
+describe('KernelWorkflowRunner', () => {
+  it('records the Kernel decision before applying it without a replay inbox', async () => {
     const store = new MemoryWorkflowStore();
     const order: string[] = [];
     const workflow = createWorkflow(store, order);
@@ -17,68 +16,30 @@ describe('DurableKernelWorkflow', () => {
     const result = await workflow.submit(directReplyEvent());
 
     expect(result.decisions).toHaveLength(1);
-    expect(order).toEqual(['enqueue:event_1', 'issue:event_1', 'applying:decision_event_1', 'apply:decision_event_1', 'applied:decision_event_1']);
-    expect(store.application?.status).toBe('applied');
+    expect(order).toEqual(['issue:event_1', 'apply:decision_event_1']);
+    expect(store.ledger?.eventId).toBe('event_1');
   });
 
-  it('resumes an existing pending application for a duplicate event without issuing twice', async () => {
+  it('reuses and reapplies the same audited decision for an idempotent duplicate event', async () => {
     const store = new MemoryWorkflowStore();
     const order: string[] = [];
     const event = directReplyEvent();
-    store.enqueue(event);
     const snapshot = planSnapshot();
     const decision = new ControlKernel().decide(event, snapshot);
-    store.issue(event.id, ledgerRecord(event, snapshot, decision));
-    order.length = 0;
-    const workflow = createWorkflow(store, order);
-
-    const result = await workflow.submit(event);
-
-    expect(result.decisions).toEqual([decision]);
-    expect(order).toEqual(['enqueue:event_1', 'applying:decision_event_1', 'apply:decision_event_1', 'applied:decision_event_1']);
-    expect(store.issueCount).toBe(1);
-  });
-
-  it('does not steal an application that another nested workflow is currently applying', async () => {
-    const store = new MemoryWorkflowStore();
-    const order: string[] = [];
-    const event = directReplyEvent();
-    store.enqueue(event);
-    const snapshot = planSnapshot();
-    const decision = new ControlKernel().decide(event, snapshot);
-    store.issue(event.id, ledgerRecord(event, snapshot, decision));
-    store.markApplying(decision.id, event.occurredAt);
+    store.issue(ledgerRecord(event, snapshot, decision));
     order.length = 0;
 
     const result = await createWorkflow(store, order).submit(event);
 
-    expect(result.decisions).toEqual([]);
-    expect(order).toEqual(['enqueue:event_1']);
-    expect(store.application?.status).toBe('applying');
-  });
-
-  it('requeues interrupted applying work only during explicit recovery', async () => {
-    const store = new MemoryWorkflowStore();
-    const order: string[] = [];
-    const event = directReplyEvent();
-    store.enqueue(event);
-    const snapshot = planSnapshot();
-    const decision = new ControlKernel().decide(event, snapshot);
-    store.issue(event.id, ledgerRecord(event, snapshot, decision));
-    store.markApplying(decision.id, event.occurredAt);
-    order.length = 0;
-
-    const result = await createWorkflow(store, order).recover();
-
     expect(result.decisions).toEqual([decision]);
-    expect(order).toEqual(['applying:decision_event_1', 'apply:decision_event_1', 'applied:decision_event_1']);
-    expect(store.application?.status).toBe('applied');
+    expect(order).toEqual(['apply:decision_event_1']);
+    expect(store.issueCount).toBe(1);
   });
 });
 
-function createWorkflow(store: MemoryWorkflowStore, order: string[]): DurableKernelWorkflow {
+function createWorkflow(store: MemoryWorkflowStore, order: string[]): KernelWorkflowRunner {
   store.onOperation = value => order.push(value);
-  return new DurableKernelWorkflow({
+  return new KernelWorkflowRunner({
     kernel: new ControlKernel(),
     store,
     clock: { now: () => '2026-07-21T00:00:00.000Z' },
@@ -93,88 +54,20 @@ function createWorkflow(store: MemoryWorkflowStore, order: string[]): DurableKer
 }
 
 class MemoryWorkflowStore implements KernelWorkflowStore {
-  event: KernelEvent | null = null;
-  eventStatus: 'pending' | 'processing' | 'processed' | 'dead_letter' | null = null;
   ledger: KernelDecisionLedgerRecord | null = null;
-  application: KernelDecisionApplicationRecord | null = null;
   issueCount = 0;
   onOperation: (value: string) => void = () => undefined;
 
-  enqueue(event: KernelEvent): boolean {
-    this.onOperation(`enqueue:${event.id}`);
-    if (this.event) return false;
-    this.event = event;
-    this.eventStatus = 'pending';
-    return true;
+  findDecisionByEventId(eventId: string): KernelDecisionLedgerRecord | null {
+    return this.ledger?.eventId === eventId ? this.ledger : null;
   }
 
-  claimNext(): KernelEvent | null {
-    if (this.eventStatus !== 'pending') return null;
-    this.eventStatus = 'processing';
-    return this.event;
-  }
-
-  issue(eventId: string, record: KernelDecisionLedgerRecord): KernelDecisionApplicationRecord {
-    this.onOperation(`issue:${eventId}`);
+  issue(record: KernelDecisionLedgerRecord): boolean {
+    if (this.ledger) return false;
+    this.onOperation(`issue:${record.eventId}`);
     this.issueCount += 1;
     this.ledger = record;
-    this.eventStatus = 'processed';
-    this.application = {
-      id: `application_${record.id}`,
-      decisionId: record.id,
-      eventId,
-      idempotencyKey: `decision:${record.id}`,
-      status: 'pending',
-      applyAttempts: 0,
-      observationEvent: null,
-      errorSummary: null,
-      createdAt: record.createdAt,
-      updatedAt: record.createdAt,
-      decision: record.decision,
-    };
-    return this.application;
-  }
-
-  listRecoverableApplications(): KernelDecisionApplicationRecord[] {
-    return this.application?.status === 'pending' ? [this.application] : [];
-  }
-
-  markApplying(decisionId: string, now: string): KernelDecisionApplicationRecord {
-    this.onOperation(`applying:${decisionId}`);
-    this.application = { ...this.application!, status: 'applying', applyAttempts: this.application!.applyAttempts + 1, updatedAt: now };
-    return this.application;
-  }
-
-  markApplied(decisionId: string, observation: KernelEvent | null, now: string): void {
-    this.onOperation(`applied:${decisionId}`);
-    this.application = { ...this.application!, status: 'applied', observationEvent: observation, updatedAt: now };
-    if (observation) {
-      this.event = observation;
-      this.eventStatus = 'pending';
-    }
-  }
-
-  markApplicationFailed(decisionId: string, status: 'uncertain' | 'failed', errorSummary: string, now: string): void {
-    this.application = { ...this.application!, status, errorSummary, updatedAt: now };
-  }
-
-  reconcileProcessing(): number {
-    let reconciled = 0;
-    if (this.eventStatus === 'processing') {
-      this.eventStatus = this.ledger ? 'processed' : 'pending';
-      reconciled += 1;
-    }
-    if (this.application?.status === 'applying') {
-      this.application = { ...this.application, status: 'pending' };
-      reconciled += 1;
-    }
-    return reconciled;
-  }
-
-  countByApplicationStatus(): Record<'pending' | 'applying' | 'applied' | 'uncertain' | 'failed', number> {
-    const result = { pending: 0, applying: 0, applied: 0, uncertain: 0, failed: 0 };
-    if (this.application) result[this.application.status] += 1;
-    return result;
+    return true;
   }
 }
 

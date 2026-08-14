@@ -151,7 +151,7 @@ function expectedIdentity() {
 function sourceRecord(locator: string): ExecutorAttemptRuntimeRecord {
   return {
     attemptId: 'attempt_1', sourceAttemptId: null, continuationToken: locator,
-    workspaceRoot: '/runtime/worktree', workspaceBaseline: {}, workspaceDelta: {}, progress: {},
+    workspaceRoot: '/runtime/worktree',
     recoverySafety: 'workspace_reconcilable', externalIdempotencyKey: null,
     taskId: 'task_1', generationId: 'generation_1', subtaskId: 'subtask_1',
     agentClassName: 'pi-agent', runtimeBindingId: 'pi-agent', runtimeDriver: 'pi',

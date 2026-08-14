@@ -83,8 +83,6 @@ function modelRecoveryPacket(packet: Record<string, unknown> | null): Record<str
   if (!packet) return {};
   return {
     failure: packet.failure,
-    knownProgress: packet.knownProgress,
-    workspaceDelta: packet.workspaceDelta,
     confirmedCompleted: packet.confirmedCompleted,
     unknownItems: packet.unknownItems,
     completionRetry: packet.completionRetry,

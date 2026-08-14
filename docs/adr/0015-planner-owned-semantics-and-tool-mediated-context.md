@@ -92,7 +92,7 @@ separate versioned host protocol for read-only snapshots and proposal submission
 The Planner submits an internal v7 plan through the Pi-native
 `submit_planning_proposal({ plan })` tool. MetaClaw remains the only
 schema/semantic validator and the only component allowed to emit
-`plan_proposed` into `DurableKernelWorkflow`. Bridge or RPC failure is reported
+`plan_proposed` into `KernelWorkflowRunner`. Bridge or RPC failure is reported
 as unavailable and never implies that a Task was created. MetaClaw and Planner
 remain isolated Node 22.19+ processes; they share no source modules or
 in-process objects.

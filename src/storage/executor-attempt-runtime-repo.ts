@@ -6,9 +6,6 @@ export interface ExecutorAttemptRuntimeRecord {
   sourceAttemptId: string | null;
   continuationToken: string | null;
   workspaceRoot: string | null;
-  workspaceBaseline: Record<string, unknown>;
-  workspaceDelta: Record<string, unknown>;
-  progress: Record<string, unknown>;
   recoverySafety: KernelRecoverySafety;
   externalIdempotencyKey: string | null;
   taskId: string | null;
@@ -40,9 +37,6 @@ interface RuntimeRow {
   source_attempt_id: string | null;
   continuation_token: string | null;
   workspace_root: string | null;
-  workspace_baseline_json: string;
-  workspace_delta_json: string;
-  progress_json: string;
   recovery_safety: KernelRecoverySafety;
   external_idempotency_key: string | null;
   task_id: string | null;
@@ -76,7 +70,6 @@ export class ExecutorAttemptRuntimeRepo {
     attemptId: string;
     sourceAttemptId: string | null;
     workspaceRoot: string | null;
-    workspaceBaseline?: Record<string, unknown>;
     recoverySafety: KernelRecoverySafety;
     externalIdempotencyKey?: string | null;
     now: string;
@@ -84,15 +77,13 @@ export class ExecutorAttemptRuntimeRepo {
     this.db.prepare(`
       INSERT INTO executor_attempt_runtime (
         attempt_id, source_attempt_id, continuation_token, workspace_root,
-        workspace_baseline_json, workspace_delta_json, progress_json,
         recovery_safety, external_idempotency_key, created_at, updated_at
-      ) VALUES (?, ?, NULL, ?, ?, '{}', '{}', ?, ?, ?, ?)
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
       ON CONFLICT(attempt_id) DO NOTHING
     `).run(
       input.attemptId,
       input.sourceAttemptId,
       input.workspaceRoot,
-      JSON.stringify(input.workspaceBaseline ?? {}),
       input.recoverySafety,
       input.externalIdempotencyKey ?? null,
       input.now,
@@ -221,18 +212,6 @@ export class ExecutorAttemptRuntimeRepo {
     `).run(now, now, attemptId);
   }
 
-  recordProgress(attemptId: string, progress: Record<string, unknown>, now: string): void {
-    this.db.prepare(`
-      UPDATE executor_attempt_runtime SET progress_json = ?, updated_at = ? WHERE attempt_id = ?
-    `).run(JSON.stringify(progress), now, attemptId);
-  }
-
-  recordWorkspaceDelta(attemptId: string, delta: object, now: string): void {
-    this.db.prepare(`
-      UPDATE executor_attempt_runtime SET workspace_delta_json = ?, updated_at = ? WHERE attempt_id = ?
-    `).run(JSON.stringify(delta), now, attemptId);
-  }
-
   find(attemptId: string): ExecutorAttemptRuntimeRecord | null {
     const row = this.db.prepare(`
       SELECT * FROM executor_attempt_runtime WHERE attempt_id = ?
@@ -247,9 +226,6 @@ function rowToRecord(row: RuntimeRow): ExecutorAttemptRuntimeRecord {
     sourceAttemptId: row.source_attempt_id,
     continuationToken: row.continuation_token,
     workspaceRoot: row.workspace_root,
-    workspaceBaseline: JSON.parse(row.workspace_baseline_json) as Record<string, unknown>,
-    workspaceDelta: JSON.parse(row.workspace_delta_json) as Record<string, unknown>,
-    progress: JSON.parse(row.progress_json) as Record<string, unknown>,
     recoverySafety: row.recovery_safety,
     externalIdempotencyKey: row.external_idempotency_key,
     taskId: row.task_id,

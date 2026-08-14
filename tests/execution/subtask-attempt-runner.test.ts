@@ -205,7 +205,6 @@ function setup(rawResponse: string, options: {
       run,
     },
     dispatchItems,
-    workflow: new KernelWorkflowRepo(db),
     a,
     b,
     defaultResourceGrant,
@@ -369,11 +368,6 @@ describe('SubtaskAttemptRunner', () => {
       status: 'awaiting_approval',
     });
     expect(setupResult.dispatchItems.find('attempt_1')?.status).toBe('terminal');
-    expect(setupResult.workflow.findEvent('event_attempt_1_execution_outcome')).toMatchObject({
-      type: 'execution_outcome',
-      terminalKind: 'completed',
-      attemptId: 'attempt_1',
-    });
     expect(setupResult.workUnitRepo.findById('executor-codex')).toMatchObject({
       state: 'idle', claimedTaskId: null, claimedSubtaskId: null, claimedAttemptId: null,
     });
@@ -559,21 +553,14 @@ describe('SubtaskAttemptRunner', () => {
     expect(outcome).toMatchObject({ outcome: 'executor_failed' });
     expect(setupResult.subtaskRepo.findById(setupResult.a.id)?.status).toBe('awaiting_decision');
     expect(setupResult.dispatchItems.find('attempt_atomic_terminal')?.status).toBe('terminal');
-    expect(setupResult.workflow.findEvent(
-      'event_attempt_atomic_terminal_execution_outcome',
-    )).toMatchObject({
-      type: 'execution_outcome',
-      attemptId: 'attempt_atomic_terminal',
-      terminalKind: 'failed',
-    });
   });
 
   it('keeps attempt ownership for reconciliation when terminal sealing fails', async () => {
     const setupResult = setup(validResponse());
     setupResult.db.exec(`
-      CREATE TRIGGER reject_runner_terminal_outcome
-      BEFORE INSERT ON kernel_events
-      WHEN NEW.id = 'event_attempt_terminal_blocked_execution_outcome'
+      CREATE TRIGGER reject_runner_terminal_dispatch
+      BEFORE UPDATE ON kernel_dispatch_items
+      WHEN NEW.attempt_id = 'attempt_terminal_blocked' AND NEW.status = 'terminal'
       BEGIN
         SELECT RAISE(ABORT, 'injected runner terminal seal failure');
       END
