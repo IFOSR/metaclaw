@@ -1,6 +1,6 @@
 # Pi 持久 Session Continuation 与中断恢复计划
 
-- Status: Proposed
+- Status: Superseded by `2026-08-14-executor-session-first-persistence-recovery-simplification.md`
 - Plan date: 2026-08-11
 - Completion date: not completed
 - Scope: Pi Executor、Execution Runtime、Control Kernel 恢复事实、持久化 Adapter、Completion Protocol 入口判定

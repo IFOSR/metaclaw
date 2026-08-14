@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 状态：提案，待架构评审
+- 状态：已由 `2026-08-14-executor-session-first-persistence-recovery-simplification.md` 取代
 - 计划日期：2026-08-13
 - 适用范围：先用于飞书 Gateway；本地交互入口在 Gateway 验收后再决定是否切换
 
